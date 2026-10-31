@@ -37,6 +37,14 @@
         <div class="search">
           <input v-model="query" placeholder="按名称 / 命名空间过滤…" aria-label="过滤" />
         </div>
+        <!-- 命名空间是对已取回行的客户端收窄：列表仍一律 -A，切它不发命令 -->
+        <select
+          v-if="tab !== 'nodes' && namespaces.length" v-model="nsFilter" class="host-sel"
+          aria-label="按命名空间过滤" title="只显示该命名空间的资源；不重新取数"
+        >
+          <option value="">全部命名空间</option>
+          <option v-for="ns in namespaces" :key="ns" :value="ns">{{ ns }}</option>
+        </select>
         <div class="tb-right">
           <label v-if="tab === 'events'" class="ck" title="Normal 事件大多是调度器与拉镜像的成功心跳，默认不取">
             <input v-model="showNormalEvents" type="checkbox" /><span>含 Normal</span>
@@ -63,7 +71,7 @@
             v-if="tab === 'nodes'"
             :rows="filteredNodes" :error="nodeList.error.value"
             :selected-name="selected?.name ?? null"
-            :empty-text="emptyText('节点')"
+            :empty-text="emptyText('节点', false)"
             @open="openDetail(detailOfNode($event), nodeRowKey($event))"
           />
           <K8sWorkloadsTab
@@ -94,7 +102,7 @@
           <K8sEventsTab
             v-else
             :rows="filteredEvents" :error="eventList.error.value"
-            :empty-text="showNormalEvents ? emptyText('事件') : '这个集群没有 Warning 事件'"
+            :empty-text="eventsEmptyText"
           />
         </div>
       </div>
@@ -103,7 +111,7 @@
            取数失败时不许报 0 —— 「0 个负载」和「没读到」是两回事，后者读成前者就是谎报空集。 -->
       <div class="statusbar">
         <span class="sb-name" :title="targetName">{{ targetName }}</span>
-        <span>远程 · SSH · 全命名空间</span>
+        <span>远程 · SSH · {{ scopeLabel }}</span>
         <span v-if="activeListFailed">{{ tabLabel }} <span class="bad">读取失败</span></span>
         <template v-else>
           <span v-if="tab === 'nodes'">节点 <span class="mono">{{ nodes.length }}</span>（<span class="ok">{{ readyNodes }}</span> Ready / <span class="bad">{{ nodes.length - readyNodes }}</span> NotReady）</span>
@@ -187,6 +195,7 @@ const {
 } = host
 
 const query = ref('')
+const nsFilter = ref('')
 const loading = ref(false)
 const selected = ref<DetailTarget | null>(null)
 const selKey = ref<string | null>(null)
@@ -194,7 +203,7 @@ const scaleRow = ref<WorkloadRow | null>(null)
 let loadGen = 0
 onUnmounted(() => { loadGen++ })
 
-// ── 五个分段：一律 -A，命名空间是表里的一列，收窄靠搜索框 ──
+// ── 五个分段：一律 -A；命名空间是表里的一列，收窄靠搜索框与命名空间选择（纯客户端） ──
 const nodeList = host.createList<NodeRow>({
   kind: 'nodes',
   cmd: () => NODES_CMD,
@@ -232,23 +241,47 @@ const sortedWorkloads = computed(() => [...workloads.value].sort((a, b) =>
   || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)))
 
 const q = computed(() => query.value.trim().toLowerCase())
+
+/**
+ * 命名空间选项从已取回的行里归纳：跨页签共用一份，选中后对每类资源都生效。
+ * 它只是一层显示过滤 —— 列表仍 -A 取回，切命名空间不发命令。
+ */
+const namespaces = computed(() => {
+  const set = new Set<string>()
+  for (const r of [...workloads.value, ...pods.value, ...services.value, ...events.value]) {
+    if (r.namespace) set.add(r.namespace)
+  }
+  return [...set].sort((a, b) => a.localeCompare(b))
+})
+// 刷新后选中的命名空间可能整个消失（资源被删 / 换了集群）：回落到全部，不留一个空选择
+watch(namespaces, (list) => {
+  if (nsFilter.value && !list.includes(nsFilter.value)) nsFilter.value = ''
+})
+
+function inNs<T extends { namespace?: string }>(rows: T[]): T[] {
+  return nsFilter.value ? rows.filter(r => r.namespace === nsFilter.value) : rows
+}
+
 /** 列表全 -A 取回，命名空间成了表里的一列：过滤也跟着扩成「名称 / 命名空间」两格 */
-function byName<T extends { name: string; namespace?: string }>(rows: T[]): T[] {
-  if (!q.value) return rows
-  return rows.filter(r =>
+function byName<T extends { name: string; namespace?: string }>(rows: T[], useNs = true): T[] {
+  const scoped = useNs ? inNs(rows) : rows
+  if (!q.value) return scoped
+  return scoped.filter(r =>
     r.name.toLowerCase().includes(q.value) || (r.namespace ?? '').toLowerCase().includes(q.value))
 }
-const filteredNodes = computed(() => byName(nodes.value))
+// 节点是集群级资源，命名空间过滤对它不生效
+const filteredNodes = computed(() => byName(nodes.value, false))
 const filteredWorkloads = computed(() => byName(sortedWorkloads.value))
 const filteredPods = computed(() => byName(sortedPods.value))
 const filteredServices = computed(() => byName(services.value))
 const filteredEvents = computed(() => {
   // Warning 的收窄交给服务端（--field-selector type=Warning），这里不再本地兜一层：
   // API server 认这个选择器是保证，重复过滤只会让「到底谁在过滤」变成两说
+  const scoped = inNs(events.value)
   return q.value
-    ? events.value.filter(e =>
+    ? scoped.filter(e =>
         [e.namespace, e.object, e.reason, e.message].some(t => t.toLowerCase().includes(q.value)))
-    : events.value
+    : scoped
 })
 
 const currentRows = computed(() => {
@@ -286,16 +319,29 @@ const activeLabel = computed(() => {
   return 'kubectl get events'
 })
 
-const readyNodes = computed(() => nodes.value.filter(n => n.ready).length)
-const degradedWorkloads = computed(() => workloads.value.filter(w => w.status === 'Degraded' || w.status === 'Failure').length)
-const runningPods = computed(() => pods.value.filter(p => !isAbnormalPod(p)).length)
-const abnormalPods = computed(() => pods.value.filter(p => isAbnormalPod(p)).length)
-const ingressCount = computed(() => services.value.filter(s => s.kind === 'Ingress').length)
-const warningCount = computed(() => events.value.filter(e => e.type === 'Warning').length)
+// 计数跟随当前这一屏（命名空间 / 搜索收窄后的行）：报了过滤范围却给全量数字，读起来就是假的
+const readyNodes = computed(() => filteredNodes.value.filter(n => n.ready).length)
+const degradedWorkloads = computed(() => filteredWorkloads.value.filter(w => w.status === 'Degraded' || w.status === 'Failure').length)
+const runningPods = computed(() => filteredPods.value.filter(p => !isAbnormalPod(p)).length)
+const abnormalPods = computed(() => filteredPods.value.filter(p => isAbnormalPod(p)).length)
+const ingressCount = computed(() => filteredServices.value.filter(s => s.kind === 'Ingress').length)
+const warningCount = computed(() => filteredEvents.value.filter(e => e.type === 'Warning').length)
 
-function emptyText(what: string): string {
-  return q.value ? `没有匹配的${what}` : `集群里没有${what}`
+/** 状态栏说明取数范围：节点页没有命名空间轴 */
+const scopeLabel = computed(() =>
+  tab.value !== 'nodes' && nsFilter.value ? `命名空间 ${nsFilter.value}` : '全命名空间')
+
+function emptyText(what: string, useNs = true): string {
+  if (q.value) return `没有匹配的${what}`
+  if (useNs && nsFilter.value) return `命名空间 ${nsFilter.value} 里没有${what}`
+  return `集群里没有${what}`
 }
+
+const eventsEmptyText = computed(() => {
+  if (showNormalEvents.value) return emptyText('事件')
+  if (q.value) return '没有匹配的 Warning 事件'
+  return nsFilter.value ? `命名空间 ${nsFilter.value} 里没有 Warning 事件` : '这个集群没有 Warning 事件'
+})
 
 async function enrichNodeUsage(id: string, pin: ListPin): Promise<void> {
   if (!nodeList.rows.value.length) return
@@ -431,8 +477,8 @@ async function doDeleteJob(w: WorkloadRow): Promise<void> {
   )
 }
 
-// 换主机要整轮重取：列表都带 -A，命名空间不再是一根轴，切换它不构成新的取数范围
-watch(targetId, () => { void loadAll() }, { immediate: true })
+// 换主机要整轮重取；命名空间选择在新集群里没有意义，先回落到全部
+watch(targetId, () => { nsFilter.value = ''; void loadAll() }, { immediate: true })
 // 「含 Normal」是取数范围而不是筛选：改了就得重新问服务端
 watch(showNormalEvents, () => { void eventList.reload() })
 // 页面隐藏：收起弹窗，别让它们盖在别的页面上

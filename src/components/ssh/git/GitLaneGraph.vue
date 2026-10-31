@@ -137,7 +137,10 @@ const viewRows = computed(() => layout.value.rows.map(r => ({
   white-space: nowrap;
 }
 .mk-pri { background: var(--accent-primary); color: var(--accent-on); }
-.mk-mir { background: var(--accent-green); color: #04240f; }
+.mk-mir {
+  --mk-mir-on: #04240f; /* 实底绿标记上的深字：绿是中间调，深色/浅色主题下都够对比 */
+  background: var(--accent-green); color: var(--mk-mir-on);
+}
 
 /* 引用徽章：HEAD 实底强调，本地/远端/标签描边色分（不单靠颜色：文字本身可辨） */
 .glg-ref {

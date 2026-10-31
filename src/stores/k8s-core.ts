@@ -196,7 +196,7 @@ const REQ = `--request-timeout=${REQ_TIMEOUT_SEC}s`
 const WORKLOAD_KINDS = ['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs']
 
 /**
- * 列表一律 -A：界面上没有 ns 选择器，命名空间是表里的一列，收窄靠搜索框。
+ * 列表一律 -A：命名空间选择器只是对已取回行的客户端收窄，不构成第二种取数范围。
  * 代价是 pods / events 的响应体最大 —— 撞上 1M 时 requireParsableJson 如实抛
  * K8S_TRUNCATED（带可操作建议），不会谎报成「这里没有资源」。
  */
@@ -232,6 +232,13 @@ export function getOneCmd(kind: string, name: string, ns: string): string {
   if (err) throw new Error(err)
   // 集群级对象（Node / Namespace）没有 ns 可带：行数据给空串，这里就不拼
   return `kubectl get ${shortKind(kind)} ${name}${ns ? ` -n ${ns}` : ''} ${REQ} -o json`
+}
+
+/** 详情页 YAML 页签：原文直出，不做结构化投影 */
+export function getOneYamlCmd(kind: string, name: string, ns: string): string {
+  const err = validateObjectName(name, '资源名')
+  if (err) throw new Error(err)
+  return `kubectl get ${shortKind(kind)} ${name}${ns ? ` -n ${ns}` : ''} ${REQ} -o yaml`
 }
 
 /**

@@ -112,8 +112,8 @@ describe('节点用量的第二条腿', () => {
 })
 
 describe('详情弹窗的并发与退出路径', () => {
-  it('三条取数腿每个写回点都先验新鲜度', () => {
-    for (const leg of ['detail', 'events', 'logs']) {
+  it('四条取数腿每个写回点都先验新鲜度', () => {
+    for (const leg of ['detail', 'yaml', 'events', 'logs']) {
       const hits = detailSrc.match(new RegExp(`if \\(!fresh\\('${leg}', n\\)\\) return`, 'g')) ?? []
       expect(hits.length, `${leg} 腿的写回点没都验新鲜度`).toBeGreaterThanOrEqual(2)
     }
@@ -141,14 +141,21 @@ describe('详情弹窗的并发与退出路径', () => {
   })
 })
 
-describe('没有命名空间这根轴', () => {
-  it('界面不出现 ns 选择器，也不出现「当前命名空间」这种页面状态', () => {
-    expect(src).not.toContain('aria-label="命名空间"')
-    expect(src).not.toContain('nsListFailed')
-    expect(src).not.toContain('ALL_NS')
-    expect(src).not.toMatch(/^\s*const \{[^}]*\bnamespace\b/m)
+describe('命名空间只做客户端收窄', () => {
+  it('有命名空间选择，但它不参与取数：列表仍 -A，命令在 k8s-core 一处拼', () => {
+    expect(src).toContain('aria-label="按命名空间过滤"')
+    expect(src).toContain('const namespaces = computed(')
+    expect(src).toContain('nsFilter')
+    // loadAll 只关心主机与刷新代次：命名空间不是取数参数
+    const load = sliceUntil(src, 'async function loadAll(', 'function refresh()')
+    expect(load).not.toContain('nsFilter')
+    for (const rel of ['WORKLOADS_CMD', 'PODS_CMD', 'SERVICES_CMD']) expect(src).toContain(rel)
   })
-  it('收窄靠搜索框，一次同时匹配名称与命名空间', () => {
+  it('选项从已取回的行里归纳；换主机 / 选项消失时回落「全部」', () => {
+    expect(src).toContain('watch(namespaces,')
+    expect(src).toContain("watch(targetId, () => { nsFilter.value = ''; void loadAll() }, { immediate: true })")
+  })
+  it('搜索框仍然一次匹配名称与命名空间，事件表按自己的列过滤', () => {
     expect(src).toContain('按名称 / 命名空间过滤')
     const filter = sliceUntil(src, 'function byName<', '\n}')
     expect(filter).toContain('r.name')
@@ -156,13 +163,13 @@ describe('没有命名空间这根轴', () => {
     // 事件表没有 name 字段，但它多一列命名空间：过滤要跟着扩
     expect(src).toContain('[e.namespace, e.object, e.reason, e.message]')
   })
-  it('切主机重取整轮，除此之外没有第二根轴要监听', () => {
-    expect(src).toContain('watch(targetId, () => { void loadAll() }, { immediate: true })')
-    expect(src).not.toContain('watch([targetId, namespace]')
+  it('节点是集群级资源，不吃命名空间过滤', () => {
+    expect(src).toContain('byName(nodes.value, false)')
+    expect(src).toContain("emptyText('节点', false)")
   })
-  it('列表命令不带 -n：范围是 -A，第二种取数范围没有状态可以驱动它', () => {
-    for (const rel of ['WORKLOADS_CMD', 'PODS_CMD', 'SERVICES_CMD']) expect(src).toContain(rel)
-    expect(src).toContain('showNormalEvents.value ? EVENTS_CMD_WITH_NORMAL : EVENTS_CMD')
+  it('状态栏报出当前命名空间范围，不再是永远「全命名空间」', () => {
+    expect(src).toContain('scopeLabel')
+    expect(src).toContain('命名空间 ${nsFilter.value}')
   })
   it('事件只看 Warning 只在服务端做一次，界面不重复过滤', () => {
     // 兜一层本地过滤会让「谁在收窄」变成两说；--field-selector 是 API server 认的保证

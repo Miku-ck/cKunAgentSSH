@@ -17,7 +17,8 @@ import {
   countPrunedLines, isBuiltinNetwork,
   parseVolumeUsage, mergeVolumeUsage, volumeUsageSummary,
   imageRefMatches, imageUsageCount,
-  VOLUMES_CMD, NETWORKS_CMD,
+  parseSystemDf, dockerSizeToBytes, dfTypeLabel,
+  VOLUMES_CMD, NETWORKS_CMD, SYSTEM_DF_CMD, PS_CMD,
   type ContainerRow, type ImageRow, type VolumeRow,
 } from './docker-core'
 
@@ -97,6 +98,51 @@ describe('parsePs', () => {
   it('带端口 registry 且显式带 tag（host:5000/img:v1）正常拆分', () => {
     const r = ['abcd1234efgh', 'localhost:5000/nginx:v1', 'nginx', '1 day ago', 'Up 1 day', '', 'p'].join(T)
     expect(parsePs(r)[0]).toMatchObject({ repo: 'localhost:5000/nginx', tag: 'v1' })
+  })
+  it('末列带出 compose 项目；非 compose 容器留空', () => {
+    const withCompose = ['abcd1234efgh', 'nginx:1.27', 'nginx', '1 day ago', 'Up 1 day', '80/tcp', 'web-1', 'shop'].join(T)
+    expect(parsePs(withCompose)[0].compose).toBe('shop')
+    expect(parsePs(raw)[0].compose).toBeUndefined()
+    // 分组依赖 ps 模板真的取了 project 标签
+    expect(PS_CMD).toContain('.Label "com.docker.compose.project"')
+  })
+})
+
+describe('docker system df', () => {
+  // tabwriter 对齐：列间至少两个空格；Local Volumes / Build Cache 的 TYPE 本身含空格
+  const raw = [
+    'TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE',
+    'Images          12        3         1.203GB   802.1MB (66%)',
+    'Containers      5         2         12.3MB    10MB (81%)',
+    'Local Volumes   8         4         500MB     300MB (60%)',
+    'Build Cache     0         0         0B        0B',
+  ].join('\n')
+
+  it('解析四类占用，跳过表头并保留多词类型', () => {
+    const rows = parseSystemDf(raw)
+    expect(rows).toHaveLength(4)
+    expect(rows[0]).toMatchObject({ type: 'Images', total: '12', active: '3', size: '1.203GB', reclaimable: '802.1MB (66%)' })
+    expect(rows[2]).toMatchObject({ type: 'Local Volumes', size: '500MB' })
+    expect(rows[3]).toMatchObject({ type: 'Build Cache', size: '0B' })
+  })
+  it('空输出 / 只有表头 → 空数组，不编造行', () => {
+    expect(parseSystemDf('')).toEqual([])
+    expect(parseSystemDf('TYPE   TOTAL   ACTIVE   SIZE   RECLAIMABLE')).toEqual([])
+  })
+  it('human size 换算：十进制与二进制后缀、带百分比的回收列', () => {
+    expect(dockerSizeToBytes('0B')).toBe(0)
+    expect(dockerSizeToBytes('12.3MB')).toBe(12_300_000)
+    expect(dockerSizeToBytes('1.203GB')).toBe(1_203_000_000)
+    expect(dockerSizeToBytes('300MB (60%)')).toBe(300_000_000)
+    expect(dockerSizeToBytes('1.5GiB')).toBe(Math.round(1.5 * 1024 ** 3))
+    expect(dockerSizeToBytes('—')).toBeUndefined()
+    expect(dockerSizeToBytes(undefined)).toBeUndefined()
+  })
+  it('类型名按页面语言展示，未知类型原样透传', () => {
+    expect(dfTypeLabel('Images')).toBe('镜像')
+    expect(dfTypeLabel('Local Volumes')).toBe('本地卷')
+    expect(dfTypeLabel('Something New')).toBe('Something New')
+    expect(SYSTEM_DF_CMD).toBe('docker system df')
   })
 })
 

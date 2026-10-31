@@ -95,6 +95,20 @@
           </template>
         </div>
 
+        <!-- YAML：原文直出（kubectl get -o yaml），与概览的原始 JSON 互补 -->
+        <div v-else-if="tab === 'yaml'" class="dp-body">
+          <div class="log-bar">
+            <span class="logs-sub mono">kubectl get … -o yaml</span>
+            <button class="btn btn-sm" @click="loadYaml">重取</button>
+          </div>
+          <div v-if="yamlError" class="logs-err">
+            <div>{{ yamlError }}</div>
+            <button class="btn btn-sm" @click="loadYaml">重试</button>
+          </div>
+          <pre v-else-if="yamlText" class="logs mono">{{ yamlText }}</pre>
+          <div v-else class="list-empty">{{ yamlLoading ? '取数中…' : '暂无内容' }}</div>
+        </div>
+
         <!-- 事件：这个对象自己的关联事件，服务端已按时间排好 -->
         <div v-else-if="tab === 'events'" class="dp-body dp-body-auto">
           <div v-if="eventsLoading && !events.length" class="load-band">kubectl get events --field-selector …</div>
@@ -148,7 +162,7 @@
 </template>
 
 <script setup lang="ts">
-// K8sResourceDetail.vue — 详情弹窗：三条独立取数腿（对象本体 / 关联事件 / 日志）。
+// K8sResourceDetail.vue — 详情弹窗：四条独立取数腿（对象本体 / YAML / 关联事件 / 日志）。
 // 每条各持自己的序号，页面隐藏或卸载后到达的回包一律丢弃 —— 弹窗挂在 body 上，
 // 用户完全可以在日志飞回来之前关掉它、甚至切到另一台主机。
 //
@@ -157,7 +171,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'
 import {
-  getOneCmd, logsCmd, objectEventsCmd,
+  getOneCmd, getOneYamlCmd, logsCmd, objectEventsCmd,
   parseEvents, parseResourceDetail, podContainerNames, k8sErrText,
   type EventRow, type K8sError, type ResourceDetail,
 } from '@/stores/k8s-core'
@@ -177,6 +191,7 @@ function onKeydown(e: KeyboardEvent): void {
 }
 const DETAIL_TABS = [
   { key: 'overview', label: '概览' },
+  { key: 'yaml', label: 'YAML' },
   { key: 'events', label: '事件' },
   { key: 'logs', label: '日志' },
 ] as const
@@ -188,6 +203,9 @@ const tab = ref<DetailTab>('overview')
 const detail = ref<ResourceDetail | null>(null)
 const headError = ref<K8sError | null>(null)
 const headLoading = ref(false)
+const yamlText = ref('')
+const yamlError = ref('')
+const yamlLoading = ref(false)
 const events = ref<EventRow[]>([])
 const eventsError = ref('')
 const eventsLoading = ref(false)
@@ -210,6 +228,7 @@ const headState = computed(() => {
 })
 
 let detailSeq = 0
+let yamlSeq = 0
 let eventsSeq = 0
 let logsSeq = 0
 let disposed = false
@@ -224,10 +243,12 @@ onUnmounted(() => {
   deactivate()
 })
 
+const SEQ = { detail: () => detailSeq, yaml: () => yamlSeq, events: () => eventsSeq, logs: () => logsSeq }
+
 /** 回包能不能写回：本组件未被销毁、会话仍是打开时那条、且同一腿没有更新的请求 */
-function fresh(kind: 'detail' | 'events' | 'logs', n: number): boolean {
+function fresh(kind: keyof typeof SEQ, n: number): boolean {
   if (disposed || host.targetId.value !== props.sessionId) return false
-  return n === (kind === 'detail' ? detailSeq : kind === 'events' ? eventsSeq : logsSeq)
+  return n === SEQ[kind]()
 }
 
 async function loadDetail(): Promise<void> {
@@ -252,6 +273,23 @@ async function loadDetail(): Promise<void> {
     detail.value = null
   } finally {
     if (fresh('detail', n)) headLoading.value = false
+  }
+}
+
+async function loadYaml(): Promise<void> {
+  const n = ++yamlSeq
+  yamlLoading.value = true
+  try {
+    const raw = await host.k8sExec(getOneYamlCmd(props.target.kind, props.target.name, props.target.namespace), props.sessionId)
+    if (!fresh('yaml', n)) return
+    yamlText.value = raw.replace(/\r\n/g, '\n').trimEnd()
+    yamlError.value = ''
+  } catch (e) {
+    if (!fresh('yaml', n)) return
+    yamlText.value = ''
+    yamlError.value = k8sErrText(e)
+  } finally {
+    if (fresh('yaml', n)) yamlLoading.value = false
   }
 }
 
@@ -310,6 +348,7 @@ function syncFollow(): void {
 
 function selectTab(next: DetailTab): void {
   tab.value = next
+  if (next === 'yaml' && !yamlText.value && !yamlError.value) void loadYaml()
   if (next === 'events' && !events.value.length && !eventsError.value) void loadEvents()
   if (next === 'logs') {
     if (!logs.value.length && !logsError.value) void loadLogs()

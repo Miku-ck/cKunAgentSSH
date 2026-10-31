@@ -32,6 +32,8 @@ export interface ContainerRow {
   ports: string
   cmd: string
   created: string
+  /** compose 项目的 project 标签；非 compose 创建的容器没有 */
+  compose?: string
 }
 
 /** 容器 inspect 的结构化投影：详情弹窗只消费这一层，不直接摸原始 JSON */
@@ -113,6 +115,14 @@ export interface NetworkRow {
   scope: string
   labels?: Record<string, string>
 }
+/** docker system df 的一行：human 字符串原样保留，合计由展示层换算 */
+export interface SystemDfRow {
+  type: string
+  total: string
+  active: string
+  size: string
+  reclaimable: string
+}
 
 /** 卷 inspect 结构化投影：Mountpoint/CreatedAt/Options/Labels/Usage 归一 */
 export interface VolumeInspect {
@@ -151,8 +161,9 @@ export interface DockerError {
 // ── 采集命令（真取数，非样例） ──
 
 // 字段顺对齐 docker ps 原生列序：CONTAINER ID · IMAGE · COMMAND · CREATED · STATUS · PORTS · NAMES
+// 末列是 compose 项目标签（非 compose 容器为空串），供容器列表按项目分组
 export const PS_CMD =
-  `docker ps -a --format '{{printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s" .ID .Image .Command .RunningFor .Status .Ports .Names}}'`
+  `docker ps -a --format '{{printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s" .ID .Image .Command .RunningFor .Status .Ports .Names (.Label "com.docker.compose.project")}}'`
 export const IMAGES_CMD =
   `docker images --format '{{printf "%s\\t%s\\t%s\\t%s\\t%s" .ID .Repository .Tag .Size .CreatedSince}}'`
 // 卷：采用 `{{json .}}` 逐行 dump volumeContext。docker volume ls 没有 --verbose，
@@ -167,6 +178,8 @@ export const VOLUME_USAGE_CMD =
 // 网络：同策略，json dump 避免 .Labels 在老版本不存在时模板失败
 export const NETWORKS_CMD =
   `docker network ls --format '{{json .}}'`
+// 磁盘占用概览：docker system df 的默认表格（不用 --format，老版本不认）
+export const SYSTEM_DF_CMD = `docker system df`
 
 // ── 操作命令构造（名称一律 shell 引用，容忍含空格的名字） ──
 
@@ -366,12 +379,14 @@ function splitImage(img: string): { repo: string; tag: string } {
 export function parsePs(raw: string): ContainerRow[] {
   return rows(raw, 7).map(f => {
     const { repo, tag } = splitImage(f[1])
+    const compose = (f[7] || '').trim()
     return {
       id: f[0], repo, tag, name: f[6] || '',
       // 保留原串：repo/tag 拆分丢掉了 ID / digest 形态，引用匹配需要它
       imageRef: f[1] || '',
       state: stateFromStatus(f[4]), health: healthFromStatus(f[4]), stateText: f[4],
       ports: f[5] || '', cmd: f[2] || '', created: f[3] || '',
+      compose: compose || undefined,
     }
   })
 }
@@ -633,6 +648,52 @@ export function parseNetworks(raw: string): NetworkRow[] {
     if (Object.keys(lb).length) r.labels = lb
     return r
   })
+}
+
+/**
+ * docker system df 默认表格按 tabwriter 对齐：列间至少两个空格；
+ * 但 TYPE 本身可含空格（Local Volumes / Build Cache），所以按 2+ 空格拆列。
+ */
+export function parseSystemDf(raw: string): SystemDfRow[] {
+  const out: SystemDfRow[] = []
+  for (const line of raw.split('\n').map(l => l.replace(/\r$/, '').trim()).filter(Boolean)) {
+    if (/^TYPE\s/i.test(line)) continue
+    const f = line.split(/\s{2,}/)
+    if (f.length < 4) continue
+    out.push({
+      type: f[0],
+      total: f[1] || '—',
+      active: f[2] || '—',
+      size: f[3] || '—',
+      reclaimable: (f.slice(4).join(' ') || '—').trim(),
+    })
+  }
+  return out
+}
+
+const DF_TYPE_LABELS: Record<string, string> = {
+  Images: '镜像',
+  Containers: '容器',
+  'Local Volumes': '本地卷',
+  'Build Cache': '构建缓存',
+}
+export function dfTypeLabel(type: string): string {
+  const t = String(type ?? '').trim()
+  return DF_TYPE_LABELS[t] || t
+}
+
+/**
+ * docker 的 human size（12.3MB / 1.5GB / 0B）→ 字节。
+ * reclaimable 列形如 `500MB (100%)`，只取其中的尺寸段；认不出返回 undefined，不猜。
+ */
+export function dockerSizeToBytes(v: unknown): number | undefined {
+  const m = String(v ?? '').trim().match(/([\d.]+)\s*([KMGTP]?i?B)/i)
+  if (!m) return undefined
+  const n = Number(m[1])
+  if (!Number.isFinite(n)) return undefined
+  const unit = m[2].toUpperCase()
+  const exp = unit === 'B' ? 0 : 'KMGTP'.indexOf(unit[0]) + 1
+  return Math.round(n * Math.pow(unit.includes('I') ? 1024 : 1000, exp))
 }
 
 /**

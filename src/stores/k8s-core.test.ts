@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   NODES_CMD, WORKLOADS_CMD, PODS_CMD, SERVICES_CMD, EVENTS_CMD, EVENTS_CMD_WITH_NORMAL,
-  TOP_NODES_CMD, getOneCmd, objectEventsCmd, logsCmd,
+  TOP_NODES_CMD, getOneCmd, getOneYamlCmd, objectEventsCmd, logsCmd,
   rolloutRestartCmd, scaleCmd, deletePodCmd, deleteJobCmd, SCALABLE_KINDS,
   validateObjectName, validateReplicas, assertConcreteNs, shortKind,
   quantityToBase, cpuText, formatK8sBytes, ageText, timeText,
@@ -130,6 +130,11 @@ describe('日志与关联事件命令', () => {
   it('详情与对象事件都按 kind/name/ns 定位', () => {
     expect(getOneCmd('Deployment', 'web', 'prod')).toContain('kubectl get deployments web -n prod')
     expect(objectEventsCmd('web-1', 'Pod', 'prod')).toContain('involvedObject.name=web-1,involvedObject.kind=Pod')
+  })
+  it('YAML 页签取同一对象的原文，集群级对象不带 -n', () => {
+    expect(getOneYamlCmd('Deployment', 'web', 'prod')).toBe('kubectl get deployments web -n prod --request-timeout=12s -o yaml')
+    expect(getOneYamlCmd('Node', 'k1', '')).toBe('kubectl get nodes k1 --request-timeout=12s -o yaml')
+    expect(() => getOneYamlCmd('Pod', '$(id)', 'default')).toThrow()
   })
 })
 

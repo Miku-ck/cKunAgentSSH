@@ -6,8 +6,9 @@
  * 自己的一套 —— 边界是刻意画的：把 exec/审计也抽成公共层的话，K8s 的读数差异就得
  * 靠参数塞进公共层，公共层的形状会被一个调用方牵着走。
  *
- * 与 Docker 页的一处不同：这里没有 namespace 这根轴。列表一律 -A，命名空间是表里的
- * 一列、收窄靠搜索框，所以底座里既没有 ns 状态、也不用为「切 ns 作废在途回包」做事。
+ * 与 Docker 页的一处不同：namespace 不进入取数命令。列表一律 -A，页面上的命名空间
+ * 选择只是对已取回行的客户端收窄，所以底座里没有 ns 状态，也不用为「切 ns 作废在途
+ * 回包」做事。
  */
 import { computed, inject, provide, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue'
 import { useToastStore } from '@/stores/toast'

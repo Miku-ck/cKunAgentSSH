@@ -202,13 +202,13 @@ describe('Docker 空态与入口共用鲸鱼图形', () => {
 describe('健康状态与计数', () => {
   it('unhealthy 归入异常：行警示与状态栏三计数互不重叠', () => {
     // 判据只有一处定义，父级排序/计数与页签配色必须共用它
-    expect(containersTabSrc).toContain('abnormal: isAbnormal(c)')
+    expect(containersTabSrc).toContain('abnormal: isAbnormal(item.row)')
     expect(containersTabSrc).toContain("isAbnormal } from '@/stores/docker-core'")
     expect(src).toMatch(/const runningCount = computed\(\(\) =>[\s\S]*?c\.state === 'running' && !isAbnormal\(c\)/)
     expect(src).toMatch(/const abnormalCount = computed\(\(\) => containers\.value\.filter\(isAbnormal\)\.length\)/)
   })
   it('列表状态列对 unhealthy 用错误色，不沿用运行绿', () => {
-    expect(containersTabSrc).toContain("unhealthy: c.health === 'unhealthy'")
+    expect(containersTabSrc).toContain("unhealthy: item.row.health === 'unhealthy'")
     expect(containersTabSrc).toMatch(/\.st-dot\.unhealthy \{ background: var\(--status-error-text\)/)
     expect(containersTabSrc).toMatch(/\.c-state\.unhealthy \{ color: var\(--status-error-text\)/)
   })
@@ -392,6 +392,32 @@ describe('底部状态栏与网络栏', () => {
   it('无容器连接不再宣称可安全删除', () => {
     expect(networkDetailSrc).not.toContain('可安全删除')
     expect(networkDetailSrc).toContain('当前无容器连接')
+  })
+})
+
+describe('磁盘占用与 compose 分组', () => {
+  it('system df 取数尽最大努力：失败不上浮成 Docker 不可用', () => {
+    expect(src).toContain('SYSTEM_DF_CMD')
+    expect(src).toContain('parseSystemDf')
+    const body = sliceFunction(src, 'async function loadDf(): Promise<void> {')
+    // 回包要验宿主与序号：切主机后旧主机的占用不能写进新页面
+    expect(body).toContain('targetId.value !== id')
+    expect(body).toContain('seq !== dfSeq')
+    expect(body).toContain('catch (e)')
+    expect(body).not.toContain('loadError')
+  })
+  it('每一次 prune 后重算占用，芯片不停留在清理前的数字', () => {
+    for (const fn of ['doPruneImages', 'doPruneAllImages', 'doPruneVolumes', 'doPruneNetworks']) {
+      expect(sliceFunction(src, `async function ${fn}(`), fn).toContain('loadDf()')
+    }
+  })
+  it('分组只重排行：容器页签仍不跑命令，未归属项目排在最后', () => {
+    expect(src).toContain(':group-by-compose="groupMode === \'compose\'"')
+    expect(containersTabSrc).toContain("c.compose || ''")
+    expect(containersTabSrc).toContain("label: k || '未归属项目'")
+    expect(containersTabSrc).toContain("a === '' ? 1")
+    expect(containersTabSrc).not.toContain('sshExec(')
+    expect(containersTabSrc).not.toContain('electronAPI')
   })
 })
 

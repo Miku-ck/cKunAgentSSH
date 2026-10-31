@@ -36,6 +36,14 @@
         <div class="search">
           <input v-model="query" placeholder="按名称过滤…" aria-label="过滤" />
         </div>
+        <!-- compose 项目分组只在容器页签、且确有 compose 容器时出现 -->
+        <select
+          v-if="tab === 'containers' && hasCompose" v-model="groupMode" class="host-sel"
+          aria-label="容器分组方式" title="按 compose 项目归组；未归属项目排在最后"
+        >
+          <option value="none">不分组</option>
+          <option value="compose">按 Compose 项目</option>
+        </select>
         <div class="tb-right">
           <template v-if="tab === 'images'">
             <button class="btn" title="从仓库拉取镜像（docker pull）" @click="showPull = true">
@@ -106,6 +114,7 @@
           <DockerContainersTab
             v-if="tab === 'containers'"
             :rows="filteredContainers"
+            :group-by-compose="groupMode === 'compose'"
             :selected="selected"
             :empty-text="containers.length ? '没有匹配的容器' : '该主机没有容器'"
             @select="selected = $event"
@@ -148,6 +157,30 @@
         <!-- 容器详情已改为居中弹窗（见下方 Teleport），列表列独享整幅宽度 -->
       </div>
 
+      <!-- 磁盘占用：docker system df 的明细，状态栏芯片开关；只读、可随时关闭 -->
+      <div v-if="showDf" class="df-panel" role="region" aria-label="磁盘占用">
+        <div class="df-head">
+          <span class="df-title">磁盘占用</span>
+          <span class="df-sub mono">docker system df</span>
+          <button class="df-close" title="关闭" aria-label="关闭" @click="showDf = false">×</button>
+        </div>
+        <div v-if="dfError" class="df-err">{{ dfError }}</div>
+        <table v-else class="df-table">
+          <colgroup><col><col style="width:56px"><col style="width:60px"><col style="width:84px"><col style="width:110px"></colgroup>
+          <thead><tr><th>类型</th><th>数量</th><th>使用中</th><th>大小</th><th>可回收</th></tr></thead>
+          <tbody>
+            <tr v-for="r in dfRows" :key="r.type">
+              <td>{{ dfTypeLabel(r.type) }}</td>
+              <td class="mono">{{ r.total }}</td>
+              <td class="mono">{{ r.active }}</td>
+              <td class="mono">{{ r.size }}</td>
+              <td class="mono">{{ r.reclaimable }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-if="dfLoading" class="df-loading">读取中…</div>
+      </div>
+
       <!-- 状态栏：计数必须跟着当前 tab 走。此前这里不分页永远报容器，切到镜像/卷/网络后
            数字对、对象错，比空着更容易误信。 -->
       <div class="statusbar">
@@ -157,6 +190,10 @@
         <span v-else-if="tab === 'images'">镜像 <span class="mono">{{ images.length }}</span><template v-if="unusedCountKnown && unusedImageCount">（<span class="warn">{{ unusedImageCount }}</span> 未使用<template v-if="danglingCount">，其中 <span class="warn">{{ danglingCount }}</span> 悬空</template>）</template><template v-else-if="danglingCount">（<span class="warn">{{ danglingCount }}</span> 悬空）</template></span>
         <span v-else-if="tab === 'volumes'">卷 <span class="mono">{{ volumes.length }}</span><template v-if="unusedVolumeCount">（<span class="warn">{{ unusedVolumeCount }}</span> 未使用）</template></span>
         <span v-else>网络 <span class="mono">{{ networks.length }}</span><template v-if="builtinNetworkCount">（<span class="mono">{{ builtinNetworkCount }}</span> 内置）</template></span>
+        <button
+          v-if="dfRows.length" class="sb-df" :class="{ on: showDf }" :aria-expanded="showDf"
+          title="docker system df：镜像 / 容器 / 卷 / 构建缓存的占用与可回收量" @click="toggleDf"
+        >磁盘 <span class="mono">{{ formatBytes(dfTotalBytes) }}</span> · 可回收 <span class="warn">{{ formatBytes(dfReclaimBytes) }}</span></button>
         <span v-if="truncated" class="sb-warn" title="单次 SSH 命令输出达到 1MB 上限，列表可能不完整">输出已截断</span>
         <span class="sb-right mono">{{ lastSync }}</span>
       </div>
@@ -245,15 +282,15 @@ import {
   auditResultForExit,
 } from '@/utils/remote-audit'
 import {
-  PS_CMD, IMAGES_CMD, VOLUMES_CMD, VOLUME_USAGE_CMD, NETWORKS_CMD,
+  PS_CMD, IMAGES_CMD, VOLUMES_CMD, VOLUME_USAGE_CMD, NETWORKS_CMD, SYSTEM_DF_CMD,
   startCmd, stopCmd, restartCmd, rmCmd, rmiCmd, execCmd, imagePruneCmd, imagePruneAllCmd,
   dockerSaveCmd, dockerLoadCmd, saveTempPath,
   volumeRmCmd, networkRmCmd, volumePruneCmd, networkPruneCmd,
   parsePs, parseImages, parseVolumes, parseNetworks, imageLabel, imageHaystack, imageUsageCount,
-  parseVolumeUsage, mergeVolumeUsage,
+  parseVolumeUsage, mergeVolumeUsage, parseSystemDf, dockerSizeToBytes, dfTypeLabel,
   countPrunedLines, isAbnormal, isBuiltinNetwork,
   describeThrownDockerError,
-  type ContainerRow, type ImageRow, type VolumeRow, type NetworkRow, type DockerError,
+  type ContainerRow, type ImageRow, type VolumeRow, type NetworkRow, type SystemDfRow, type DockerError,
 } from '@/stores/docker-core'
 // exec 三态判据与主进程 ssh-manager 同源（判据源 shared/exec-outcome-core.ts）；
 // 截断标记的判据同理，两侧字面量一份。
@@ -320,6 +357,44 @@ const selectedVolume = ref<VolumeRow | null>(null)
 const selectedNetwork = ref<NetworkRow | null>(null)
 // 拉取弹窗的开合由页面管（按钮在工具条上），表单状态留在弹窗里
 const showPull = ref(false)
+
+// compose 项目分组：默认不分组；主机上确有 compose 容器时才出现切换入口
+const groupMode = ref<'none' | 'compose'>('none')
+const hasCompose = computed(() => containers.value.some(c => !!c.compose))
+watch(hasCompose, (v) => { if (!v) groupMode.value = 'none' })
+
+// 磁盘占用（docker system df）：芯片常驻状态栏，明细面板按需展开；取数失败不挡列表
+const dfRows = ref<SystemDfRow[]>([])
+const dfError = ref('')
+const dfLoading = ref(false)
+const showDf = ref(false)
+let dfSeq = 0
+const dfTotalBytes = computed(() => dfRows.value.reduce((sum, r) => sum + (dockerSizeToBytes(r.size) ?? 0), 0))
+const dfReclaimBytes = computed(() => dfRows.value.reduce((sum, r) => sum + (dockerSizeToBytes(r.reclaimable) ?? 0), 0))
+
+async function loadDf(): Promise<void> {
+  const id = targetId.value
+  if (!id) return
+  const seq = ++dfSeq
+  dfLoading.value = true
+  try {
+    const rows = parseSystemDf(await dockerExec(SYSTEM_DF_CMD, id))
+    if (seq !== dfSeq || targetId.value !== id) return
+    dfRows.value = rows
+    dfError.value = ''
+  } catch (e) {
+    if (seq !== dfSeq || targetId.value !== id) return
+    dfRows.value = []
+    dfError.value = errText(e)
+  } finally {
+    if (seq === dfSeq) dfLoading.value = false
+  }
+}
+function toggleDf(): void {
+  showDf.value = !showDf.value
+  // 展开时重取一次：占用是随时变化的，留着上次打开时的数字没有意义
+  if (showDf.value) void loadDf()
+}
 
 const loading = ref(false)
 const loadError = ref<DockerError | null>(null)
@@ -423,6 +498,7 @@ async function loadAll(): Promise<void> {
       networkList.error.value = ne.status === 'rejected' ? errText(ne.reason) : undefined
     }
     markSynced(TABS.map(t => t.key), '已同步')
+    void loadDf()
   } catch (e) {
     if (gen !== loadGen || !listFresh('containers', pins.containers)) return
     loadError.value = e as DockerError
@@ -454,6 +530,7 @@ watch(() => props.active, (active) => {
   selected.value = null
   selectedVolume.value = null
   selectedNetwork.value = null
+  showDf.value = false
 })
 
 function refresh(): void { void loadAll() }
@@ -690,6 +767,7 @@ async function doPruneImages(): Promise<void> {
       const n = countPrunedLines(out)
       toast.success(reclaimed ? `已清理 ${n} 个悬空镜像，回收 ${reclaimed}` : `已清理 ${n} 个悬空镜像`)
       await imageList.reload()
+      void loadDf()
     } catch (e) { toastErr(e) }
   })
 }
@@ -717,6 +795,7 @@ async function doPruneAllImages(): Promise<void> {
       const pruned = countPrunedLines(out)
       toast.success(reclaimed ? `已清理 ${pruned} 个未使用镜像，回收 ${reclaimed}` : `已清理 ${pruned} 个未使用镜像`)
       await imageList.reload()
+      void loadDf()
     } catch (e) { toastErr(e) }
   })
 }
@@ -782,6 +861,7 @@ async function doPruneVolumes() {
       toast.success(reclaimed ? `已清理 ${n} 个未使用卷，回收 ${reclaimed}` : `已清理 ${n} 个未使用卷`)
       selectedVolume.value = null
       await volumeList.reload()
+      void loadDf()
     } catch (e) { toastErr(e) }
   })
 }
@@ -800,6 +880,7 @@ async function doPruneNetworks() {
       toast.success(`已清理 ${n} 个未使用网络`)
       selectedNetwork.value = null
       await networkList.reload()
+      void loadDf()
     } catch (e) { toastErr(e) }
   })
 }
@@ -845,6 +926,11 @@ watch(targetId, () => {
   selected.value = null
   selectedVolume.value = null
   selectedNetwork.value = null
+  // 磁盘占用属于上一台主机：面板收起、数字清空，在途回包由 dfSeq 作废
+  showDf.value = false
+  dfRows.value = []
+  dfError.value = ''
+  dfSeq++
   void loadAll()
 }, { immediate: true })
 // 任一详情弹窗打开时挂 Esc；三个选中均为 null 时卸监。容器详情的日志/轮询在子组件内自理。
@@ -853,9 +939,10 @@ function onDetailKey(e: KeyboardEvent) {
   if (selected.value) selected.value = null
   else if (selectedVolume.value) selectedVolume.value = null
   else if (selectedNetwork.value) selectedNetwork.value = null
+  else if (showDf.value) showDf.value = false
 }
-watch([selected, selectedVolume, selectedNetwork], ([c, v, n]) => {
-  if (c || v || n) document.addEventListener('keydown', onDetailKey)
+watch([selected, selectedVolume, selectedNetwork, showDf], ([c, v, n, d]) => {
+  if (c || v || n || d) document.addEventListener('keydown', onDetailKey)
   else document.removeEventListener('keydown', onDetailKey)
 })
 
@@ -961,6 +1048,31 @@ onUnmounted(() => {
 .statusbar .ok { color: var(--status-success-text); }
 .statusbar .bad { color: var(--status-error-text); }
 .statusbar .sb-warn { color: var(--status-warn-text); }
+/* 磁盘占用芯片：状态栏里的可展开读数，不新增工具条按钮 */
+.sb-df {
+  display: inline-flex; align-items: center; gap: var(--spacing-4); flex-shrink: 0;
+  background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; white-space: nowrap;
+}
+.sb-df:hover, .sb-df.on { color: var(--text-secondary); }
+/* 明细面板：贴状态栏右上方；Esc / 芯片 / × 都可收起 */
+.df-panel {
+  position: absolute; right: var(--spacing-16); bottom: calc(24px + var(--spacing-8)); z-index: 10;
+  width: 440px; max-width: calc(100% - var(--spacing-32));
+  background: var(--bg-elevated); border: 1px solid var(--divider-primary); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg); overflow: hidden;
+}
+.df-head { display: flex; align-items: center; gap: var(--spacing-8); padding: var(--spacing-8) var(--spacing-12); border-bottom: 1px solid var(--divider-primary); }
+.df-title { font-size: 0.9231rem; color: var(--text-primary); }
+.df-sub { font-size: 0.7692rem; color: var(--text-tertiary); }
+.df-close { margin-left: auto; background: none; border: 0; color: var(--text-tertiary); font-size: 1rem; line-height: 1; cursor: pointer; padding: 0 var(--spacing-4); }
+.df-close:hover { color: var(--text-primary); }
+.df-table { width: 100%; border-collapse: collapse; font-size: 0.8462rem; }
+.df-table th, .df-table td { padding: var(--spacing-6) var(--spacing-12); text-align: left; border-bottom: 1px solid var(--divider-primary); }
+.df-table th { color: var(--text-tertiary); font-weight: 500; font-size: 0.7692rem; }
+.df-table td { color: var(--text-secondary); }
+.df-table tr:last-child td { border-bottom: 0; }
+.df-err { padding: var(--spacing-10) var(--spacing-12); color: var(--status-error-text); font-size: 0.8462rem; }
+.df-loading { padding: 0 var(--spacing-12) var(--spacing-8); color: var(--text-tertiary); font-size: 0.7692rem; }
 /* 悬空/未使用计数：可回收的量，用 warn 色与上方 danger-ghost 清理按钮呼应 */
 .statusbar .warn { color: var(--status-warn-text); }
 .sb-right { margin-left: auto; }
