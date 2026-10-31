@@ -3110,8 +3110,9 @@ def set_bot_memory_injection(conversation_id: str, memory_ids: list, at: str) ->
 # 状态四态：pending → asked（问出去了）/ superseded（同一件事改了时间）/ expired
 # （超窗没来得及问）。时间戳一律 UTC 字符串，可按字典序比较。
 #
-# due_start 与 memory_id 目前只写不读：前者留给「没说准哪天」的宽窗判断，
-# 后者留给「记忆行被维护淘汰后仍能回指」；两列都在表里，不等到改表再加。
+# due_start 目前只写不读（留给「没说准哪天」的宽窗判断）；memory_id 目前恒写
+# NULL —— record_hooks 在 _write_facts 之前跑，那时记忆行还不存在。这一列留
+# 给「记忆行被维护淘汰后仍能回指」，真要溯源时再把 _write_facts 提前并回传 id。
 
 
 def add_plan_hook(

@@ -3,8 +3,8 @@
 spec 2026-10-31-plan-followup
 
 纯函数区（`plan_window`）不碰 IO：给定时间词与基准时刻，返回左闭右开的本地
-时区窗口。IO 区（`record_hooks`）只做一次索引查询 + 一次写库，异常一律吞掉 ——
-钩子是增强项，不能拖垮记忆写入与聊天主链路。
+时区窗口。IO 区（`record_hooks`）每条 Fact 一次 supersede + 一次插入，整段包在
+`try` 里 —— 钩子是增强项，不能拖垮记忆写入与聊天主链路。
 
 时区口径：窗口按 `base` 自带的时区做日历运算，落库前统一转 UTC（`fmt_ts`）。
 解析不出的时间词一律不建钩子：宁可不问，不能问错。
@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 PLAN_FOLLOWUP_H = 36.0
 # 「待会 / 等会儿」的窗口长度
 PLAN_NEAR_WINDOW_H = 4.0
+
+# 计划正文的坏开头：长一点的时间词被切剩的碎片（「下周末」→「末」、
+# 「下个月底交房租」→「月底交房租」）与否定式（「周末不去了」）。
+# spec §2：宁可不问，不能问错 —— 这类正文一旦问出去就是错话。代价是「明天会下雨」这种
+# 把「会」当真动词的说法也不会建钩子，接受。
+_BAD_SUBJECT_PREFIX = ("不", "没", "别", "末", "个", "天", "周", "月", "晚", "会", "儿")
 
 
 def _day_start(dt: datetime) -> datetime:
@@ -58,6 +64,12 @@ def plan_window(when_text: str, base: datetime) -> "tuple[datetime, datetime] | 
             return today, end
         saturday = today + timedelta(days=5 - weekday)
         return saturday, saturday + timedelta(days=2)
+    if text in ("下周末", "下个周末"):
+        # 与「周末」同构，基准整个挪一周：不能落到「下周」的整周窗口 —— 那样
+        # 会在用户还没去看展之前就问「后来怎么样了」。
+        monday = today - timedelta(days=base.weekday()) + timedelta(days=7)
+        saturday = monday + timedelta(days=5)
+        return saturday, monday + timedelta(days=7)
     if text == "下周":
         monday = today - timedelta(days=base.weekday()) + timedelta(days=7)
         return monday, monday + timedelta(days=7)
@@ -86,9 +98,12 @@ def record_hooks(
     created_at = _fmt_ts(base.astimezone(timezone.utc))
     written = 0
     for fact in facts:
-        if fact.title != "计划" or not fact.when or not fact.subject:
-            continue
         try:
+            if fact.title != "计划" or not fact.when or not fact.subject:
+                continue
+            if fact.subject.startswith(_BAD_SUBJECT_PREFIX):
+                logger.debug("计划正文是时间词碎片或否定式，不建钩子: %r", fact.subject)
+                continue
             window = plan_window(fact.when, base)
             if window is None:
                 logger.debug("计划时间词无法解析，不建钩子: %r", fact.when)

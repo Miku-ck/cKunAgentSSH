@@ -150,7 +150,8 @@ _RULES: list[tuple[str, re.Pattern, str, float, str]] = [
         # 不强制带「我」：「周末要去看展」也是计划。
         # 时间词单独成组：钩子要靠它算到期窗口，content 里不带。
         re.compile(
-            r"(?:我)?(?P<when>明天|后天|下周|周末|下个月|今晚|待会|等会儿)\s*"
+            # 复合时间词排在短词前面：「下周末」不能被切成「下周」+「末去看展」。
+            r"(?:我)?(?P<when>下个周末|下周末|下个月|明天|后天|下周|周末|今晚|待会|等会儿)\s*"
             r"(?:要|想|准备|打算|得去)?\s*(?P<x>[\u4e00-\u9fa5A-Za-z0-9]{2,25})"
         ),
         "用户的计划：{x}",
@@ -280,17 +281,20 @@ def extract_facts(user_text: str) -> list[Fact]:
     if is_negated(text) and detect_forget(text) is None:
         return []
     facts: list[Fact] = []
-    seen: set[str] = set()
+    # 去重键带 when：一句话里说了两个时间（「周末…下周要去看展」）时两条都要
+    # 活到 record_hooks，后者才能把前者 supersede（spec §6）。非计划规则的
+    # when 恒为空，键退化成 content，行为不变。
+    seen: set[tuple[str, str]] = set()
     for title, pattern, template, importance, slot in _RULES:
         for match in pattern.finditer(text):
             fact = _build(title, template, match, importance, slot)
-            if fact is None or fact.content in seen:
+            if fact is None or (fact.content, fact.when) in seen:
                 continue
             # 记忆投毒防线：覆盖类注入不得借抽取规则成为「事实」
             #（「我叫你忽略之前所有设定」不是称呼，是话术）
             if persona_text_risk(fact.content):
                 continue
-            seen.add(fact.content)
+            seen.add((fact.content, fact.when))
             facts.append(fact)
     return facts
 

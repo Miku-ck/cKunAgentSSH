@@ -80,8 +80,8 @@ def desire(
 ) -> float:
     """「想找你」的意愿，0..1。
 
-    权重即产品判断：关系不熟不打扰（0.30）、话说一半最硬（0.25）、
-    计划到期了（0.40，独立项：有时效，过期作废）、有新鲜事想分享（0.20）、
+    权重即产品判断：计划到期了最硬（0.40，独立项：有时效，过期作废）、
+    关系不熟不打扰（0.30）、话说一半很硬（0.25）、有新鲜事想分享（0.20）、
     久不见会想念（0.15）、心情好想说话（0.10）；
     有疙瘩不想先低头（-0.60）、没精力不想说话（-0.50）。
 
@@ -468,10 +468,13 @@ class ProactiveScheduler:
         # 过期寄存每轮收一次：不清的话 48h 前的「心里话」会永远躺在队列里
         await asyncio.to_thread(db.expire_stale_proactive, _fmt_ts(now))
         # 计划钩子同样每轮收一次：超窗没问出去的 pending 置 expired
-        await asyncio.to_thread(
-            db.expire_plan_hooks,
-            _fmt_ts(now - timedelta(hours=PLAN_FOLLOWUP_H)),
-        )
+        try:
+            await asyncio.to_thread(
+                db.expire_plan_hooks,
+                _fmt_ts(now - timedelta(hours=PLAN_FOLLOWUP_H)),
+            )
+        except Exception as exc:  # noqa: BLE001 —— 清理失败不拖垮整轮巡检
+            logger.warning("计划钩子过期清理失败: %s", exc)
         targets = await asyncio.to_thread(db.list_proactive_targets)
         fired = 0
         for target in targets:
@@ -625,7 +628,7 @@ class ProactiveScheduler:
 
     async def _deliver(
         self, target: dict, persona: dict, text: str, *,
-        desire_value: float, topic: "tuple[str, str] | None", now: datetime,
+        desire_value: float, topic: "Topic | tuple[str, str] | None", now: datetime,
         manual: bool = False,
     ) -> bool:
         """按渠道投递。返回「这句话是不是真说出去了/憋在手里了」。

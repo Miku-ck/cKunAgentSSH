@@ -75,6 +75,21 @@ def test_next_month_crosses_the_year_boundary():
     assert end == datetime(2027, 2, 1, 0, 0, tzinfo=CST)
 
 
+def test_next_weekend_is_next_weekend_not_the_whole_next_week():
+    """「下周末」不能落成「下周」的整周窗口 —— 那样会提前一周问「后来去了吗」。"""
+    for text in ("下周末", "下个周末"):
+        start, end = _window(text)
+        assert start == datetime(2026, 11, 7, 0, 0, tzinfo=CST)    # 下周六
+        assert end == datetime(2026, 11, 9, 0, 0, tzinfo=CST)      # 下下周一 00:00
+
+
+def test_tonight_at_2359_still_points_at_today():
+    """23:59 说「今晚」：窗口就剩一分钟，不能滚到明天。"""
+    start, end = _window("今晚", datetime(2026, 10, 28, 23, 59, tzinfo=CST))
+    assert start == datetime(2026, 10, 28, 18, 0, tzinfo=CST)
+    assert end == datetime(2026, 10, 29, 0, 0, tzinfo=CST)
+
+
 def test_unknown_or_empty_when_returns_none():
     assert _window("") is None
     assert _window("   ") is None
@@ -200,5 +215,42 @@ def test_record_hooks_stores_utc_timestamps(base_db):
         conn.close()
     assert row["due_start"] == "2026-10-28 16:00:00"  # 本地 10-29 00:00
     assert row["due_end"] == "2026-10-29 16:00:00"
+
+
+def test_record_hooks_skips_fragment_and_negated_subjects(base_db):
+    """时间词碎片（「下周末」剩「末」）与否定式（「不去了」）不是可以问回来的事。"""
+    persona = _persona()
+    facts = [
+        mem.Fact(title="计划", content="用户的计划：末去看展", when="下周", subject="末去看展"),
+        mem.Fact(title="计划", content="用户的计划：不去了", when="周末", subject="不去了"),
+    ]
+
+    written = plan_mod.record_hooks(
+        persona["id"], None, facts, datetime(2026, 10, 28, 20, 0, tzinfo=CST)
+    )
+
+    assert written == 0, "宁可不问，不能问错"
+
+
+def test_record_hooks_isolates_personas(base_db):
+    """同文本不同人格各活一条：她记得的是「你这个人」，不是一句共享的台词。"""
+    one, two = _persona(), _persona()
+    fact = mem.Fact(title="计划", content="用户的计划：看展", when="周末", subject="看展")
+    base = datetime(2026, 10, 28, 20, 0, tzinfo=CST)
+
+    plan_mod.record_hooks(one["id"], None, [fact], base)
+    plan_mod.record_hooks(two["id"], None, [fact], base)
+
+    conn = db._get_conn()
+    try:
+        states = [
+            dict(row)["state"]
+            for row in conn.execute(
+                "SELECT state FROM bot_plan_hooks ORDER BY rowid"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+    assert states == ["pending", "pending"], "两条都还在：互相不 supersede"
 
 

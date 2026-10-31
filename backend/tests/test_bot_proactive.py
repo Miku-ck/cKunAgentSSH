@@ -1088,6 +1088,17 @@ def _add_due_hook(persona_id: str, plan_text: str = "看展") -> str:
 NOW_PLAN = datetime(2026, 11, 2, 12, 0, 0, tzinfo=timezone.utc)
 
 
+def _add_hook_due_now(persona_id: str, plan_text: str = "看展") -> str:
+    """已过窗口、还在 36h 回溯期内的钩子 —— 不靠写死的日期，随时钟走。"""
+    now = datetime.now(timezone.utc)
+    return db.add_plan_hook(
+        persona_id, None, None, plan_text, "今晚",
+        pro._fmt_ts(now - timedelta(hours=10)),
+        pro._fmt_ts(now - timedelta(hours=1)),
+        pro._fmt_ts(now - timedelta(hours=10)),
+    )
+
+
 def test_pick_topic_uses_a_due_plan(base_db):
     persona, _conv = _persona_conv()
     hook_id = _add_due_hook(persona["id"])
@@ -1213,11 +1224,14 @@ async def test_deliver_does_not_mark_when_the_platform_rejects(base_db, monkeypa
 @pytest.mark.asyncio
 async def test_tick_expires_plan_hooks_past_the_followup_window(base_db, monkeypatch):
     persona, _conv = _persona_conv()
+    # 相对真实 now 造「超窗 1h」的钩子：写死日期会在时钟比它早的机器上反着失败
+    past = datetime.now(timezone.utc) - timedelta(hours=37)
     db.add_plan_hook(
         persona["id"], None, None, "看展", "今晚",
-        "2026-10-20 18:00:00", "2026-10-21 00:00:00", "2026-10-20 12:00:00",
+        pro._fmt_ts(past - timedelta(hours=6)), pro._fmt_ts(past),
+        pro._fmt_ts(past - timedelta(hours=6)),
     )
-    monkeypatch.setattr(db, "list_proactive_targets", lambda: [])
+    monkeypatch.setattr(db, "list_proactive_targets", list)
 
     await pro.ProactiveScheduler().tick()
 
@@ -1255,3 +1269,66 @@ async def test_tick_survives_a_broken_plan_lookup(base_db, monkeypatch):
     assert _proactive_rows(persona["id"])[-1]["reason"] == "probe", "后面的闸照常走完"
 
 
+@pytest.mark.asyncio
+async def test_tick_asks_about_a_plan_whose_memory_was_pruned(base_db, monkeypatch):
+    """计划记忆 importance 只有 0.4，维护会先淘它；钩子自带正文，记忆没了照样要问。"""
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    target = _qq_target(persona, conv, external_id="c2c:user-1")
+    _add_hook_due_now(persona["id"])
+    assert mem.list_memories(persona["id"]) == [], "前提：记忆里一个字都没有"
+    monkeypatch.setattr(db, "list_proactive_targets", lambda: [target])
+    monkeypatch.setattr(
+        pro, "_state_snapshot",
+        lambda *_a: ({"intimacy": 90, "novelty": 50, "tension": 0,
+                      "valence": 1.0, "energy": 1.0}, 1.0, False, None, "朋友"),
+    )
+
+    async def fake_compose(*_a, **_kw):
+        return "看展去了吗"
+
+    seen = {}
+
+    async def fake_deliver(_target, _persona, _text, *, desire_value, topic, now, manual=False):
+        seen["topic"] = topic
+        return True
+
+    scheduler = pro.ProactiveScheduler()
+    # 闸本身有别的用例钉住；这条只关心「没有记忆也能选到计划」
+    monkeypatch.setattr(pro, "gate", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(pro, "_compose", fake_compose)
+    monkeypatch.setattr(scheduler, "_deliver", fake_deliver)
+
+    fired = await scheduler.tick()
+
+    assert fired == 1
+    assert seen["topic"].source == "plan_due"
+    assert "看展" in seen["topic"].describe
+
+
+@pytest.mark.asyncio
+async def test_probe_marks_the_plan_as_asked(base_db, monkeypatch):
+    """试发也是真发了：点了按钮这件事就算问过（spec §8）。"""
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    hook_id = _add_hook_due_now(persona["id"])
+    scheduler = pro.ProactiveScheduler()
+
+    async def fake_compose(*_a, **_kw):
+        return "看展去了吗"
+
+    async def fake_push(_target, _text, *, now):
+        return "push", "", None
+
+    monkeypatch.setattr(pro, "_compose", fake_compose)
+    monkeypatch.setattr(scheduler, "_push_qq", fake_push)
+
+    result = await scheduler.probe(_qq_target(persona, conv, external_id="c2c:user-1"))
+
+    assert result["action"] == "push"
+    conn = db._get_conn()
+    try:
+        state = conn.execute(
+            "SELECT state FROM bot_plan_hooks WHERE id = ?", (hook_id,)
+        ).fetchone()["state"]
+    finally:
+        conn.close()
+    assert state == "asked"

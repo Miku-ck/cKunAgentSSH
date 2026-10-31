@@ -315,3 +315,19 @@ def test_non_plan_facts_have_no_when_or_subject():
     fact = [f for f in facts if f.title == "称呼"][0]
     assert fact.when == ""
     assert fact.subject == ""
+
+
+def test_compound_time_word_is_not_cut_into_a_fragment():
+    """「下周末」先匹配长词：切错会把「末去看展」问回给用户。"""
+    for text, when in (("下周末要去看展", "下周末"), ("下个周末要去看展", "下个周末")):
+        fact = [f for f in mem.extract_facts(text) if f.title == "计划"][0]
+        assert fact.when == when
+        assert fact.subject == "看展"
+
+
+def test_one_sentence_two_times_keeps_both_plans():
+    """一句话里改期：两条都要活到钩子层，后者才能 supersede 前者（spec §6）。"""
+    facts = mem.extract_facts("周末要去看展，下周要去看展")
+    plans = [f for f in facts if f.title == "计划"]
+    assert [f.when for f in plans] == ["周末", "下周"]
+    assert {f.content for f in plans} == {"用户的计划：看展"}, "记忆侧仍是同一条"
