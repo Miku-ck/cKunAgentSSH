@@ -3,8 +3,9 @@
 锁两条不变量，它们是 main.py 的 lifespan 重构的回归闸门：
 
 1. **单轮分派不退化** —— init_db 之后的七步 DB/配置回填必须并发。任何一步被
-   挪回 await 串行位置，耗时就会线性叠加（本文件用「每步 sleep 0.04s，总耗时
-   必须远小于求和」把它钉住）。
+   挪回 await 串行位置，耗时就会线性叠加（本文件用「每步 sleep 0.04s，与同样流程
+   但 sleep=0 的对照轮相比，多花的时间必须远小于求和」把它钉住 —— 判据减掉的是
+   asyncio.run + lifespan 的固定开销，不是绝对墙钟，否则并发也会被机器负载顶红）。
 2. **就绪耗时必须可观测** —— 汇总行在默认日志级别（用户配置默认 warning）下
    落地；明细行只在 CKUN_PERF=1 时出现。原实现的就绪行是 logger.info，跑在
    logconfig.load_from_db 把 root 降到 warning 之后，默认配置下永远不输出。
@@ -128,19 +129,37 @@ _ALL_STEPS = (
 
 
 def test_db_read_steps_run_in_one_round(monkeypatch):
-    """七步并发：总耗时远小于串行求和，且同时在跑的桩不止一个。
+    """七步并发：睡眠带来的额外耗时远小于串行求和，且同时在跑的桩不止一个。
 
-    串行下限 8 × 0.04s = 0.32s；单轮分派实测 ≈0.04–0.08s（默认线程池
-    min(32, cpu+4) 个 worker）。阈值取 0.15s：既留出调度余量，又能在
-    「被改成顺序 await」时稳定失败。
+    判据量的是「加睡眠比不加睡眠多花多少」，不是绝对墙钟。绝对阈值在这类用例上
+    必然抖：asyncio.run + lifespan + 第一次 to_thread 的固定开销本身就有 70–100ms
+    （汇总行里 lifespan≈135ms 而 round1≈95ms），8×0.04s 并发只多花 40–80ms，两件事
+    在同一量级 —— 本机稳定复现：单独跑这个用例过，跟同文件兄弟用例一起跑就超线
+    （失败的 0.157s vs 阈值 0.150s，而 peak 并发断言照过，说明退回串行的都不是原因）。
+    先跑一轮 delay=0 的对照，把这坨常数减掉，剩下的才是步骤本身的时间。
+
+    串行下限 8 × 0.04s = 0.32s；单轮分派实测额外 ≈0.04–0.08s（默认线程池
+    min(32, cpu+4) 个 worker，最坏两轮）。阈值取串行的一半（0.16s）：仍能在
+    「被改成顺序 await」时稳定失败，而且那时 peak 断言会先红。
     """
-    rec = _Recorder()
-    _install_stubs(monkeypatch, rec, {name: 0.04 for name in _ALL_STEPS})
+    delay = 0.04
 
+    control_rec = _Recorder()
+    _install_stubs(monkeypatch, control_rec, {})
+    baseline = _run_lifespan()
+
+    rec = _Recorder()
+    _install_stubs(monkeypatch, rec, {name: delay for name in _ALL_STEPS})
     elapsed = _run_lifespan()
 
+    serial = delay * len(_ALL_STEPS)
+    extra = elapsed - baseline
+
     assert rec.peak >= 3, f"启动步骤没有并发：峰值同时在跑 {rec.peak} 个"
-    assert elapsed < 0.15, f"启动步骤疑似退回串行：耗时 {elapsed:.3f}s（串行 ≥0.32s）"
+    assert extra < serial / 2, (
+        f"启动步骤疑似退回串行：睡眠多花 {extra:.3f}s（串行 ≥{serial:.2f}s；"
+        f"对照 {baseline:.3f}s，本轮 {elapsed:.3f}s）"
+    )
 
 
 def test_ready_summary_is_always_logged(monkeypatch, caplog):
