@@ -49,7 +49,7 @@
         <div ref="listEl" class="vlist-scroll" @keydown="onListKeydown">
           <template v-for="g in groupedRows" :key="g.key">
             <div class="vgroup" :class="{ 'g-needs': g.key === 'needs' || g.key === 'sync' }">
-              <span>{{ g.label }}</span><span class="vgc">{{ g.rows.length }}</span>
+              <span>{{ g.label }}</span>
             </div>
             <button
               v-for="r in g.rows"
@@ -70,7 +70,6 @@
               <span v-else class="vr-l2">
                 <span class="vr-branch">{{ branchText(r) }}</span>
                 <span v-if="r.dirtyFiles" class="vr-dirty">● {{ r.dirtyFiles }} 改</span>
-                <span v-if="epNote(r)" class="vr-ep">{{ epNote(r) }}</span>
               </span>
             </button>
           </template>
@@ -104,17 +103,6 @@
         <span>在左侧选择一个仓库</span>
         <span class="vdetail-sub">   </span>
       </div>
-    </div>
-
-    <!-- 状态栏：计数跟着当前范围走（Docker 惯例）；远端一致性与巡检频率也只住在这行 -->
-    <div class="statusbar">
-      <span>{{ scopeLabel }}</span>
-      <span :title="hostSummary ? `远端分布：${hostSummary}` : undefined">仓库 {{ rows.length }}<template v-if="statusParts.length">（{{ statusParts.join(' / ') }}）</template><template v-else>（全部干净）</template></span>
-      <span v-if="epSummaryText" class="sb-ep">远端 {{ epSummaryText }}</span>
-      <span class="sb-right mono">
-        <span v-if="lastSync">已刷新 {{ lastSync }}</span>
-        <span v-if="syncAvailable" class="sb-probe"><template v-if="lastSync">· </template>{{ probeLabel }} · <button class="freq-btn" type="button" title="点击切换巡检频率（自动 5 分 / 自动 15 分 / 手动）" @click="cycleFreq">{{ freqLabel }}</button></span>
-      </span>
     </div>
 
     <!-- 登记远程仓库路径 -->
@@ -243,7 +231,7 @@
 
 <script setup lang="ts">
 // GitReposPanel.vue — Git 页的「源码管理」子页（方案 A 双栏工作台，设计稿 2026-10-25 / 2026-10-30 v1）。
-// 左列 = 状态分组仓库列表（远端待同步 / 需处理 / 待拉取 / 待推送 / 无远程 / 干净），
+// 左列 = 状态分组仓库列表（远端待同步 / 待处理 / 无远程 / 干净），
 // 右列 = 常驻详情面板 GitRepoDetailPanel（变更 / 远端 / 分支 / 图谱四页签）。
 // 位置 = 本地或某台已连接远程会话；本地经 gitrepos:* IPC（主进程 execFile），
 // 远程构造 shared/git-repos-core 的命令经 sshExec 下发（同 Docker 路线）。
@@ -317,7 +305,6 @@ const scopeKey = ref<'local' | string>('local')
 const isLocal = computed(() => scopeKey.value === 'local')
 const remoteSessions = computed<TerminalSession[]>(() => sshStore.sessions.filter(s => s.type === 'remote'))
 const scopeSession = computed(() => remoteSessions.value.find(s => s.id === scopeKey.value) || null)
-const scopeLabel = computed(() => isLocal.value ? '本地' : (scopeSession.value?.name || '远程主机'))
 // 会话断开后回落本地（同 Docker 的目标校正），避免对着不存在的宿主取数
 watch(remoteSessions, (list) => {
   if (scopeKey.value !== 'local' && !list.some(s => s.id === scopeKey.value)) scopeKey.value = 'local'
@@ -424,14 +411,14 @@ const filteredRows = computed(() => {
   return rows.value.filter(r => (r.name + ' ' + r.path).toLowerCase().includes(q))
 })
 
-/** 左列分组：需处理（失败/脏区/分叉）> 待拉取 > 待推送 > 无远程 > 干净（档序 = REPO_KIND_RANK）；
+/** 左列分组：待处理（失败/脏区/分叉/待推送/待拉取）> 无远程 > 干净（档序 = REPO_KIND_RANK）。
+ * 原「待拉取 / 待推送」两个分组已移除：本地与上游的 ahead/behind（未推送/未拉取）
+ * 由详情「变更 / 分支」页签承载，列表不再单列——避免与远端巡检（主仓+镜像是否同步）混淆。
+ * ahead/behind 的行并入「待处理」组，既不丢行、也不再单独喊「待推送 n」。
  * 本地范围另有「远端待同步」置顶：仓库本身干净（没有要拉/要推的），但主仓或镜像没追上时
- * 只有巡检能发现——这组让它从「干净」里浮上来（进组即从原分组摘掉，不重复列）。
- * 脏区/待拉取/待推送 仍留在自己的组：那些动作本身就会连带修好远端。 */
+ * 只有巡检能发现——这组让它从「干净」里浮上来（进组即从原分组摘掉，不重复列）。 */
 const ROW_GROUPS: Array<{ key: string; label: string; kinds: RepoRowKind[] }> = [
-  { key: 'needs', label: '需处理', kinds: ['error', 'dirty', 'diverge'] },
-  { key: 'pull', label: '待拉取', kinds: ['behind'] },
-  { key: 'push', label: '待推送', kinds: ['ahead'] },
+  { key: 'needs', label: '待处理', kinds: ['error', 'dirty', 'diverge', 'behind', 'ahead'] },
   { key: 'none', label: '无远程', kinds: ['none'] },
   { key: 'clean', label: '干净', kinds: ['clean'] },
 ]
@@ -475,63 +462,12 @@ function branchText(r: RepoRow): string {
   if (r.error) return '—'
   // detached HEAD：没有分支名可显示，用 git 术语标注游离状态
   if (r.detached) return '(HEAD 游离)'
-  let t = r.branch || '—'
-  if (r.ahead) t += ` ↑${r.ahead}`
-  if (r.behind) t += ` ↓${r.behind}`
-  return t
+  // 行内不再挂 upstream 的 ↑↓（待推送/落后）：未提交与未推送由详情「变更 / 分支」页签承载，
+  // 列表只关心分组归属，避免与远端巡检（主仓+镜像是否同步）的语义混淆
+  return r.branch || '—'
 }
 
-// 失败行不走 repoRowKind（error 是行字段不是状态档），这里单独数
-const statusParts = computed(() => {
-  const counts = { dirty: 0, diverge: 0, behind: 0 } as Record<string, number>
-  let failed = 0
-  for (const r of rows.value) {
-    if (r.error) { failed++; continue }
-    const k = repoRowKind(r)
-    if (k in counts) counts[k]++
-  }
-  const parts: string[] = []
-  if (failed) parts.push(`${failed} 失败`)
-  if (counts.dirty) parts.push(`${counts.dirty} 脏区`)
-  if (counts.diverge) parts.push(`${counts.diverge} 分歧`)
-  if (counts.behind) parts.push(`${counts.behind} 落后`)
-  return parts
-})
-
-const hostSummary = computed(() => {
-  const hosts = new Map<string, number>()
-  let none = 0
-  for (const r of rows.value) {
-    if (r.error) continue
-    if (!r.originHost) { none++; continue }
-    hosts.set(r.originHost, (hosts.get(r.originHost) || 0) + 1)
-  }
-  const parts = [...hosts.entries()].map(([h, n]) => `${h} ×${n}`)
-  if (none) parts.push(`无远端 ×${none}`)
-  return parts.join(' · ')
-})
-
-/** 状态栏远端汇总：一致 x/y 打头，其余只列非零项（空 = 未巡检或远程范围，整段不显示） */
-const epSummaryText = computed(() => {
-  if (!syncAvailable.value) return ''
-  let ok = 0, behind = 0, diverged = 0, unknown = 0, total = 0
-  for (const eps of Object.values(endpointsByPath.value)) {
-    for (const ep of eps) {
-      total++
-      if (ep.state === 'ok') ok++
-      else if (ep.state === 'behind') behind++
-      else if (ep.state === 'diverged') diverged++
-      else unknown++
-    }
-  }
-  if (!total) return ''
-  const parts = [`一致 ${ok}/${total}`]
-  if (behind) parts.push(`落后 ${behind}`)
-  if (diverged) parts.push(`分叉 ${diverged}`)
-  if (unknown) parts.push(`探测失败 ${unknown}`)
-  return parts.join(' · ')
-})
-
+// 失败行不走 repoRowKind（error 是行字段不是状态档），这里单独数。
 // ── 与加速子页联动：GitHub origin + 全局 insteadOf 生效 → 「已加速」──
 // initHealth 是轻量初始化（TitleBar 同款）：不加载整份加速配置也能知道镜像接管状态
 const accelActive = computed(() => !!accelStore.health?.activePrefix)
@@ -570,19 +506,6 @@ function endpointsOf(r: RepoRow): SyncEndpoint[] {
 function pendingOf(r: RepoRow): number {
   return endpointsOf(r).filter(e => e.state === 'behind' || e.state === 'diverged').length
 }
-/** 行内一句话概括远端：只列非一致项，一致的留给状态栏计数，避免每行都挂噪声 */
-function epNote(r: RepoRow): string {
-  const eps = endpointsOf(r)
-  if (!eps.length) return ''
-  const parts: string[] = []
-  const behind = eps.filter(e => e.state === 'behind').length
-  const div = eps.filter(e => e.state === 'diverged').length
-  const fail = eps.filter(e => e.state === 'unknown').length
-  if (behind) parts.push(`落后 ${behind}`)
-  if (div) parts.push(`分叉 ${div}`)
-  if (fail) parts.push(`失败 ${fail}`)
-  return parts.join(' · ')
-}
 
 function relTime(ms: number): string {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000))
@@ -592,21 +515,16 @@ function relTime(ms: number): string {
 }
 const probeLabel = computed(() => (probedAt.value ? `上次巡检 ${relTime(probedAt.value)}` : '未巡检'))
 
-/** 巡检频率：会话内记忆（不落盘 —— 落盘要进设置存储，另议） */
+/** 巡检频率：会话内记忆（不落盘 —— 落盘要进设置存储，另议）；默认自动 5 分，
+ * 切换频率的入口随状态栏移除，定时巡检仍按此默认节奏运行。 */
 type Freq = 'auto5' | 'auto15' | 'manual'
 const freq = ref<Freq>('auto5')
-const FREQ_LABEL: Record<Freq, string> = { auto5: '自动 5 分', auto15: '自动 15 分', manual: '手动' }
-const freqLabel = computed(() => FREQ_LABEL[freq.value])
 let timer: ReturnType<typeof setInterval> | null = null
 function armTimer(): void {
   if (timer) { clearInterval(timer); timer = null }
   const ms = freq.value === 'auto5' ? 5 * 60_000 : freq.value === 'auto15' ? 15 * 60_000 : 0
   // 定时巡检连带刷新仓库状态：远端变了，↑↓ 也常常跟着变
   if (ms) timer = setInterval(() => { if (props.active) { void refresh(); void probeEndpoints() } }, ms)
-}
-function cycleFreq(): void {
-  freq.value = freq.value === 'auto5' ? 'auto15' : freq.value === 'auto15' ? 'manual' : 'auto5'
-  armTimer()
 }
 
 /** 全量巡检：一次 syncProbe 覆盖全部本地仓库（主进程内部逐仓逐远端） */
@@ -1380,15 +1298,6 @@ watch(scopeKey, () => {
   background: var(--bg-base);
 }
 .vgroup.g-needs { color: var(--status-warn-text); }
-.vgc {
-  background: var(--bg-hover);
-  border-radius: var(--radius-lg);
-  padding: 0 var(--spacing-6);
-  font-size: 0.8462rem;
-  color: var(--text-secondary);
-}
-.vgroup.g-needs .vgc { background: color-mix(in srgb, var(--status-warn-text) 14%, transparent); }
-
 .vrow {
   display: flex;
   flex-direction: column;
@@ -1441,8 +1350,6 @@ watch(scopeKey, () => {
   white-space: nowrap;
 }
 
-.vr-ep { color: var(--status-warn-text); white-space: nowrap; margin-left: auto; }
-
 /* 巡检失败带：比取数失败轻一档（列表照常可用，只是缺远端那一层） */
 .probe-band {
   display: flex;
@@ -1472,36 +1379,6 @@ watch(scopeKey, () => {
   font-size: 1rem;
 }
 .vdetail-sub { font-size: 0.8462rem; }
-
-/* ── 状态栏 ── */
-.statusbar {
-  height: 24px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-16);
-  padding: 0 var(--spacing-16);
-  border-top: 1px solid var(--divider-primary);
-  font-size: 0.8462rem;
-  color: var(--text-tertiary);
-  user-select: none;
-  white-space: nowrap;
-  overflow: hidden;
-}
-/* 中间三段允许收缩：窄窗口先截断统计文字，右端的巡检时间/频率必须留在视野内 */
-.statusbar > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.sb-right { margin-left: auto; color: var(--text-secondary); display: inline-flex; align-items: center; gap: var(--spacing-4); flex-shrink: 0; overflow: visible; }
-.sb-ep { color: var(--text-secondary); }
-.freq-btn {
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-family: var(--font-sans);
-  cursor: pointer;
-  padding: 0;
-}
-.freq-btn:hover { color: var(--text-primary); text-decoration: underline dotted; }
 
 /* ── 登记远程路径弹窗 ── */
 .arm-overlay {

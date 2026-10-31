@@ -23,12 +23,13 @@
         v-else-if="canPush"
         class="btn"
         type="button"
-        :disabled="!!busy || !!repo.error || !repo.ahead"
+        :disabled="!!busy || !!repo.error || !hasPushable"
         :title="pushHint"
         @click="emit('push')"
       >推送</button>
       <button class="btn" type="button" :disabled="!!busy" title="在终端中打开（本地终端 / 新 SSH 会话）" @click="emit('term')">终端</button>
       <button class="btn grdp-remove" type="button" :disabled="!!busy" title="仅从列表移除，不删除任何文件" @click="emit('remove')">移出</button>
+      <button class="btn" type="button" :disabled="probing || !!busy" title="对全部本地仓库重跑一次 ls-remote（只比对 SHA，不动工作区）" @click="emit('probe')">{{ probing ? '巡检中…' : '重新巡检' }}</button>
     </div>
 
     <!-- 取数失败：错误框 + 重试（详情三段取数对失败行没有意义，不再尝试） -->
@@ -102,7 +103,7 @@
                 <span class="grdp-ep-role" :class="ep.role === 'primary' ? 'pri' : 'mir'">{{ ep.role === 'primary' ? '主仓' : '镜像' }}</span>
                 <span class="grdp-ep-url mono" :title="ep.url">{{ ep.url }}</span>
                 <span class="grdp-ep-sha mono" :title="`远端 HEAD ${ep.sha ?? ''}`">{{ shortSha(ep.sha) }}</span>
-                <span class="grdp-ep-state" :class="'s-' + ep.state" :title="epStateTitle(ep)">{{ syncStateText(ep) }}</span>
+                <span class="grdp-ep-state" :class="epSyncView(ep).cls" :title="epStateTitle(ep)">{{ epSyncView(ep).text }}</span>
                 <span class="grdp-ep-acts">
                   <button
                     v-if="ep.role === 'primary' && ep.state === 'diverged'"
@@ -112,19 +113,15 @@
                     :title="`git fetch ${ep.name} ${repo.branch} && git merge --ff-only FETCH_HEAD；真分叉时 git 拒绝，需手动处理`"
                     @click="emit('merge', ep.name)"
                   >合并</button>
-                  <span v-if="ep.role === 'mirror' && ep.state === 'behind'" class="grdp-ep-wait">等待平台搬运</span>
+                  <span v-if="ep.role === 'mirror' && epSyncView(ep).text === '未同步'" class="grdp-ep-wait">等待平台搬运</span>
                 </span>
               </div>
               <div v-if="ep.state === 'diverged'" class="grdp-ep-note" :class="{ err: ep.role === 'mirror' }">
                 <template v-if="ep.role === 'mirror'">镜像端出现本地没有的提交（可能有人直推镜像端），平台单向镜像不应如此；请 fetch 主仓后人工核对</template>
                 <template v-else>两边各有提交：先合并（--ff-only），绝不强推覆盖</template>
               </div>
+              <div v-else-if="epSyncView(ep).text === '领先主仓'" class="grdp-ep-note err">镜像比主仓多提交：疑似你直接推了镜像远端而没推主仓，请改推主仓</div>
               <div v-else-if="ep.state === 'unknown' && ep.error" class="grdp-ep-note" :title="ep.error">{{ ep.error }}</div>
-            </div>
-            <div class="grdp-eptail">
-              <button class="grdp-eplink" type="button" :disabled="probing || !!busy" title="对全部本地仓库重跑一次 ls-remote（只比对 SHA，不动工作区）" @click="emit('probe')">
-                {{ probing ? '巡检中…' : '重新巡检' }}
-              </button>
             </div>
             <details class="grdp-guide">
               <summary>平台镜像一次性配置（GitCode 侧）</summary>
@@ -170,7 +167,7 @@
           <!-- 图谱：SVG 车道图；失败回退平铺提交列表 -->
           <section v-if="tab === 'graph'">
             <template v-if="graphRows.length">
-              <GitLaneGraph :rows="graphRows" />
+              <GitLaneGraph :rows="graphRows" :remote-markers="remoteMarkers" />
               <div class="grdp-gfoot">
                 <button v-if="canLoadMore" class="btn btn-sm" type="button" :disabled="graphLoading" @click="loadMore">
                   {{ graphLoading ? '加载中…' : '加载更多 30 条' }}
@@ -252,7 +249,7 @@
           </div>
 
           <div v-if="canPush" class="grdc-pushprev mono">
-            推送目标 {{ repo.branch }} → {{ repo.primaryRemote || repo.upstream || `${repo.remoteName}/${repo.branch}` }}<template v-if="repo.primaryRemote"> · 主仓 GitCode</template><template v-if="repo.ahead">（本地已领先 ↑{{ repo.ahead }}{{ repo.primaryRemote ? '，将推到主仓' : '，将一并上送' }}）</template>
+            推送目标 {{ repo.branch }} → {{ repo.primaryRemote || repo.upstream || `${repo.remoteName}/${repo.branch}` }}<template v-if="repo.primaryRemote"> · 主仓 GitCode</template><template v-if="hasPushable">（本地有未推送提交{{ repo.ahead ? ` ↑${repo.ahead}` : '' }}{{ repo.primaryRemote ? '，将推到主仓' : '，将一并上送' }}）</template>
           </div>
 
           <div class="grdc-foot">
@@ -298,7 +295,6 @@ import {
   parseGraphLog,
   parseRepoDetailSections,
   splitBySep,
-  syncStateText,
   repoRowKind,
   type GitBranchInfo,
   type GraphCommitRow,
@@ -365,7 +361,7 @@ const kindText = computed(() => {
   const map: Record<string, string> = {
     dirty: `未提交变更 ${props.repo.dirtyFiles}`,
     diverge: `已分叉 ↑${props.repo.ahead}↓${props.repo.behind}`,
-    behind: `落后 ↓${props.repo.behind}`,
+    behind: `待推送 ↓${props.repo.behind}`,
     ahead: `领先 ↑${props.repo.ahead}`,
     none: '无远程仓库',
     clean: '干净',
@@ -378,18 +374,62 @@ const fileCount = computed(() => detail.value?.files.length ?? props.repo.dirtyF
 
 // ── 远端（巡检快照由父级传入：远端条与「远端」页签共用） ──
 const endpoints = computed<SyncEndpoint[]>(() => props.endpoints ?? [])
+/** 主仓端点（同步比对基准）：每次渲染只算一次，避免逐端点重复 find */
+const primaryEp = computed<SyncEndpoint | null>(() => endpoints.value.find(e => e.role === 'primary') ?? null)
 const syncAvailable = computed(() => props.syncAvailable !== false)
+/** 图谱叠加：把巡检拿到的主仓/各镜像实时 HEAD（真实 SHA）映射到图谱行，
+ * 这样 DAG 里能直接看到每个远端 HEAD 落在哪一行——Gitee 和主仓是否同一提交一目了然。
+ * 仅当前已加载提交行能命中（图谱 -n 截断之外的远端 HEAD 不显示，与图谱本身同限）。 */
+const remoteMarkers = computed<Record<string, Array<{ role: 'primary' | 'mirror'; name: string }>>>(() => {
+  const m: Record<string, Array<{ role: 'primary' | 'mirror'; name: string }>> = {}
+  for (const ep of endpoints.value) {
+    if (!ep.sha) continue
+    ;(m[ep.sha] ??= []).push({ role: ep.role, name: ep.name })
+  }
+  return m
+})
 /** 远程范围没有巡检能力（syncProbe 走本地注册表）→「远端」页签整条不出现，省掉一句「这里不可用」 */
 const tabs = computed(() => (syncAvailable.value ? TABS : TABS.filter(t => t.key !== 'remotes')))
 watch(syncAvailable, (v) => { if (!v && tab.value === 'remotes') tab.value = 'changes' })
 
+/** 远端同步判定：以「主仓」HEAD 为基准。镜像 SHA 等于主仓即已同步；
+ * 不再逐条远端跟本地比（本地未推送不会让镜像整片变红）。分叉单独标。
+ * 但「镜像 ≠ 主仓」要区分两种相反情形：
+ *  - 镜像落后主仓（正常：平台镜像未搬运）→ 未同步；
+ *  - 镜像领先主仓（异常：你直接推了镜像远端、漏推主仓）→ 领先主仓，提示改推主仓。
+ * 主仓自身恒为基准（已同步）；主仓探测失败则基准缺失，镜像改标「基准不可用」。 */
+function epSyncView(ep: SyncEndpoint): { text: string; cls: string } {
+  if (ep.state === 'unknown') return { text: '探测失败', cls: 's-unknown' }
+  if (ep.state === 'diverged') return { text: '已分叉', cls: 's-diverged' }
+  if (ep.role === 'primary') return { text: '已同步', cls: 's-ok' }
+  const primary = primaryEp.value
+  // 主仓探测失败 → 没有可比对基准：镜像一律「基准不可用」，避免误报「未同步」
+  if (!primary || primary.state === 'unknown') return { text: '基准不可用', cls: 's-unknown' }
+  if (!primary.sha || !ep.sha) return { text: '未同步', cls: 's-behind' }
+  if (ep.sha === primary.sha) return { text: '已同步', cls: 's-ok' }
+  // sha 不等：探针已给各自相对本地 HEAD 的态——镜像 ok 且主仓 behind ⇒ 镜像比主仓多提交
+  if (ep.state === 'ok' && primary.state === 'behind') return { text: '领先主仓', cls: 's-diverged' }
+  return { text: '未同步', cls: 's-behind' }
+}
+
 function epStateTitle(ep: SyncEndpoint): string {
   if (ep.state === 'unknown') return ep.error || 'ls-remote 失败（网络 / 认证）'
-  if (ep.state === 'behind') {
-    return ep.role === 'primary' ? '远端可快进：补齐 = 快进直推' : '镜像落后主仓：等 GitCode 平台自动搬运，本页不直推镜像'
+  if (ep.state === 'diverged') {
+    return ep.role === 'mirror'
+      ? '镜像端出现主仓没有的提交（可能有人直推镜像端），应 fetch 主仓后人工核对'
+      : '主仓出现本地没有的提交：先拉取合并，绝不强推'
   }
-  if (ep.state === 'diverged') return '两边各有提交：先拉取合并，绝不强推'
-  return '远端 HEAD 与本地一致'
+  if (ep.role === 'primary') return '主仓为同步基准（本地未推送的提交不在此体现，见「变更 / 分支」）'
+  // 主仓探测失败 → 基准缺失，镜像的同步状态无从判断（此前会误报「未同步」）
+  const primary = primaryEp.value
+  if (!primary || primary.state === 'unknown') return '主仓探测失败，暂无法判断镜像是否同步'
+  if (!primary.sha || !ep.sha) return '镜像未同步主仓'
+  if (ep.sha === primary.sha) return '镜像与主仓一致'
+  // 镜像领先主仓：你很可能直接推了镜像远端、漏推主仓
+  if (ep.state === 'ok' && primary.state === 'behind') {
+    return '镜像比主仓多提交：疑似你直接推了镜像远端而没推主仓，应改推主仓（或把主仓补齐后再让平台搬运）'
+  }
+  return '镜像未追上主仓：等 GitCode 平台自动搬运，本页不直推镜像'
 }
 function shortSha(sha: string | null): string {
   return sha ? sha.slice(0, 7) : '—'
@@ -640,6 +680,12 @@ const pushHint = computed(() => {
 const canPush = computed(() =>
   !props.repo.error && !props.repo.detached && !!(props.repo.upstream || (props.repo.remoteName && props.repo.branch)),
 )
+// 主仓端点是否落后本地（巡检视角）：branch -vv 的 ahead 看的是跟踪上游，和主仓不是同一个参考点，
+// 所以不能单靠 repo.ahead 决定「有没有东西可推」——主仓 behind 时即使 ahead === 0 也该允许推。
+const primaryBehind = computed(() =>
+  endpoints.value.some(e => e.role === 'primary' && e.state === 'behind'),
+)
+const hasPushable = computed(() => props.repo.ahead > 0 || primaryBehind.value)
 
 /** 父级动作完成并 refresh 后行数据会变（分支 / 未提交数 / 最新提交），据此自动重取详情与图谱 */
 watch(
@@ -766,7 +812,6 @@ onMounted(() => { void load() })
 }
 .grdp-eplink:hover { text-decoration: underline; }
 .grdp-eplink:disabled { opacity: .45; cursor: default; text-decoration: none; }
-.grdp-eptail { margin-top: var(--spacing-8); display: flex; }
 .grdp-empty .grdp-eplink { margin-left: var(--spacing-6); }
 
 /* ── 远端页签：一远端一行（名称 + 角色 | URL | SHA | 状态 | 动作） ── */

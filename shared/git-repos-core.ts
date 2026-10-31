@@ -153,14 +153,6 @@ export function syncDotClass(ep: SyncEndpoint): 'ok' | 'behind' | 'diverged' | '
   return 'off'
 }
 
-/** 端点状态文案：列表行、远端条、远端页签共用同一套说法（含 behind 的补齐量） */
-export function syncStateText(ep: SyncEndpoint): string {
-  if (ep.state === 'ok') return '一致'
-  if (ep.state === 'behind') return `落后 ${ep.behind || 1}`
-  if (ep.state === 'diverged') return '分叉'
-  return '探测失败'
-}
-
 /** 单仓一次同步探测的结果（electron/git-repos.ts syncProbe 的行结构） */
 export interface SyncProbeResult {
   path: string
@@ -739,7 +731,8 @@ export type RemoteGitAction = 'fetch' | 'pull'
  * （可勾回）。.gitignore 覆盖的文件根本不会出现在 status 里，这里兜的是
  * 忘了写 .gitignore 的那部分——编辑器备份、系统缩略图、运行日志等。
  */
-const NOISE_FILE_RE = /(^|[/\\])(?:\.DS_Store|Thumbs\.db)$|(?:(?:\.log|\.tmp|\.bak|\.swp|\.orig|\.rej)$)/i
+const NOISE_FILE_RE =
+  new RegExp(`(^|[\\\\/])(?:\\.DS_Store|Thumbs\\.db|_tmp|\\.venv|node_modules|__pycache__)(?:[\\\\/]|$)|(?:\\.(?:log|tmp|bak|swp|orig|rej)$)`, 'i')
 
 export function looksLikeNoiseFile(path: string): boolean {
   return NOISE_FILE_RE.test(path)

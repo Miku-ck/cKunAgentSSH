@@ -68,20 +68,23 @@
 **v1 不建任何后端存储**（指标与判断都在渲染层；无渲染层 = 无轮询 = 无触发源，跨重启持久化冷却非必需）。规则与开关存 **localStorage**（键级原子写，无文件落盘，不涉及 tmp+rename 约束）：
 
 ```
-localStorage key: ckun.alertTrigger.rules.v1
-{
-  "version": 1,
-  "rules": [                       // 全局规则集（v1 预置三条，可增删改）
-    { "id": "cpu_high",   "metric": "cpu",   "op": ">", "threshold": 90,
-      "consecutiveN": 6,  "enabled": true },        // 6×5s = 持续 30s
-    { "id": "mem_high",   "metric": "mem",   "op": ">", "threshold": 90,
-      "consecutiveN": 12, "enabled": true },
-    { "id": "disk_high",  "metric": "disk",  "op": ">", "threshold": 92,
-      "consecutiveN": 24, "enabled": true, "diskScope": "any" }  // 任一挂载点
-  ],
-  "hostOverrides": { "<host>": false },   // 按主机开关（缺省 = 启用）
-  "cooldownMinutes": 30
-}
+localStorage key: ckun.alertMonitor.tasks.v1   // 数组：每条 = 一个「告警监控任务」
+// v2：不再有「全局默认开启」与 hostOverrides。无任务 = 零监控；
+// 只有存在 host 匹配且 enabled 的任务时，该主机才会被评估与触发（见 src/composables/useAlertMonitorTasks.ts）。
+[
+  {
+    "id": "alert-192.168.150.40-<rand>",
+    "name": "实时监控 192.168.150.40",
+    "host": "192.168.150.40",          // 必须匹配 monitorStore.current.host
+    "enabled": true,
+    "cooldownMinutes": 30,
+    "rules": [                         // 任务自带规则集（模板默认三条，可增删改）
+      { "id": "cpu_high",  "metric": "cpu",  "op": ">", "threshold": 90, "consecutiveN": 6,  "enabled": true },
+      { "id": "mem_high",  "metric": "mem",  "op": ">", "threshold": 90, "consecutiveN": 12, "enabled": true },
+      { "id": "disk_high", "metric": "disk", "op": ">", "threshold": 92, "consecutiveN": 24, "enabled": true, "diskScope": "any" }
+    ]
+  }
+]
 ```
 
 - `metric` 取值域（`ServerMetrics` 形态，`src/stores/server-monitor-core.ts:134-154`，已核实）：`cpu`（cpu.used）、`iowait`、`mem`（mem.percent）、`load1`（load[0]）、`disk`（disks[].percent，`diskScope: any|mount:<路径>`，disks ≤8 块）、`gpu_mem`（gpus[].memPercent）、`swap`（swap.used/total，total=0 时规则跳过）。
@@ -437,7 +440,7 @@ SchedulesView 顶部分段：[定时任务 | 运维剧本]        ← C 唯一�
 | S7 | `headless_run` 的 `bridge.probe()` 补母本同款防御性 try + `classify_bridge_error`（唯一实质漂移点） |
 | S8 | runbook 步骤审计的 environment 兜底 `or "test"` 改为留空交审计默认——prod 剧本建连前失败的步骤不再被记成测试环境 |
 | S10 | `RunbookPanel.runNow` 的轮询定时器改为先登记再首拉：卸载落在 await 窗口内也能被 onUnmounted 统一清理 |
-| S11 | `loadAlertConfig` 损坏兜底改为落盘重置：原先坏 JSON 每次挂载都重新解析失败，坏数据永留盘上 |
+| S11 | 配置改为「显式告警监控任务」数组（`useAlertMonitorTasks` + `sanitizeAlertMonitorTasks`）：损坏/非法一律落成空数组（= 零监控，fail-closed），不再有全局默认开启与 hostOverrides；首次加载不再自动写盘，必须由用户在运维面板从模板新建任务 |
 | S5 | A 的跨 tick 双发竞态：`useAlertTrigger` 增加跨 tick 单飞闸 `launchBusy`（建会话窗口内第二候选不再发起、不再 abort 先发流；runAgent 调用后即解除，由 isRunning 闸接管） |
 
 遗留到 v2（设计级变更，不在本轮范围）：

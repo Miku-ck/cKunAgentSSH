@@ -17,7 +17,6 @@ import {
   buildGraphLogArgs,
   classifySyncEndpoint,
   deriveSyncConfig,
-  primaryRemoteOf,
   firstLine,
   friendlyGitError,
   interpretPush,
@@ -376,7 +375,7 @@ export class GitReposService {
   }
 
   /**
-   * 推送：目标统一为主仓（primaryRemoteOf，GitCode 优先）。
+   * 推送：目标统一为主仓（deriveSyncConfig().primary，GitCode 优先）。
    * 上游已指向主仓 → 直接 push；否则 push -u 主仓 建立跟踪。
    * 无 gitcode 远端时主仓回退 origin/首个（保持既有可用行为）。
    */
