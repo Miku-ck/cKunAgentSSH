@@ -186,6 +186,20 @@ SSH 智能运维终端，将连接管理、远程 / 本地终端、SFTP、Docker
 | LLM 客户端 | openai SDK | OpenAI 兼容协议（vLLM / Ollama / OpenAI 等） |
 | 存储 | SQLite | 会话、记忆（FTS5 + 向量）、技能与审计 |
 
+### 依赖与安全审计现状
+
+审计得走官方源：仓库里没有 `.npmrc`，registry 来自用户级 npm 配置，实测解析为 npmmirror —— 而它没有实现 `/-/npm/v1/security/*`，`npm audit` 直接 404。复现口径：
+
+```
+npm audit --registry=https://registry.npmjs.org --omit=dev   # 发布面
+npm audit --registry=https://registry.npmjs.org              # 含 dev 工具链
+```
+
+- **发布面 0 漏洞**：`node-pty` / `ssh2` 及其传递依赖干净。
+- **37 条全部落在 dev 工具链**：`vite 6.4.3`（high，含 `launch-editor` 参数拼接与 `server.fs.allow` 逃逸）与 `undici 6.27.0`（藏在 `electron-builder → @electron/rebuild → node-gyp` 下，只在装依赖/打包时执行）。
+- **为什么没顺手升**：任何 `npm install` 都会触发 `postinstall`（`scripts/rebuild-native.cjs` 用 MSVC 重编 node-pty/ssh2/cpu-features），而 `npm audit fix` 除了升包还会把 `@noble/hashes` 从 2.2.0 降到 1.8.0。留到能接受一次原生重编的窗口单独成一个提交。`dev:web` 会把 Vite 绑到 `0.0.0.0`，这条是升级 Vite 的实际理由。
+- **openai 版本口径不一致（待实测）**：`backend/requirements.txt` 声明 `>=1.30.0,<2.0`，而开发机的解释器装着 2.24.0 —— CI 与内嵌 runtime 会装 1.x，开发机跑 2.x。`tests/test_ai_loop_core_regression.py` 把 `AsyncOpenAI` monkeypatch 成假客户端，所以 2.x 的真实接口面并没有被测到；先记录，等拿真 LLM 端点验过再决定放宽上限还是收紧环境。
+
 ## 架构
 
 ```

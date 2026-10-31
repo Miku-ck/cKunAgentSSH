@@ -186,6 +186,20 @@ The virtual companion persona subsystem opened by the "Bot" entry (`Ctrl+Shift+9
 | LLM client | openai SDK | OpenAI-compatible protocol (vLLM / Ollama / OpenAI, etc.) |
 | Storage | SQLite | Conversations, memory (FTS5 + vectors), skills, and audit |
 
+### Dependency and security audit status
+
+The audit has to go through the official registry: the repository has no `.npmrc` — the registry comes from user-level npm config and resolves to npmmirror, which does not implement `/-/npm/v1/security/*`, so `npm audit` just returns 404. To reproduce:
+
+```
+npm audit --registry=https://registry.npmjs.org --omit=dev   # shipped surface
+npm audit --registry=https://registry.npmjs.org              # including the dev toolchain
+```
+
+- **0 vulnerabilities in the shipped surface**: `node-pty` / `ssh2` and their transitive dependencies are clean.
+- **All 37 findings sit in the dev toolchain**: `vite 6.4.3` (high, including `launch-editor` argument building and a `server.fs.allow` escape) and `undici 6.27.0` (under `electron-builder → @electron/rebuild → node-gyp`, which only runs on install/packaging).
+- **Why this was not upgraded opportunistically**: any `npm install` triggers `postinstall` (`scripts/rebuild-native.cjs` recompiles node-pty/ssh2/cpu-features with MSVC), and `npm audit fix` would additionally downgrade `@noble/hashes` from 2.2.0 to 1.8.0. Deferred to a window where a native rebuild is acceptable, as its own commit. `dev:web` binds Vite to `0.0.0.0`, which is the concrete reason to upgrade Vite.
+- **openai version mismatch (pending real-endpoint validation)**: `backend/requirements.txt` declares `>=1.30.0,<2.0` while the development interpreter has 2.24.0 — CI and the embedded runtime install 1.x, the dev machine runs 2.x. `tests/test_ai_loop_core_regression.py` monkeypatches `AsyncOpenAI` with a fake client, so the real 2.x surface is not covered by tests. Recorded only; widen the ceiling or pin the environment after validating against a live LLM endpoint.
+
 ## Architecture
 
 ```

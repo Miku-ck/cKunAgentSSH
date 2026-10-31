@@ -1,6 +1,9 @@
 fastapi>=0.115.0,<1.0
 uvicorn[standard]>=0.34.0,<1.0
 pydantic>=2.0.0,<3.0
+# 上限刻意留 <2.0：开发机解释器实测装着 2.24.0，而 tests/test_ai_loop_core_regression.py
+# 把 AsyncOpenAI monkeypatch 成假客户端 —— 2.x 的真实接口面并没有被测到，放宽得先拿真
+# 端点验过（见 README「依赖与安全审计现状」）。别把它当过时上限顺手删。
 openai>=1.30.0,<2.0
 httpx>=0.27.0,<1.0
 # FastAPI 的 File()/Form() 表单体解析靠它在运行时装上（routes/chat.py 的附件上传）。
