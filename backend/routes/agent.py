@@ -2605,16 +2605,19 @@ def clear_agent_memories():
 
 @router.get("/agent/memories/audit")
 def list_memory_audit(memory_id: Optional[str] = None, limit: int = Query(50, ge=1, le=500)):
+    """记忆变更审计流水，可按 memory_id 过滤，limit 1..500。"""
     return {"audit": mstore.list_audit(memory_id=memory_id, limit=limit)}
 
 
 @router.get("/agent/memories/jobs")
 def list_memory_jobs(status: Optional[str] = None, limit: int = Query(50, ge=1, le=500)):
+    """记忆维护任务队列（后台心跳排的那批），可按状态过滤，limit 1..500。"""
     return {"jobs": mstore.list_jobs(status=status, limit=limit)}
 
 
 @router.post("/agent/memories/jobs/{job_id}/retry")
 def retry_memory_job(job_id: str):
+    """重跑一个 failed 的记忆任务；job 不存在或不是 failed 状态返回 404。"""
     if not mstore.retry_job(job_id):
         raise HTTPException(status_code=404, detail="job 不存在或非 failed 状态")
     return {"retried": True, "id": job_id}
@@ -2622,6 +2625,7 @@ def retry_memory_job(job_id: str):
 
 @router.get("/agent/blocks")
 def list_memory_blocks():
+    """全部记忆块的当前值。"""
     return {"blocks": mstore.list_blocks()}
 
 
@@ -2640,6 +2644,7 @@ def put_memory_block(key: str, req: BlockPutRequest):
 
 @router.get("/agent/blocks/{key}/history")
 def memory_block_history(key: str, limit: int = Query(20, ge=1, le=100)):
+    """某个记忆块的历史版本，limit 1..100。"""
     return {"history": mstore.list_block_history(key, limit=limit)}
 
 

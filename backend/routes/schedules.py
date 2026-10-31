@@ -85,11 +85,13 @@ def _drop_nulls(patch: dict) -> dict:
 
 @router.get("/schedules")
 async def list_schedules():
+    """全部定时任务（读盘丢线程池，不占事件循环）。"""
     return await asyncio.to_thread(db.list_schedules)
 
 
 @router.post("/schedules")
 async def create_schedule(req: ScheduleIn):
+    """新建定时任务：周期类型不支持 400，字段先过 _validate_fields；落库时算好首个 next_run_at，并顺带把调度引擎起来。"""
     if req.schedule_type not in _SCHEDULE_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的周期类型: {req.schedule_type}")
     # model_dump 对未变的 req 是确定性的，序列化一次复用即可
@@ -118,6 +120,7 @@ def _validate_fields(d: dict) -> None:
 
 @router.patch("/schedules/{schedule_id}")
 async def update_schedule(schedule_id: str, req: SchedulePatch):
+    """局部更新任务；任务不存在 404；传入与原值不同的 task_type 一律 422 —— 类型创建后不可变。"""
     existing = await asyncio.to_thread(db.get_schedule, schedule_id)
     if not existing:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -153,6 +156,7 @@ async def update_schedule(schedule_id: str, req: SchedulePatch):
 @router.delete("/schedules/{schedule_id}")
 async def delete_schedule(schedule_id: str):
     # 走 engine：先取消在途的无头 Agent run 并落定执行历史，再删行
+    """删除任务：走 engine，先取消在途的无头 Agent run 并落定执行历史，再删行；不存在 404。"""
     from agent.schedule_engine import get_schedule_engine
     ok = await get_schedule_engine().remove_schedule(schedule_id)
     if not ok:
@@ -162,6 +166,7 @@ async def delete_schedule(schedule_id: str):
 
 @router.post("/schedules/{schedule_id}/run")
 async def run_schedule_now(schedule_id: str):
+    """立即触发一次执行；任务不存在 404。需要远程会话的任务先探一次桥活（预算 1s），桥断就当场给原因码，不回 ok 谎报「已触发」。"""
     sched = await asyncio.to_thread(db.get_schedule, schedule_id)
     if not sched:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -192,6 +197,7 @@ async def run_schedule_now(schedule_id: str):
 
 @router.get("/schedules/{schedule_id}/runs")
 async def list_schedule_runs(schedule_id: str, limit: int = 50):
+    """该任务的执行历史，limit 夹在 1..200；任务不存在 404。"""
     if not await asyncio.to_thread(db.get_schedule, schedule_id):
         raise HTTPException(status_code=404, detail="任务不存在")
     limit = max(1, min(limit, 200))

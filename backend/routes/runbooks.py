@@ -110,6 +110,7 @@ async def list_runbooks():
     # 首次触达顺带收尸（schedule 引擎的收尸挂在循环启动，本引擎无轮询循环；
     # main.py 属 sharedWiring 禁改，挂不到 lifespan）—— 打开剧本页即把上个进程
     # 遗留的 running 行落 stale_reaped，前端 isRunning 不再吃到僵尸状态
+    """全部运维剧本。首次触达顺带收尸上个进程遗留的 running 行 —— 本引擎没有轮询循环可挂，而 main.py 属不可改的装配段。"""
     from runbook_engine import get_runbook_engine
     await get_runbook_engine().ensure_reaped()
     rows = await asyncio.to_thread(rstore.list_runbooks)
@@ -118,6 +119,7 @@ async def list_runbooks():
 
 @router.post("/runbooks")
 async def create_runbook(req: RunbookIn):
+    """新建剧本：步骤先过 _validate_steps，名称/描述/目标主机去空白后落库。"""
     steps = _validate_steps(req.steps)
     created = await asyncio.to_thread(
         rstore.create_runbook,
@@ -134,6 +136,7 @@ async def create_runbook(req: RunbookIn):
 
 @router.patch("/runbooks/{runbook_id}")
 async def update_runbook(runbook_id: str, req: RunbookPatch):
+    """局部更新剧本；不存在 404，名称被清空 400；patch 里出现 steps 键即整体替换并重新校验。"""
     existing = await asyncio.to_thread(rstore.get_runbook, runbook_id)
     if not existing:
         raise HTTPException(status_code=404, detail="剧本不存在")
@@ -158,6 +161,7 @@ async def update_runbook(runbook_id: str, req: RunbookPatch):
 
 @router.delete("/runbooks/{runbook_id}")
 async def delete_runbook(runbook_id: str):
+    """删除剧本；不存在 404，正在执行 409。删除前先同步占位，堵住「检查后、删除前并发 trigger」的 TOCTOU 窗口。"""
     if not await asyncio.to_thread(rstore.get_runbook, runbook_id):
         raise HTTPException(status_code=404, detail="剧本不存在")
     from runbook_engine import get_runbook_engine
@@ -179,6 +183,7 @@ async def delete_runbook(runbook_id: str):
 
 @router.post("/runbooks/{runbook_id}/run")
 async def run_runbook(runbook_id: str):
+    """立即执行一次剧本；不存在 404；配了 target_host 时先探桥，桥断返回 503 并带原因码。"""
     runbook = await asyncio.to_thread(rstore.get_runbook, runbook_id)
     if not runbook:
         raise HTTPException(status_code=404, detail="剧本不存在")
@@ -204,6 +209,7 @@ async def run_runbook(runbook_id: str):
 
 @router.get("/runbooks/{runbook_id}/runs")
 async def list_runbook_runs(runbook_id: str, limit: int = 50):
+    """该剧本的执行历史，limit 夹到 1.._HISTORY_LIMIT_MAX；不存在 404；steps_state 只保留 dict 条目。"""
     if not await asyncio.to_thread(rstore.get_runbook, runbook_id):
         raise HTTPException(status_code=404, detail="剧本不存在")
     limit = max(1, min(limit, _HISTORY_LIMIT_MAX))
