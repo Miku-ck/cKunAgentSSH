@@ -346,9 +346,14 @@ def test_more_specific_time_words_are_not_cut_into_fragments():
         "下个月底交房租",
         "下个月初交房租",
         "下个月中旬要出差",
+        "下个月末要交房租",
         "下下个月要交房租",
         "上个周末要去看展",
         "上周末要去看展",
+        "下下周二要开会",
+        "下下个周五要开会",
+        "下周内要交材料",
+        "下周之内要交材料",
     ):
         plans = [f for f in mem.extract_facts(text) if f.title == "计划"]
         assert plans == [], f"{text} 不该被拆成计划：{[f.when for f in plans]}"
@@ -374,6 +379,7 @@ def test_ordinary_words_after_a_time_word_stay_intact():
         ("下个月个税申报", "个税申报"),
         ("明天六点要开会", "六点要开会"),
         ("这个周末要去看展", "看展"),
+        ("待会儿要开会", "开会"),
     ):
         fact = [f for f in mem.extract_facts(text) if f.title == "计划"][0]
         assert fact.subject == subject, f"{text} 的正文被削了"

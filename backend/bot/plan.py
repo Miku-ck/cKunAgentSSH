@@ -48,7 +48,7 @@ def plan_window(when_text: str, base: datetime) -> "tuple[datetime, datetime] | 
         return None
     today = _day_start(base)
 
-    if text in ("待会", "等会儿"):
+    if text in ("待会", "待会儿", "等会儿"):
         return base, base + timedelta(hours=PLAN_NEAR_WINDOW_H)
     if text == "今晚":
         return today.replace(hour=18), today + timedelta(days=1)

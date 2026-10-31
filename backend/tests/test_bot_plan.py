@@ -39,9 +39,10 @@ def test_tonight_starts_at_18_and_ends_at_midnight():
 
 
 def test_later_is_a_four_hour_window_from_now():
-    start, end = _window("待会")
-    assert start == WED
-    assert end == WED + timedelta(hours=4)
+    for text in ("待会", "待会儿", "等会儿"):
+        start, end = _window(text)
+        assert start == WED
+        assert end == WED + timedelta(hours=4)
 
 
 def test_weekend_from_a_weekday_is_saturday_to_monday():
