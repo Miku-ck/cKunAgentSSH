@@ -119,6 +119,65 @@
       </section>
 
       <section class="section">
+        <h4 class="section-title">实时告警监控</h4>
+        <p class="hint">
+          告警诊断不再默认开启。必须先在此显式新建「监控任务」并指定主机，应用才会在该主机
+          内存/CPU/磁盘持续越限时自动发起只读诊断；没有任何任务时，监控会话完全不会触发告警。
+        </p>
+
+        <div class="inline-form">
+          <input
+            v-model="newHost"
+            class="form-input grow"
+            type="text"
+            spellcheck="false"
+            placeholder="监控主机（需与监控会话中的主机标识一致，如 192.168.150.40）"
+            @keydown.enter.prevent="createTask()"
+          />
+          <input
+            v-model="newName"
+            class="form-input"
+            type="text"
+            spellcheck="false"
+            placeholder="名称（可选）"
+            @keydown.enter.prevent="createTask()"
+          />
+          <button class="btn" :disabled="!canCreate" @click="createTask()">从模板新建</button>
+        </div>
+        <p v-if="hostExists" class="hint warn">该主机已有监控任务，请勿重复创建。</p>
+
+        <div v-if="tasks.length" class="alert-task-list">
+          <div v-for="task in tasks" :key="task.id" class="alert-task">
+            <div class="alert-task-head">
+              <span class="alert-task-name">{{ task.name }}</span>
+              <ToggleSwitch
+                :model-value="task.enabled"
+                @update:model-value="(v) => toggle(task.id, v)"
+              />
+            </div>
+            <div class="alert-task-meta mono">主机 {{ task.host }}</div>
+            <div class="alert-task-rules">{{ rulesSummary(task) }}</div>
+            <div class="alert-task-foot">
+              <label class="cooldown-label">
+                冷却
+                <input
+                  class="form-input num-input"
+                  type="number"
+                  min="1"
+                  max="1440"
+                  :value="task.cooldownMinutes"
+                  @change="onCooldownInput(task, $event)"
+                />
+                分钟
+              </label>
+              <button class="btn btn-ghost btn-sm" @click="remove(task.id)">删除</button>
+            </div>
+          </div>
+        </div>
+        <p v-else class="hint">暂无告警监控任务。新建后才会对指定主机生效。</p>
+      </section>
+
+      <section class="section">
         <div class="diag-head">
           <h4 class="section-title">诊断快照</h4>
           <button class="btn btn-ghost" :disabled="diagLoading" @click="refreshDiagnostics()">
@@ -173,7 +232,7 @@
  * G4/G5/G8/G9/G10：运维面板。状态与保存动作全在 composable（可单测），
  * 面板只做渲染与展示派生，不直接碰 api / IPC。
  */
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import SettingRow from '@/components/settings/fields/SettingRow.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 import {
@@ -184,6 +243,8 @@ import {
 } from '@/composables/useOpsSettings'
 import { useDesktopPrefs } from '@/composables/useDesktopPrefs'
 import { useDiagnosticsBundle } from '@/composables/useDiagnosticsBundle'
+import { useAlertMonitorTasks } from '@/composables/useAlertMonitorTasks'
+import { describeRule, type AlertMonitorTask } from '@/utils/alert-trigger-core'
 import type { LogLevel } from '@/api/client'
 import { formatBytes } from '@/utils/format'
 
@@ -232,6 +293,27 @@ const {
   exportBundle,
   reveal: revealBundle,
 } = useDiagnosticsBundle()
+
+// 实时告警监控：从 useAlertMonitorTasks 共享同一份响应式任务列表（与 useAlertTrigger 同源）
+const { tasks, addFromTemplate, update, toggle, remove } = useAlertMonitorTasks()
+const newHost = ref('')
+const newName = ref('')
+const hostExists = computed(() => tasks.value.some(t => t.host === newHost.value.trim()))
+const canCreate = computed(() => !!newHost.value.trim() && !hostExists.value)
+function createTask() {
+  if (!canCreate.value) return
+  addFromTemplate(newHost.value.trim(), newName.value.trim() || undefined)
+  newHost.value = ''
+  newName.value = ''
+}
+function onCooldownInput(task: AlertMonitorTask, e: Event) {
+  const n = Number((e.target as HTMLInputElement).value)
+  if (Number.isFinite(n) && n > 0) update(task.id, { cooldownMinutes: Math.round(n) })
+}
+function rulesSummary(task: AlertMonitorTask): string {
+  const parts = task.rules.filter(r => r.enabled).map(describeRule)
+  return parts.length ? parts.join('，') : '（无启用规则）'
+}
 
 const retryOptions = Array.from({ length: RETRY_MAX + 1 }, (_, i) => i)
 
@@ -377,4 +459,16 @@ onMounted(() => {
 }
 .diag-k { color: var(--text-tertiary); text-align: left; }
 .diag-v { margin: 0; color: var(--text-primary); word-break: break-all; text-align: left; }
+
+/* 实时告警监控任务 */
+.hint.warn { color: var(--status-warn-text); }
+.alert-task-list { display: flex; flex-direction: column; gap: var(--spacing-10); margin-top: var(--spacing-10); }
+.alert-task { padding: var(--spacing-10); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); }
+.alert-task-head { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-8); }
+.alert-task-name { font-weight: 600; color: var(--text-primary); font-size: 0.9231rem; }
+.alert-task-meta { margin-top: var(--spacing-4); font-size: 0.8462rem; color: var(--text-tertiary); }
+.alert-task-rules { margin-top: var(--spacing-4); font-size: 0.8846rem; color: var(--text-secondary); line-height: 1.5; }
+.alert-task-foot { display: flex; align-items: center; justify-content: space-between; margin-top: var(--spacing-8); }
+.cooldown-label { display: inline-flex; align-items: center; gap: var(--spacing-6); font-size: 0.8846rem; color: var(--text-secondary); }
+.btn-sm { height: 24px; padding: 0 var(--spacing-8); font-size: 0.8462rem; }
 </style>

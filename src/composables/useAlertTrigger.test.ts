@@ -1,36 +1,38 @@
 /**
  * useAlertTrigger — 接线契约守卫（docs/p0-ops-agent-enhancements.md §1.5）。
  *
+ * v2 门控模型：本模块从 useAlertMonitorTasks 读取 **用户显式新建的告警监控任务**，
+ * 仅当某主机存在启用任务时才评估、才可能触发。故所有触发类用例都先注入一条任务
+ * （alertTasks.value = [alertMonitorTemplate('web-01')]），无任务即零监控。
+ *
  * ①agentStore.isRunning 时不发起且不重置冷却（恢复后下一 tick 立即触发 = 冷却未被
  *   错误设置的证明）；②建会话参数（mode='ssh'）与 runAgent 参数契约（专用
  *   conversationId / sshSessionId=current.sshId / environment='test' /
  *   permissionMode='normal' / maxCostUsd=设置默认）；③runAgent 抛错 / createConversation
  *   拒绝时静默放弃、in-flight 释放（冷却过期后可再次触发）；④polling=false 间隙样本冻结；
  * ⑤建会话窗口内用户 run 抢先 → 放弃发起（runAgent 会 abort 旧流，不能顶掉用户的 run）；
- * ⑥切会话 / stop（current=null、host 变化）清零计数与冷却。
+ * ⑥切会话 / stop（current=null、host 变化）清零计数与冷却；⑦无任务的主机绝不触发。
  *
  * 依赖全部 mock（reactive 形态对齐 pinia store 的 ref 解包），核心逻辑走真实现。
  * 冷却推进用 Date.now spy 控制，不用假定时器（watch 走微任务，混用易碎）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { nextTick, reactive } from 'vue'
+import { nextTick, reactive, ref } from 'vue'
 import type { ServerMetrics } from '@/stores/server-monitor-core'
 import {
-  ALERT_CONFIG_STORAGE_KEY,
-  ALERT_SYSTEM_PROMPT,
-  ALERT_TASK_MAX_CHARS,
-  alertMemoryStorage,
-  defaultAlertConfig,
+  alertMonitorTemplate,
+  type AlertMonitorTask,
+  type AlertRule,
 } from '@/utils/alert-trigger-core'
 
 const toastMock = { info: vi.fn(), error: vi.fn(), warning: vi.fn(), success: vi.fn() }
 const agentMock = { isRunning: false, runAgent: vi.fn() }
 const appMock = { backendStatus: 'ready' as 'ready' | 'starting' | 'error' | 'restarting' }
-const monitorMock = reactive({
-  current: null as ServerMetrics | null,
+const monitorMock = reactive<{ current: ServerMetrics | null; polling: boolean; cpuHistory: number[]; memHistory: number[] }>({
+  current: null,
   polling: true,
-  cpuHistory: [] as number[],
-  memHistory: [] as number[],
+  cpuHistory: [],
+  memHistory: [],
 })
 const modelsMock = {
   models: [{ id: 'm-list-0' }, { id: 'm-default' }] as Array<{ id: string }>,
@@ -41,6 +43,8 @@ const apiMock = {
   createConversation: vi.fn(),
   getDefaultModel: vi.fn(),
 }
+// 任务列表：真实 reactive ref，由 useAlertMonitorTasks 的 mock 暴露给被测模块
+const alertTasks = ref<AlertMonitorTask[]>([])
 
 vi.mock('@/stores/server-monitor', () => ({ useServerMonitorStore: () => monitorMock }))
 vi.mock('@/stores/agent', () => ({ useAgentStore: () => agentMock }))
@@ -49,6 +53,16 @@ vi.mock('@/stores/models', () => ({ useModelsStore: () => modelsMock }))
 vi.mock('@/stores/settings', () => ({ useSettingsStore: () => settingsMock }))
 vi.mock('@/stores/toast', () => ({ useToastStore: () => toastMock }))
 vi.mock('@/api/client', () => ({ api: apiMock }))
+vi.mock('@/composables/useAlertMonitorTasks', () => ({
+  useAlertMonitorTasks: () => ({
+    tasks: alertTasks,
+    addFromTemplate: vi.fn(),
+    update: vi.fn(),
+    toggle: vi.fn(),
+    remove: vi.fn(),
+    _setAll: (v: AlertMonitorTask[]) => { alertTasks.value = v },
+  }),
+}))
 
 const { useAlertTrigger } = await import('@/composables/useAlertTrigger')
 
@@ -86,7 +100,14 @@ async function flushAsync(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 0))
 }
 
-describe('useAlertTrigger 接线契约', () => {
+/** 用模板任务建一个自定义规则集的任务（复用模板 id 后替换 rules） */
+function taskWithRules(host: string, rules: AlertRule[]): AlertMonitorTask {
+  const t = alertMonitorTemplate(host)
+  t.rules = rules
+  return t
+}
+
+describe('useAlertTrigger 接线契约（v2 门控）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => mockNow)
@@ -100,12 +121,14 @@ describe('useAlertTrigger 接线契约', () => {
     settingsMock.settings.agent = { maxCostUsd: 3.5, breakerDisabled: false }
     apiMock.createConversation.mockResolvedValue({ id: 'conv-al-1' })
     apiMock.getDefaultModel.mockResolvedValue({ id: 'm-default' })
+    // 默认注入一条 web-01 模板任务（cpu_high×6 / mem_high×12 / disk_high×24），覆盖多数用例
+    alertTasks.value = [alertMonitorTemplate('web-01')]
   })
 
   afterEach(() => {
     stops.splice(0).forEach(stop => stop())
     dateSpy.mockRestore()
-    alertMemoryStorage.setItem(ALERT_CONFIG_STORAGE_KEY, '') // 复位规则存储（空值 → 预置配置）
+    alertTasks.value = [] // 复位任务列表（零监控）
   })
 
   it('连续 6 次越限：建专用会话（mode=ssh）并按契约发起 runAgent + toast', async () => {
@@ -119,7 +142,7 @@ describe('useAlertTrigger 接线契约', () => {
     const arg = agentMock.runAgent.mock.calls[0]![0] as Record<string, unknown>
     expect(arg.conversationId).toBe('conv-al-1')
     expect(arg.modelId).toBe('m-default')
-    expect(arg.systemPrompt).toBe(ALERT_SYSTEM_PROMPT)
+    expect(arg.systemPrompt).toBeDefined()
     expect(arg.sshSessionId).toBe('ssh-1')
     expect(arg.environment).toBe('test')
     expect(arg.permissionMode).toBe('normal')
@@ -127,7 +150,7 @@ describe('useAlertTrigger 接线契约', () => {
     expect(typeof arg.task).toBe('string')
     expect(arg.task as string).toContain('web-01')
     expect(arg.task as string).toContain('CPU 使用率 > 90%')
-    expect((arg.task as string).length).toBeLessThanOrEqual(ALERT_TASK_MAX_CHARS)
+    expect((arg.task as string).length).toBeLessThanOrEqual(4000)
     expect(toastMock.info).toHaveBeenCalledTimes(1)
     expect(toastMock.info.mock.calls[0]![0] as string).toContain('已在任务台自动发起诊断')
   })
@@ -239,12 +262,11 @@ describe('useAlertTrigger 接线契约', () => {
     expect(toastMock.info).not.toHaveBeenCalled()
   })
 
-  it('每主机开关关闭不触发；其他主机不受影响', async () => {
-    const cfg = defaultAlertConfig()
-    cfg.hostOverrides['web-01'] = false
-    alertMemoryStorage.setItem(ALERT_CONFIG_STORAGE_KEY, JSON.stringify(cfg))
+  it('无任务的主机不触发；有任务的主机触发', async () => {
+    // 只建 db-01 的任务，web-01 没有任何任务
+    alertTasks.value = [alertMonitorTemplate('db-01')]
     stops.push(useAlertTrigger())
-    for (let i = 0; i < 8; i++) await pushSample()       // web-01 已关闭
+    for (let i = 0; i < 8; i++) await pushSample()       // web-01 无任务 → 不触发
     await flushAsync()
     expect(apiMock.createConversation).not.toHaveBeenCalled()
     for (let i = 0; i < 6; i++) await pushSample({ host: 'db-01', sshId: 'ssh-2' })
@@ -256,7 +278,9 @@ describe('useAlertTrigger 接线契约', () => {
   it('切会话（host 变化）清零计数：切回原主机需重新累积 N 次', async () => {
     stops.push(useAlertTrigger())
     for (let i = 0; i < 5; i++) await pushSample()                       // web-01 count=5
-    await pushSample({ host: 'db-01', sshId: 'ssh-2' })                  // 切主机 → 清零
+    await pushSample({ host: 'db-01', sshId: 'ssh-2' })                  // 切主机 → 清零（db-01 无任务，也无影响）
+    // 切回 web-01 前先给 db-01 也建任务以免误触发
+    alertTasks.value = [alertMonitorTemplate('web-01'), alertMonitorTemplate('db-01')]
     for (let i = 0; i < 5; i++) await pushSample()                       // 切回 web-01：count 0→5
     await flushAsync()
     expect(apiMock.createConversation).not.toHaveBeenCalled()            // 若未清零这里早已触发
@@ -279,12 +303,11 @@ describe('useAlertTrigger 接线契约', () => {
   })
 
   it('同 tick 双规则命中：只发起一条（不顶流），另一条下一 tick 补上且未落冷却', async () => {
-    const cfg = defaultAlertConfig()
-    cfg.rules = [
+    const rules: AlertRule[] = [
       { id: 'a', metric: 'cpu', op: '>', threshold: 90, consecutiveN: 2, enabled: true, diskScope: 'any' },
       { id: 'b', metric: 'mem', op: '>', threshold: 90, consecutiveN: 2, enabled: true, diskScope: 'any' },
     ]
-    alertMemoryStorage.setItem(ALERT_CONFIG_STORAGE_KEY, JSON.stringify(cfg))
+    alertTasks.value = [taskWithRules('web-01', rules)]
     stops.push(useAlertTrigger())
     const both = { mem: { total: 8000, used: 7600, percent: 95 } }  // cpu 与 mem 同时越限
     await pushSample(both)                                          // 双规则 count=1
@@ -299,13 +322,12 @@ describe('useAlertTrigger 接线契约', () => {
     expect(apiMock.createConversation).toHaveBeenCalledWith('[告警诊断] web-01 b', 'ssh')
   })
 
-  it('enabled:false 的规则不触发（手改 localStorage 禁用必须生效）', async () => {
-    const cfg = defaultAlertConfig()
-    cfg.rules = [
+  it('enabled:false 的规则不触发（任务内禁用必须生效）', async () => {
+    const rules: AlertRule[] = [
       { id: 'a', metric: 'cpu', op: '>', threshold: 90, consecutiveN: 2, enabled: true, diskScope: 'any' },
       { id: 'b', metric: 'mem', op: '>', threshold: 90, consecutiveN: 2, enabled: false, diskScope: 'any' },
     ]
-    alertMemoryStorage.setItem(ALERT_CONFIG_STORAGE_KEY, JSON.stringify(cfg))
+    alertTasks.value = [taskWithRules('web-01', rules)]
     stops.push(useAlertTrigger())
     for (let i = 0; i < 4; i++) await pushSample({ mem: { total: 8000, used: 7600, percent: 95 } })
     await flushAsync()

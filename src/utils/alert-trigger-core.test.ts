@@ -5,26 +5,23 @@
  * ①连续 N 次越限计数升/降级与重置；②全 0 CPU 差分样本不计入（对齐
  * computeCpuDiff 首轮/计数器未前进返回全 0 的契约，server-monitor-core.ts:603-604）；
  * ③冷却期内不重复触发、冷却以触发时刻起算（run 失败照常计时）；
- * ④task 文本包含主机名/规则/越限指标且 ≤4000 字符；⑤localStorage 损坏兜底重置。
+ * ④task 文本包含主机名/规则/越限指标且 ≤4000 字符；⑤AlertMonitorTask 校验与模板。
  */
 import { describe, expect, it } from 'vitest'
 import type { ServerMetrics } from '@/stores/server-monitor-core'
 import {
-  ALERT_CONFIG_STORAGE_KEY,
   ALERT_HISTORY_TAIL,
   ALERT_TASK_MAX_CHARS,
-  alertMemoryStorage,
+  alertMonitorTemplate,
   buildDiagnosisTaskText,
   createAlertRuntime,
-  defaultAlertConfig,
   describeRule,
   evaluateRules,
-  isHostEnabled,
-  loadAlertConfig,
   markTriggered,
   processSample,
   resetAlertRuntime,
-  saveAlertConfig,
+  sanitizeAlertMonitorTask,
+  sanitizeAlertMonitorTasks,
   setInFlight,
   type AlertRule,
 } from './alert-trigger-core'
@@ -250,7 +247,7 @@ describe('冷却与在飞（以触发时刻起算）', () => {
   })
 })
 
-describe('resetAlertRuntime 与每主机开关', () => {
+describe('resetAlertRuntime 与 AlertMonitorTask 校验', () => {
   it('reset 清空计数/冷却/在飞：切换主机或 stop 后需重新累积', () => {
     const rt = createAlertRuntime()
     const r = rule({ consecutiveN: 2 })
@@ -267,78 +264,58 @@ describe('resetAlertRuntime 与每主机开关', () => {
     expect(feed(rt, r, 'h', high, 4000)).toBe(true)
   })
 
-  it('isHostEnabled：缺省启用；hostOverrides false 关闭、true 显式开启', () => {
-    const cfg = defaultAlertConfig()
-    expect(isHostEnabled(cfg, 'any-host')).toBe(true)
-    cfg.hostOverrides['web-01'] = false
-    cfg.hostOverrides['db-01'] = true
-    expect(isHostEnabled(cfg, 'web-01')).toBe(false)
-    expect(isHostEnabled(cfg, 'db-01')).toBe(true)
-    expect(isHostEnabled(cfg, 'other')).toBe(true)
-  })
-})
-
-describe('localStorage 读写与损坏兜底', () => {
-  it('键不存在 → 预置三条规则', () => {
-    expect(loadAlertConfig(alertMemoryStorage)).toEqual(defaultAlertConfig())
-    expect(defaultAlertConfig().rules.map(r => r.id)).toEqual(['cpu_high', 'mem_high', 'disk_high'])
+  it('alertMonitorTemplate：默认 3 规则（cpu/mem/disk）+ 冷却 30 + 启用', () => {
+    const t = alertMonitorTemplate('192.168.1.10', '生产机')
+    expect(t.id).toBeTruthy()
+    expect(t.name).toBe('生产机')
+    expect(t.host).toBe('192.168.1.10')
+    expect(t.enabled).toBe(true)
+    expect(t.cooldownMinutes).toBe(30)
+    expect(t.rules.map(r => r.id)).toEqual(['cpu_high', 'mem_high', 'disk_high'])
+    expect(t.rules.every(r => r.enabled)).toBe(true)
   })
 
-  it('损坏 JSON / 版本不符 / 结构非法 → 重置为预置配置', () => {
-    alertMemoryStorage.setItem(ALERT_CONFIG_STORAGE_KEY, '{not json')
-    expect(loadAlertConfig(alertMemoryStorage)).toEqual(defaultAlertConfig())
-    alertMemoryStorage.setItem(ALERT_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, rules: [] }))
-    expect(loadAlertConfig(alertMemoryStorage)).toEqual(defaultAlertConfig())
-    alertMemoryStorage.setItem(ALERT_CONFIG_STORAGE_KEY, JSON.stringify([1, 2, 3]))
-    expect(loadAlertConfig(alertMemoryStorage)).toEqual(defaultAlertConfig())
+  it('sanitizeAlertMonitorTask：id/host 缺失 → null；rules 空 → null', () => {
+    expect(sanitizeAlertMonitorTask(null)).toBeNull()
+    expect(sanitizeAlertMonitorTask({})).toBeNull()
+    expect(sanitizeAlertMonitorTask({ id: 'x' })).toBeNull()                 // 无 host
+    expect(sanitizeAlertMonitorTask({ id: 'x', host: 'h' })).toBeNull()     // 无 rules
+    // name 缺省按 host 生成
+    const t = sanitizeAlertMonitorTask({
+      id: 'x', host: 'h',
+      rules: [{ id: 'r', metric: 'cpu', op: '>', threshold: 1, consecutiveN: 2, enabled: true, diskScope: 'any' }],
+    })
+    expect(t?.name).toBe('实时监控 h')
+    expect(t?.enabled).toBe(true)
+    expect(t?.cooldownMinutes).toBe(30)
   })
 
-  it('非法条目丢弃、合法条目保留；显式清空 rules 是合法状态', () => {
+  it('sanitizeAlertMonitorTask：非法 rules 丢弃、合法保留；enabled/cooldown 兜底', () => {
     const raw = {
-      version: 1,
+      id: 't1', host: 'h1', name: 'n', enabled: false, cooldownMinutes: 0,
       rules: [
-        { id: 'ok', metric: 'mem', op: '>', threshold: 85, consecutiveN: 5 },
-        { id: '', metric: 'mem', op: '>', threshold: 85, consecutiveN: 5 },      // 空 id → 丢
-        { id: 'bad-metric', metric: 'temp', op: '>', threshold: 1, consecutiveN: 5 }, // 取值域外 → 丢
-        { id: 'bad-op', metric: 'cpu', op: '!=', threshold: 1, consecutiveN: 5 },     // 非法比较符 → 丢
-        { id: 'bad-th', metric: 'cpu', op: '>', threshold: 'x', consecutiveN: 5 },    // 非数值阈值 → 丢
-        { id: 'bad-n', metric: 'cpu', op: '>', threshold: 1, consecutiveN: 0 },       // N<1 → 丢
+        { id: 'ok', metric: 'mem', op: '>', threshold: 85, consecutiveN: 5, enabled: true, diskScope: 'any' },
+        { id: '', metric: 'mem', op: '>', threshold: 85, consecutiveN: 5, diskScope: 'any' },      // 空 id → 丢
+        { id: 'bad-metric', metric: 'temp', op: '>', threshold: 1, consecutiveN: 5, diskScope: 'any' }, // 取值域外 → 丢
+        { id: 'bad-op', metric: 'cpu', op: '!=', threshold: 1, consecutiveN: 5, diskScope: 'any' },     // 非法比较符 → 丢
+        { id: 'bad-th', metric: 'cpu', op: '>', threshold: 'x', consecutiveN: 5, diskScope: 'any' },    // 非数值阈值 → 丢
+        { id: 'bad-n', metric: 'cpu', op: '>', threshold: 1, consecutiveN: 0, diskScope: 'any' },       // N<1 → 丢
       ],
-      hostOverrides: { 'web-01': false, broken: 'yes' },
-      cooldownMinutes: 0,
     }
-    alertMemoryStorage.setItem(ALERT_CONFIG_STORAGE_KEY, JSON.stringify(raw))
-    const loaded = loadAlertConfig(alertMemoryStorage)
-    expect(loaded.rules.map(r => r.id)).toEqual(['ok'])
-    expect(loaded.rules[0]!.enabled).toBe(true) // 缺省 enabled=true
-    expect(loaded.hostOverrides).toEqual({ 'web-01': false })
-    expect(loaded.cooldownMinutes).toBe(1) // 0 → 下限夹取
+    const t = sanitizeAlertMonitorTask(raw)
+    expect(t).not.toBeNull()
+    expect(t!.rules.map(r => r.id)).toEqual(['ok'])
+    expect(t!.enabled).toBe(false)
+    expect(t!.cooldownMinutes).toBe(1) // 0 → 下限夹取
   })
 
-  it('consecutiveN 上限夹取 720；cooldownMinutes 上限夹取 1440', () => {
-    const raw = {
-      version: 1,
-      rules: [{ id: 'a', metric: 'cpu', op: '>', threshold: 90, consecutiveN: 99999 }],
-      hostOverrides: {},
-      cooldownMinutes: 99999,
-    }
-    alertMemoryStorage.setItem(ALERT_CONFIG_STORAGE_KEY, JSON.stringify(raw))
-    const loaded = loadAlertConfig(alertMemoryStorage)
-    expect(loaded.rules[0]!.consecutiveN).toBe(720)
-    expect(loaded.cooldownMinutes).toBe(1440)
-  })
-
-  it('save → load 往返保真；save 失败返回 false 不抛出', () => {
-    const cfg = defaultAlertConfig()
-    cfg.hostOverrides['web-01'] = false
-    cfg.rules[0]!.threshold = 88
-    expect(saveAlertConfig(cfg, alertMemoryStorage)).toBe(true)
-    expect(loadAlertConfig(alertMemoryStorage)).toEqual(cfg)
-    const brokenStorage = {
-      getItem: () => null,
-      setItem: () => { throw new Error('quota') },
-    }
-    expect(saveAlertConfig(cfg, brokenStorage)).toBe(false)
+  it('sanitizeAlertMonitorTasks：非数组/损坏 → 空数组（零监控）；合法条目保留，非法不连坐', () => {
+    expect(sanitizeAlertMonitorTasks(null)).toEqual([])
+    expect(sanitizeAlertMonitorTasks('x')).toEqual([])
+    const ok = { id: 'a', host: 'h', rules: [{ id: 'r', metric: 'cpu', op: '>', threshold: 1, consecutiveN: 2, enabled: true, diskScope: 'any' }], cooldownMinutes: 30 }
+    expect(sanitizeAlertMonitorTasks([ok])).toHaveLength(1)
+    // 一条非法（无 host）不应拖垮整条数组
+    expect(sanitizeAlertMonitorTasks([ok, { id: 'bad' } as unknown])).toHaveLength(1)
   })
 })
 

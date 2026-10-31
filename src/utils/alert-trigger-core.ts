@@ -5,9 +5,12 @@
  * 判断与冷却全部在这里完成；执行层（composables/useAlertTrigger.ts）只做 watch
  * 接线与 agentStore.runAgent 调用，从而零成本继承 /agent/run 的审批卡、审计与熔断。
  *
- * 规则与每主机开关持久化在 localStorage（键级原子写，无文件落盘，不涉及 tmp+rename
- * 约束）；运行时计数与冷却状态纯内存 —— 无渲染层 = 无轮询 = 无触发源，跨重启持久化
- * 冷却非必需（后端持久化规则留 v2：app_setting，先例 schedule_engine.py db.get_app_setting）。
+ * 配置模型（v2，见 docs/p0-ops-agent-enhancements.md §1「改为显式任务」）：
+ *   不再是「全局默认开启 3 条规则 + 首次加载写盘自动生效」，而是 **用户显式新建的
+ *   「告警监控任务」(AlertMonitorTask) 列表**。无任务 = 零监控；某一主机要有监控，
+ *   必须存在一条 host 匹配且 enabled 的任务。这修复了「没建任务却自动发告警」的不合理默认。
+ *   持久化交给 composables/useAlertMonitorTasks.ts（独立 localStorage 键、防抖写）；
+ *   本文件只负责规则引擎、冷却状态机与诊断文本，以及任务结构的校验与模板。
  *
  * 关键样本契约（对齐 stores/server-monitor-core.ts，集成者合并时需复核）：
  * - computeCpuDiff 首轮/计数器未前进返回全 0（server-monitor-core.ts:603-604）→
@@ -26,8 +29,35 @@ export type AlertMetric = (typeof ALERT_METRICS)[number]
 export const ALERT_OPS = ['>', '>=', '<', '<='] as const
 export type AlertOp = (typeof ALERT_OPS)[number]
 
-/** localStorage 键（v1：预置规则落盘一份，用户手改生效于下次加载；无规则编辑 UI） */
-export const ALERT_CONFIG_STORAGE_KEY = 'ckun.alertTrigger.rules.v1'
+export interface AlertRule {
+  id: string
+  metric: AlertMetric
+  op: AlertOp
+  threshold: number
+  consecutiveN: number
+  enabled: boolean
+  /** 仅 metric==='disk'：'any' = 任一挂载点；'mount:<路径>' = 指定挂载点（disks ≤8 块） */
+  diskScope: 'any' | `mount:${string}`
+}
+
+// ── 告警监控任务模型（v2：显式新建，无任务 = 不监控） ──
+
+export interface AlertMonitorTask {
+  /** 任务唯一 id（跨主机唯一，用作运行时冷却 / 在飞键的一部分） */
+  id: string
+  /** 用户可读名称（如「生产 Web 内存告警」） */
+  name: string
+  /** 监控目标主机，必须匹配 monitorStore.current.host 才会生效 */
+  host: string
+  enabled: boolean
+  /** 本任务携带的规则（克隆自模板或用户自定义） */
+  rules: AlertRule[]
+  /** 触发后冷却分钟数（1~1440） */
+  cooldownMinutes: number
+}
+
+/** 持久化键（v2：独立键；v1 的 ckun.alertTrigger.rules.v1 不再读取，自然失效） */
+export const ALERT_MONITOR_STORAGE_KEY = 'ckun.alertMonitor.tasks.v1'
 
 /** 诊断 task 文本硬上限。AgentRunRequest.task 上限 50000（routes/agent.py:398），
  *  这里远低于它；只塞主机名+触发规则+越限指标+mem/swap+前 3 磁盘+GPU 摘要，不塞 ports/procs。 */
@@ -40,28 +70,9 @@ export const ALERT_HISTORY_TAIL = 12
 const RULE_N_MAX = 720
 /** cooldownMinutes 合法区间：1 分钟 ~ 1 天 */
 const COOLDOWN_MIN = 1
+export const COOLDOWN_DEFAULT = 30
 const COOLDOWN_MAX = 1440
-const COOLDOWN_DEFAULT = 30
 const TRUNCATE_MARKER = '\n…（指标已截断）'
-
-export interface AlertRule {
-  id: string
-  metric: AlertMetric
-  op: AlertOp
-  threshold: number
-  consecutiveN: number
-  enabled: boolean
-  /** 仅 metric==='disk'：'any' = 任一挂载点；'mount:<路径>' = 指定挂载点（disks ≤8 块） */
-  diskScope: 'any' | `mount:${string}`
-}
-
-export interface AlertTriggerConfig {
-  version: 1
-  rules: AlertRule[]
-  /** 按主机开关（键=主机名；缺省 = 启用，值 false = 该主机关闭告警） */
-  hostOverrides: Record<string, boolean>
-  cooldownMinutes: number
-}
 
 export const METRIC_LABELS: Record<AlertMetric, string> = {
   cpu: 'CPU 使用率',
@@ -87,22 +98,39 @@ export function describeRule(rule: AlertRule): string {
   return `${METRIC_LABELS[rule.metric]} ${rule.op} ${rule.threshold}${unit}${scope}`
 }
 
-// ── 预置规则（设计 §1.2：cpu>90%×6、mem>90%×12、disk>92%×24 任一挂载点） ──
+// ── 模板：cpu>90%×6、mem>90%×12、disk>92%×24 任一挂载点（设计 §1.2） ──
 
-export function defaultAlertConfig(): AlertTriggerConfig {
+/** 模板的默认 3 条规则（深拷贝，避免调用方改到模板原对象） */
+export function templateAlertRules(): AlertRule[] {
+  return [
+    { id: 'cpu_high', metric: 'cpu', op: '>', threshold: 90, consecutiveN: 6, enabled: true, diskScope: 'any' },
+    { id: 'mem_high', metric: 'mem', op: '>', threshold: 90, consecutiveN: 12, enabled: true, diskScope: 'any' },
+    { id: 'disk_high', metric: 'disk', op: '>', threshold: 92, consecutiveN: 24, enabled: true, diskScope: 'any' },
+  ]
+}
+
+/** 生成任务 id（优先 crypto.randomUUID，避免 SSR / 旧环境缺失） */
+export function genTaskId(host: string): string {
+  const rand =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10)
+  return `alert-${host}-${rand}`
+}
+
+/** 从模板新建一个告警监控任务（host 必填；name 缺省按 host 生成） */
+export function alertMonitorTemplate(host: string, name?: string): AlertMonitorTask {
   return {
-    version: 1,
-    rules: [
-      { id: 'cpu_high', metric: 'cpu', op: '>', threshold: 90, consecutiveN: 6, enabled: true, diskScope: 'any' },
-      { id: 'mem_high', metric: 'mem', op: '>', threshold: 90, consecutiveN: 12, enabled: true, diskScope: 'any' },
-      { id: 'disk_high', metric: 'disk', op: '>', threshold: 92, consecutiveN: 24, enabled: true, diskScope: 'any' },
-    ],
-    hostOverrides: {},
+    id: genTaskId(host),
+    name: name?.trim() || `实时监控 ${host}`,
+    host: host.trim(),
+    enabled: true,
+    rules: templateAlertRules(),
     cooldownMinutes: COOLDOWN_DEFAULT,
   }
 }
 
-// ── 校验（版本化 + 损坏兜底重置） ──
+// ── 规则校验（损坏兜底丢弃非法条目） ──
 
 function sanitizeRule(raw: unknown): AlertRule | null {
   if (!raw || typeof raw !== 'object') return null
@@ -131,82 +159,34 @@ function sanitizeRule(raw: unknown): AlertRule | null {
   }
 }
 
-function sanitizeOverrides(raw: unknown): Record<string, boolean> {
-  const out: Record<string, boolean> = {}
-  if (!raw || typeof raw !== 'object') return out
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof v === 'boolean') out[k] = v
-  }
-  return out
-}
-
-/** 未知形状 → 可用配置。整体损坏（版本不符/结构非法）回落预置三条；
- *  rules 数组内个别条目非法则丢弃、合法的保留（显式清空 rules 为合法状态）。 */
-export function sanitizeAlertConfig(raw: unknown): AlertTriggerConfig {
-  const fallback = defaultAlertConfig()
-  if (!raw || typeof raw !== 'object') return fallback
-  const o = raw as Record<string, unknown>
-  if (o.version !== 1) return fallback
-  const rules = Array.isArray(o.rules)
-    ? o.rules.map(sanitizeRule).filter((r): r is AlertRule => r !== null)
-    : fallback.rules
-  const cd = typeof o.cooldownMinutes === 'number' && Number.isFinite(o.cooldownMinutes)
-    ? Math.round(o.cooldownMinutes)
+/** 单任务校验：id / host 缺失或非法 → 整条丢弃；rules 个别非法条目丢弃、合法保留 */
+export function sanitizeAlertMonitorTask(raw: unknown): AlertMonitorTask | null {
+  if (!raw || typeof raw !== 'object') return null
+  const t = raw as Record<string, unknown>
+  const id = typeof t.id === 'string' ? t.id.trim().slice(0, 64) : ''
+  const host = typeof t.host === 'string' ? t.host.trim() : ''
+  if (!id || !host) return null
+  const rules = Array.isArray(t.rules)
+    ? t.rules.map(sanitizeRule).filter((r): r is AlertRule => r !== null)
+    : []
+  if (rules.length === 0) return null // 无可用规则的任务没有存在意义
+  const cd = typeof t.cooldownMinutes === 'number' && Number.isFinite(t.cooldownMinutes)
+    ? Math.round(t.cooldownMinutes)
     : COOLDOWN_DEFAULT
   return {
-    version: 1,
+    id,
+    name: typeof t.name === 'string' && t.name.trim() ? t.name.trim() : `实时监控 ${host}`,
+    host,
+    enabled: t.enabled !== false,
     rules,
-    hostOverrides: sanitizeOverrides(o.hostOverrides),
     cooldownMinutes: Math.min(COOLDOWN_MAX, Math.max(COOLDOWN_MIN, cd)),
   }
 }
 
-// ── localStorage 读写 ──
-
-/** 读写只需 KV 两方法（浏览器 Storage / 测试注入 / node 后备同一结构） */
-export interface KvStorageLike {
-  getItem(key: string): string | null
-  setItem(key: string, value: string): void
-}
-
-/** 无 window（node 测试环境）的后备存储；测试也用它预置规则 */
-export const alertMemoryStorage: KvStorageLike = (() => {
-  const m = new Map<string, string>()
-  return {
-    getItem: k => m.get(k) ?? null,
-    setItem: (k, v) => { m.set(k, v) },
-  }
-})()
-
-function defaultStorage(): KvStorageLike {
-  try {
-    if (typeof localStorage !== 'undefined') return localStorage
-  } catch { /* 部分嵌入环境读 localStorage 即抛 */ }
-  return alertMemoryStorage
-}
-
-/** 读取规则配置：键不存在 / JSON 损坏 / 版本不符 → 重置为预置三条（损坏兜底重置） */
-export function loadAlertConfig(storage: KvStorageLike = defaultStorage()): AlertTriggerConfig {
-  try {
-    const raw = storage.getItem(ALERT_CONFIG_STORAGE_KEY)
-    if (!raw) return defaultAlertConfig()
-    return sanitizeAlertConfig(JSON.parse(raw) as unknown)
-  } catch {
-    // 损坏兜底要落到盘上：只重置内存的话，坏 JSON 每次挂载都会再炸一遍
-    const fallback = defaultAlertConfig()
-    saveAlertConfig(fallback, storage)
-    return fallback
-  }
-}
-
-/** 写回配置。失败（配额/隐私模式）返回 false 由调用方决定是否提示，不抛出。 */
-export function saveAlertConfig(config: AlertTriggerConfig, storage: KvStorageLike = defaultStorage()): boolean {
-  try {
-    storage.setItem(ALERT_CONFIG_STORAGE_KEY, JSON.stringify(sanitizeAlertConfig(config)))
-    return true
-  } catch {
-    return false
-  }
+/** 从持久化 / 手改的任意形状收敛出任务数组；非数组或整体损坏 → 空数组（= 零监控） */
+export function sanitizeAlertMonitorTasks(raw: unknown): AlertMonitorTask[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map(sanitizeAlertMonitorTask).filter((t): t is AlertMonitorTask => t !== null)
 }
 
 // ── 运行时状态机（纯内存，键 = host + ruleId） ──
@@ -334,10 +314,6 @@ export function processSample(
     if (next >= ev.rule.consecutiveN && !cooling && !rt.inFlight.has(key)) fired.push(ev.rule)
   }
   return fired
-}
-
-export function isHostEnabled(config: AlertTriggerConfig, host: string): boolean {
-  return config.hostOverrides[host] !== false
 }
 
 // ── 诊断 task 文本与 system prompt ──

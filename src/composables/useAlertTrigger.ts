@@ -5,8 +5,14 @@
  * 双方零改动：本模块只读 useServerMonitorStore 导出的状态（current/polling/
  * cpuHistory/memHistory），不 start/stop 轮询。
  *
+ * v2 门控模型（见 docs/p0-ops-agent-enhancements.md §1「改为显式任务」）：
+ *   本模块不再持有「全局默认开启的规则」，而是从 useAlertMonitorTasks 读取 **用户显式
+ *   新建的告警监控任务**。只有 host 匹配且 enabled 的任务才会被评估；无匹配任务的主机
+ *   完全不被监控（零监控，修复「没建任务却自动发告警」）。
+ *   任务为空 → 整个 watch 短路返回，无建会话、无 runAgent、无 toast。
+ *
  * 执行链（全部既有 API，零新端点）：
- *   连续 N 次越限（utils/alert-trigger-core.ts 状态机）
+ *   host 命中启用任务 → 连续 N 次越限（utils/alert-trigger-core.ts 状态机）
  *     → api.createConversation('[告警诊断] {host} {规则id}', 'ssh')  // 专用会话，
  *       避开与用户交互会话撞后端同会话并发 409（routes/agent.py:990-997）
  *     → agentStore.runAgent({ task, conversationId, modelId, systemPrompt,
@@ -24,31 +30,27 @@
  * run 级 409 在 SSE 流内部由 agentStore 既有 onError 消化，本模块无从观测 ——
  * 能做的「静默放弃」即：不 toast、不重试，冷却已按触发时刻计时。
  */
-import { getCurrentScope, onScopeDispose, watch } from 'vue'
+import { computed, getCurrentScope, onScopeDispose, watch } from 'vue'
 import { useServerMonitorStore } from '@/stores/server-monitor'
 import { useAgentStore } from '@/stores/agent'
 import { useAppStore } from '@/stores/app'
 import { useModelsStore } from '@/stores/models'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
+import { useAlertMonitorTasks } from '@/composables/useAlertMonitorTasks'
 import { api } from '@/api/client'
 import {
-  ALERT_CONFIG_STORAGE_KEY,
   ALERT_SYSTEM_PROMPT,
   buildDiagnosisTaskText,
+  COOLDOWN_DEFAULT,
   createAlertRuntime,
-  defaultAlertConfig,
   evaluateRules,
-  isHostEnabled,
-  loadAlertConfig,
-  markTriggered,
   METRIC_LABELS,
   processSample,
   resetAlertRuntime,
-  saveAlertConfig,
   setInFlight,
+  markTriggered,
   type AlertRule,
-  type AlertTriggerConfig,
 } from '@/utils/alert-trigger-core'
 import type { ServerMetrics } from '@/stores/server-monitor-core'
 
@@ -70,7 +72,8 @@ async function resolveDefaultModelId(): Promise<string | undefined> {
 
 /**
  * 挂载告警触发。返回停止函数（组件卸载即停；测试用它清理 watcher）。
- * 配置在挂载时读取一次：v1 无规则编辑 UI，手改 localStorage 生效于下次挂载。
+ * 任务列表在挂载时建立响应式依赖（computed 派生 activeRulesByHost），用户在运维面板
+ * 新建/启停任务会即时反映到这里，无需重挂载。
  */
 export function useAlertTrigger(): () => void {
   const monitorStore = useServerMonitorStore()
@@ -78,28 +81,41 @@ export function useAlertTrigger(): () => void {
   const appStore = useAppStore()
   const toast = useToastStore()
   const settingsStore = useSettingsStore()
-
-  const config: AlertTriggerConfig = loadAlertConfig()
-  // 预置规则落盘一次（键不存在时）：v1 靠手改 localStorage 调规则，得让用户看得到模板
-  try {
-    if (typeof localStorage !== 'undefined' && localStorage.getItem(ALERT_CONFIG_STORAGE_KEY) === null) {
-      saveAlertConfig(defaultAlertConfig(), localStorage)
-    }
-  } catch { /* 预置落盘失败不影响内存内判断 */ }
+  const { tasks } = useAlertMonitorTasks()
 
   const runtime = createAlertRuntime()
   /** 当前监控主机（host 变化 = 切会话 / stop，计数与冷却一并清零，见 watch） */
   let activeHost = ''
+
+  // 启用且 host 非空的任务 → 按 host 聚合其规则与冷却。同 host 多任务：规则取并集
+  // （ruleId 应唯一；若碰撞取首个提供方）。无任务或某 host 无任务时对应键不存在 = 零监控。
+  const activeRulesByHost = computed(() => {
+    const m = new Map<string, { rule: AlertRule; cooldownMinutes: number }[]>()
+    for (const t of tasks.value) {
+      if (!t.enabled || !t.host) continue
+      const list = m.get(t.host) ?? []
+      for (const r of t.rules) {
+        if (!r.enabled) continue
+        if (!list.some(e => e.rule.id === r.id)) list.push({ rule: r, cooldownMinutes: t.cooldownMinutes })
+      }
+      m.set(t.host, list)
+    }
+    return m
+  })
+
+  function cooldownFor(host: string, ruleId: string): number {
+    return activeRulesByHost.value.get(host)?.find(e => e.rule.id === ruleId)?.cooldownMinutes ?? COOLDOWN_DEFAULT
+  }
 
   // 跨 tick 单飞闸：trigger 的建会话/解析模型链路耗时的窗口内，下一 tick 的
   // 另一条候选也会通过 isRunning 检查 —— 后发 runAgent 会 abort 先发的诊断流
   // （agent.ts:314-318）。runAgent 调用后即解除（此后由 isRunning 闸接管）。
   let launchBusy = false
 
-  function trigger(host: string, rule: AlertRule, metrics: ServerMetrics): void {
+  function trigger(host: string, rule: AlertRule, metrics: ServerMetrics, cooldownMinutes: number): void {
     // 冷却以触发时刻起算：先落冷却与在飞标记，再走异步链 —— 建会话/解析模型失败也
     // 照常计时，避免每 5s 重试形成风暴（设计 §1.2「run 失败照常计时」）
-    markTriggered(runtime, host, rule.id, Date.now(), config.cooldownMinutes)
+    markTriggered(runtime, host, rule.id, Date.now(), cooldownMinutes)
     setInFlight(runtime, host, rule.id, true)
     launchBusy = true
     // 触发时刻同步抓取历史尾部：建会话期间用户可能切会话（历史被切走/清零），
@@ -151,9 +167,11 @@ export function useAlertTrigger(): () => void {
     // 连续计数以最后一次成功样本为准，不因时间流逝虚增（重试成功的那一拍 polling
     // 尚未翻回 true，同样跳过，下个 5s 样本自然续上）
     if (!monitorStore.polling) return
-    if (!isHostEnabled(config, host)) return
+    // v2 门控：该主机无启用任务 → 完全不评估（零监控）
+    const ruleSets = activeRulesByHost.value.get(host)
+    if (!ruleSets || ruleSets.length === 0) return
 
-    const evals = evaluateRules(config.rules, cur)
+    const evals = evaluateRules(ruleSets.map(e => e.rule), cur)
     const candidates = processSample(runtime, host, evals, Date.now())
     // 单 tick 单发起（launched）+ 跨 tick 单飞（launchBusy）：runAgent 在 trigger
     // 的异步链里要等建会话/解析模型之后才调用，这段窗口内 isRunning 还未置位 ——
@@ -168,7 +186,7 @@ export function useAlertTrigger(): () => void {
       if (agentStore.isRunning) continue
       if (appStore.backendStatus !== 'ready') continue
       launched = true
-      trigger(host, rule, cur)
+      trigger(host, rule, cur, cooldownFor(host, rule.id))
     }
   })
 
