@@ -10,6 +10,7 @@
      长度估算（len * 3 / 4）；
   4. 远程命令经 shlex.quote 转义路径。
 """
+import asyncio
 import base64
 import os
 import re
@@ -111,19 +112,27 @@ class ReadImageTool(BaseTool):
                 return ToolResult(False, "", "文件过大：超过 10MB 上限")
             return ToolResult(True, f"data:{mime};base64,{b64}")
 
-        # 本地：Python 原生文件 API（Windows）
-        if not os.path.exists(path):
-            return ToolResult(False, "", f"文件不存在: {path}")
-        try:
-            if os.path.getsize(path) > MAX_IMAGE_BYTES:
-                return ToolResult(False, "", "文件过大：超过 10MB 上限")
-            with open(path, "rb") as f:
-                data = f.read()
-        except PermissionError:
-            return ToolResult(False, "", f"无权限访问文件: {path}")
-        except IsADirectoryError:
-            return ToolResult(False, "", f"路径是目录而非文件: {path}")
-        except Exception as e:
-            return ToolResult(False, "", f"读取图片失败: {e}")
-        b64 = base64.b64encode(data).decode("ascii")
+        # 本地：Python 原生文件 API（Windows）。同步 stat+read 和 10MB 的 base64
+        # 编码都必须离开事件循环：这条循环同时载着所有在途 SSE 流与终端转发，一次
+        # 冷盘/网络盘上的读能把它们整片卡住。同 ops_file._local_read 记的那句
+        # 「同步文件 API，必须跑在事件循环之外」是同一件事，此前这一路被漏掉了。
+        def _read_local() -> tuple[str, str]:
+            if not os.path.exists(path):
+                return f"文件不存在: {path}", ""
+            try:
+                if os.path.getsize(path) > MAX_IMAGE_BYTES:
+                    return "文件过大：超过 10MB 上限", ""
+                with open(path, "rb") as f:
+                    data = f.read()
+            except PermissionError:
+                return f"无权限访问文件: {path}", ""
+            except IsADirectoryError:
+                return f"路径是目录而非文件: {path}", ""
+            except Exception as e:
+                return f"读取图片失败: {e}", ""
+            return "", base64.b64encode(data).decode("ascii")
+
+        err, b64 = await asyncio.to_thread(_read_local)
+        if err:
+            return ToolResult(False, "", err)
         return ToolResult(True, f"data:{mime};base64,{b64}")
