@@ -1118,3 +1118,99 @@ def test_plan_due_outranks_fresh_fact(base_db):
 
     assert topic.source == "plan_due"
 
+
+# ── 决策层：计划回溯放行、问过即标记、超窗清理（spec 2026-10-31-plan-followup）──
+
+
+def test_desire_allows_a_due_plan_to_break_the_stranger_floor():
+    """计划回溯不是未完话题，是「你亲口说过的事」——不熟也该能开口。"""
+    state = {"intimacy": 15, "novelty": 60, "tension": 0, "valence": 0, "energy": 0.8}
+    assert pro.desire(state, pending_topic=False, gap_hours=0.0) < pro.FIRE_THRESHOLD
+    assert (
+        pro.desire(state, pending_topic=False, gap_hours=0.0, plan_due=True)
+        >= pro.FIRE_THRESHOLD
+    )
+
+
+def test_desire_still_respects_tension_and_low_energy_with_a_due_plan():
+    """放行的是「有具体依据时能开口」，不是「无视状态乱开口」。"""
+    state = {"intimacy": 15, "novelty": 0, "tension": 50, "valence": 0, "energy": 0.5}
+    assert pro.desire(state, pending_topic=False, gap_hours=0.0, plan_due=True) < pro.FIRE_THRESHOLD
+
+
+def test_desire_without_plan_due_keeps_the_old_floor():
+    state = {"intimacy": 10, "novelty": 100, "tension": 0, "valence": 1.0, "energy": 1.0}
+    assert pro.desire(state, pending_topic=True, gap_hours=1e9) < pro.FIRE_THRESHOLD
+
+
+@pytest.mark.asyncio
+async def test_deliver_marks_the_plan_as_asked(base_db, monkeypatch):
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    hook_id = _add_due_hook(persona["id"])
+    scheduler = pro.ProactiveScheduler()
+
+    async def fake_push(_target, _text, *, now):
+        return "push", "", None
+
+    monkeypatch.setattr(scheduler, "_push_qq", fake_push)
+    topic = pro.Topic("他之前提过：看展，问问后来怎么样了", "plan_due", hook_id)
+    ok = await scheduler._deliver(
+        _qq_target(persona, conv), persona, "看展去了吗",
+        desire_value=0.8, topic=topic, now=TARGET_NOW,
+    )
+
+    assert ok is True
+    assert db.due_plan_hook(persona["id"], "2026-11-02 23:00:00", "2026-11-01 12:00:00") is None
+    row = _proactive_rows(persona["id"])[-1]
+    assert row["reason"] == "ok:plan_due"
+
+
+@pytest.mark.asyncio
+async def test_deliver_does_not_mark_when_the_platform_rejects(base_db, monkeypatch):
+    """平台拒收（skip）时不能标记：她想说但没说成，这件事不该作废。"""
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    hook_id = _add_due_hook(persona["id"])
+    scheduler = pro.ProactiveScheduler()
+
+    async def fake_push(_target, _text, *, now):
+        return "skip", "quota", None
+
+    monkeypatch.setattr(scheduler, "_push_qq", fake_push)
+    topic = pro.Topic("他之前提过：看展，问问后来怎么样了", "plan_due", hook_id)
+    ok = await scheduler._deliver(
+        _qq_target(persona, conv), persona, "看展去了吗",
+        desire_value=0.8, topic=topic, now=TARGET_NOW,
+    )
+
+    assert ok is False
+    conn = db._get_conn()
+    try:
+        state = conn.execute(
+            "SELECT state FROM bot_plan_hooks WHERE id = ?", (hook_id,)
+        ).fetchone()["state"]
+    finally:
+        conn.close()
+    assert state == "pending", "平台拒收不消耗这次机会，下一轮重试"
+
+
+@pytest.mark.asyncio
+async def test_tick_expires_plan_hooks_past_the_followup_window(base_db, monkeypatch):
+    persona, _conv = _persona_conv()
+    db.add_plan_hook(
+        persona["id"], None, None, "看展", "今晚",
+        "2026-10-20 18:00:00", "2026-10-21 00:00:00", "2026-10-20 12:00:00",
+    )
+    monkeypatch.setattr(db, "list_proactive_targets", lambda: [])
+
+    await pro.ProactiveScheduler().tick()
+
+    conn = db._get_conn()
+    try:
+        row = conn.execute(
+            "SELECT state FROM bot_plan_hooks WHERE persona_id = ?", (persona["id"],)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row["state"] == "expired"
+
+

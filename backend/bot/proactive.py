@@ -76,12 +76,17 @@ def desire(
     speed: str = "normal",
     pending_topic: bool = False,
     gap_hours: float = 0.0,
+    plan_due: bool = False,
 ) -> float:
     """「想找你」的意愿，0..1。
 
     权重即产品判断：关系不熟不打扰（0.30）、话说一半最硬（0.25）、
-    有新鲜事想分享（0.20）、久不见会想念（0.15）、心情好想说话（0.10）；
+    计划到期了（0.40，独立项：有时效，过期作废）、有新鲜事想分享（0.20）、
+    久不见会想念（0.15）、心情好想说话（0.10）；
     有疙瘩不想先低头（-0.60）、没精力不想说话（-0.50）。
+
+    plan_due 单独拿 0.40 而不是复用 pending_topic 的 0.25：算过数才知道
+    0.25 对陌生人根本过不了 0.55（intimacy=10 时 0.30 项只有 0.081）。
     """
     intimacy = float(state.get("intimacy") or 0.0)
     novelty = float(state.get("novelty") or 0.0)
@@ -96,6 +101,7 @@ def desire(
         0.30 * _sigmoid((intimacy - 30.0) / 20.0)
         + 0.20 * (novelty / 100.0)
         + 0.25 * (1.0 if pending_topic else 0.0)
+        + 0.40 * (1.0 if plan_due else 0.0)
         + 0.15 * miss
         + 0.10 * max(0.0, valence)
         - 0.60 * (tension / 100.0)
@@ -103,7 +109,9 @@ def desire(
     )
     # 关系硬底线：不熟的人（intimacy<20）哪怕话说一半也不打扰 —— 未完话题
     # 是最硬的钩子，但那是对熟人的；对陌生人它只是"还不知道你叫什么"。
-    if intimacy < 20.0:
+    # 计划回溯例外：他说过的事，对陌生关系也是最自然的开口依据（计划有 36h
+    # 时效窗，错过就作废）。四重抑制闸仍然全程生效。
+    if intimacy < 20.0 and not plan_due:
         value = min(value, FIRE_THRESHOLD - 0.01)
     return max(0.0, min(1.0, value))
 
@@ -457,6 +465,11 @@ class ProactiveScheduler:
         now = datetime.now(timezone.utc)
         # 过期寄存每轮收一次：不清的话 48h 前的「心里话」会永远躺在队列里
         await asyncio.to_thread(db.expire_stale_proactive, _fmt_ts(now))
+        # 计划钩子同样每轮收一次：超窗没问出去的 pending 置 expired
+        await asyncio.to_thread(
+            db.expire_plan_hooks,
+            _fmt_ts(now - timedelta(hours=PLAN_FOLLOWUP_H)),
+        )
         targets = await asyncio.to_thread(db.list_proactive_targets)
         fired = 0
         for target in targets:
@@ -484,7 +497,11 @@ class ProactiveScheduler:
             state, gap_hours, pending_topic, cooldown_raw, stage = await asyncio.to_thread(
                 _state_snapshot, persona_id, speed
             )
-            d = desire(state, speed=speed, pending_topic=pending_topic, gap_hours=gap_hours)
+            due = await asyncio.to_thread(plan_due_topic, persona_id, now)
+            d = desire(
+                state, speed=speed, pending_topic=pending_topic,
+                gap_hours=gap_hours, plan_due=due is not None,
+            )
 
             local_now = datetime.now().astimezone()
             local_hour = local_now.hour + local_now.minute / 60.0
@@ -507,7 +524,7 @@ class ProactiveScheduler:
                 continue
             # 选题失败（记忆层炸了等）不阻断主动性：回退到无选题的自由发挥
             try:
-                topic = await asyncio.to_thread(pick_topic, persona_id, state)
+                topic = await asyncio.to_thread(pick_topic, persona_id, state, now=now)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("主动消息选题失败: %s", exc)
                 topic = None
@@ -548,7 +565,12 @@ class ProactiveScheduler:
         state, gap_hours, pending_topic, cooldown_raw, stage = await asyncio.to_thread(
             _state_snapshot, persona_id, speed
         )
-        d = desire(state, speed=speed, pending_topic=pending_topic, gap_hours=gap_hours)
+        now = datetime.now(timezone.utc)
+        due = await asyncio.to_thread(plan_due_topic, persona_id, now)
+        d = desire(
+            state, speed=speed, pending_topic=pending_topic,
+            gap_hours=gap_hours, plan_due=due is not None,
+        )
         local_now = datetime.now().astimezone()
         local_hour = local_now.hour + local_now.minute / 60.0
         last_send, sent_today = await _suppressors_for(target)
@@ -563,7 +585,7 @@ class ProactiveScheduler:
 
         state_desc = state_mod.describe_state(state, local_hour, speed, stage=stage)
         try:
-            topic = await asyncio.to_thread(pick_topic, persona_id, state)
+            topic = await asyncio.to_thread(pick_topic, persona_id, state, now=now)
         except Exception as exc:  # noqa: BLE001
             logger.warning("主动消息选题失败: %s", exc)
             topic = None
@@ -577,7 +599,7 @@ class ProactiveScheduler:
 
         await self._deliver(
             target, persona, text, desire_value=d, topic=topic,
-            now=datetime.now(timezone.utc), manual=True,
+            now=now, manual=True,
         )
         # 回显念的就是账本上那一行：屏幕上的结论与落库结果不会两套口径。
         row = await asyncio.to_thread(db.latest_proactive_row, conversation_id) or {}
@@ -605,8 +627,16 @@ class ProactiveScheduler:
         conversation_id = target["conversation_id"]
         channel = target.get("channel") or "local"
         pfx = MANUAL_REASON if manual else ""
-        # 选题来源供调 θ（ok:fresh_fact / ok:fatigue_care / ok:old_memory / ok:free）
+        # 选题来源供调 θ（ok:fresh_fact / ok:fatigue_care / ok:old_memory / ok:plan_due / ok:free）
         src = topic[1] if topic else "free"
+
+        async def _mark_spoken() -> None:
+            # 用 getattr 而不是 topic.plan_id：既有用例（如
+            # test_deliver_records_a_pushed_message_as_delivered）仍用二元组传 topic，
+            # 直接取属性会 AttributeError。
+            plan_id = getattr(topic, "plan_id", "")
+            if plan_id:
+                await asyncio.to_thread(db.mark_plan_asked, plan_id, _fmt_ts(now))
 
         if channel == "local":
             await asyncio.to_thread(
@@ -614,6 +644,7 @@ class ProactiveScheduler:
                 persona_id, conversation_id, desire_value, "send", f"{pfx}ok:{src}", text,
             )
             await _fire_local(persona, conversation_id, text)
+            await _mark_spoken()
             return True
 
         action, tag, period = await self._push_qq(target, text, now=now)
@@ -624,6 +655,7 @@ class ProactiveScheduler:
                 persona_id, conversation_id, desire_value, "push",
                 f"{pfx}{prefix}ok:{src}", text, None, _fmt_ts(now),
             )
+            await _mark_spoken()
             return True
         if action == "skip":
             await asyncio.to_thread(
@@ -639,6 +671,8 @@ class ProactiveScheduler:
             persona_id, conversation_id, desire_value, "queued",
             f"{pfx}queued:{tag}:{src}", text, expires_at,
         )
+        # 寄存也算说出口：等她下次来时这句会捎上，这件事不必再问一遍
+        await _mark_spoken()
         logger.info("QQ 主动消息降级寄存（%s）：%s", tag, conversation_id)
         return True
 
