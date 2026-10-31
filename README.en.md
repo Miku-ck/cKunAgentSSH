@@ -24,7 +24,7 @@ The title bar provides 10 feature entries plus a Settings page, serving as the s
 | Tunnel | SSH tunnels | `Ctrl+Shift+5` | TCP / SOCKS5 / Dynamic forwarding |
 | Traces | Ops traces | `Ctrl+Shift+8` | Change and Agent run records |
 | Bot | cKunBot personal bot | `Ctrl+Shift+9` | Persona chat, persona editing, multi-channel access |
-| Settings | Settings | `Ctrl+,` | Models, memory, theme, permissions, Bot management |
+| Settings | Settings | `Ctrl+,` | Models, chat, appearance, skills, agent, memory, ops |
 
 ### AI capabilities
 
@@ -109,7 +109,7 @@ The virtual companion persona subsystem opened by the "Bot" entry (`Ctrl+Shift+9
 - **Default persona**: the built-in persona is pinned to the top of the list, is the fallback owner of new channels, and cannot be deleted; it is marked "default" in the UI.
 - **Reply style and thinking switch**: persona-level settings for concise / moderate / long-form and whether to show the thought process; the style tier automatically lowers with the relationship state axis. Local sessions show a collapsible thinking block above the bubble, while the QQ channel only takes the final plain text.
 - **Image input**: local sessions can send images with a message (up to 4 per message), recognized directly by multimodal models; history messages show thumbnails that can be enlarged, while the QQ channel stays plain text.
-- **Avatar system**: server-side avatar gallery and unified picker, supporting custom user avatars and local display names / avatars for QQ sessions; when unset, a faint initial placeholder is shown. Settings has a "Bot management" category.
+- **Avatar system**: server-side avatar gallery and unified picker, supporting custom user avatars and local display names / avatars for QQ sessions; when unset, a faint initial placeholder is shown.
 - **Expression DNA**: six discrete tiers for sentence length, interjections, punctuation habits, emoji, kaomoji, and stickers, plus catchphrases and custom forbidden words, compiling "how to speak" from adjectives into executable constraints; the output is then cleaned once to remove AI-sounding text.
 - **Stickers**: the model uses a standalone line marker `[表情:开心]` to mean "send another image"; two built-in "whale girl" sets — 8 text-free images (happy / shy / speechless / cheer / aggrieved / sleepy / angry / love) and 8 meme short-phrase images (好耶 / 诶嘿 / 服了 / 冲鸭 / 呜呜 / 困困 / 哼 / 贴贴) — previewed by set in tabs in the persona editor. Local bubbles render the image directly; QQ uploads rich media before sending; WeChat sends an image URL only when a public callback address is configured, falling back to a synonymous kaomoji when it cannot send.
 - **Honesty charter**: 7 immutable bottom lines (no sycophancy, no fabricated memories, no pretending to have a body, no executing commands, etc.) always sit at the end of the prompt with declared top priority; persona text that tries to override them is rejected at save time.
@@ -122,7 +122,7 @@ The virtual companion persona subsystem opened by the "Bot" entry (`Ctrl+Shift+9
 
 **Memory (conservative decay + self-evolution)**
 
-- 11 categories of fact extraction by regex (name / address / birthday / dietary restrictions / preferences / occupation / pets / family / habits / plans); sensitive information is never extracted as a whole, and users can say "don't remember / forget X"; override injections cannot become facts through extraction.
+- 11 categories of fact extraction by regex (name / residence / birthday / dietary restrictions / aversions / preferences / occupation / pets / family / habits / plans); sensitive information is never extracted as a whole, and users can say "don't remember / forget X"; override injections cannot become facts through extraction.
 - Recall = FTS + character overlap + vector fusion, with three-level injection gating (hard hit / context gate / old-memory hook) + 7-day anti-repeat; **being injected warms it up**, and memories not recalled for a long time are downweighted by half-life (floor 0.1, never deleted), with a hard cap of 200 per persona; only on overflow are the "least hot + oldest" evicted with an audit row — memory maintenance runs in the background heartbeat, one persona per round, so the chat hot path never blocks.
 
 **Proactivity and multi-channel**
@@ -151,6 +151,7 @@ The virtual companion persona subsystem opened by the "Bot" entry (`Ctrl+Shift+9
 - **Docker management**: manage containers, images, volumes, and networks over remote SSH sessions; supports container details, live stats, logs, image export and load, unused image cleanup, and image pulls, with second confirmation and auditing for dangerous operations.
 - **GitHub acceleration**: mirror latency testing and convergence, precise hosts writing and restoration, self-checks, and failure inspection.
 - **Git repository management**: dual-pane workbench with status grouping on the left and changes, branches, and a commit graph on the right; supports local and remote repository overview, batch fetch, `pull --ff-only`, branch switching, per-file commit selection, commit and push, push and open terminal; write operations are audited after confirmation.
+- **Git three-remote sync**: consistency inspection across the primary remote and the read-only mirrors (GitCode/Gitee/GitHub); per-remote `ls-remote` compares SHAs without downloading objects, and each remote reports one of four states — in sync / behind / diverged / probe failed; a behind remote can be fast-forwarded (`push --follow-tags`, reported per remote and non-atomic), while a diverged one only offers `--ff-only` merge and never a force push; the primary remote can be switched and persisted to the registry (version 2).
 
 ### Experience and engineering
 
@@ -221,10 +222,10 @@ cKunAgentSSH/
 ├── shared/                # Shared pure logic and protocols for main / renderer / gateway
 ├── backend/               # Python FastAPI: Agent, memory, tools, routes, and tests
 │   ├── agent/             # Harness, memory, tools, intent detection, reflection evolution, bridge relay
-│   ├── routes/            # agent / chat (attachments and conversations) / schedules / audit / settings / skills / terminal / workflow
+│   ├── routes/            # agent / chat (attachments and conversations) / settings / skills / terminal / audit / schedules / workflow / rollbacks / runbooks / bot (conversations and personas) / bot_channels (channels) / bot_stickers (sticker packs) / wechat_callback (WeChat callback)
 │   └── tests/             # pytest tests
 ├── gateway/               # TLS access gateway (single file, zero dependencies, deployed independently)
-├── scripts/               # dev / package / clean / ci-check / rebuild-native / deploy
+├── scripts/               # dev / package / clean / ci-check / rebuild-native / prepare-runtime / deploy
 ├── resources/             # App and tray icons
 ├── docs/                  # Design and implementation specs
 ├── electron.vite.config.ts
@@ -281,9 +282,10 @@ VLLM_API_KEY=EMPTY
 | `npm run typecheck` | Frontend type checking |
 | `npm test` | Frontend unit tests (vitest) |
 | `npm run test:backend` | Backend unit tests (pytest) |
+| `npm run lint:backend` | Backend lint gate (ruff `F,E9`: unused imports / undefined names / syntax errors; the wider ruleset's pre-existing findings are not gated, see `backend/ruff.toml`) |
 | `npm run ci` | Full local gate matching CI checks |
 | `npm run package` | Package the Windows build and tar.gz |
-| `npm run clean` | Clean packaging output and intermediate config |
+| `npm run clean` | Clean packaging output, intermediate config, and test/lint caches |
 | `npm run preview` | Preview the build result |
 
 ## Packaging and release

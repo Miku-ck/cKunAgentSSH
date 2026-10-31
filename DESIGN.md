@@ -129,7 +129,7 @@ hover/active 用 `--bg-hover`/`--bg-active`，过渡 `var(--transition-fast)`；
 
 ## 校验
 
-命令清单只在 [README §命令](README.md#命令) 维护一份（本文件不复制，避免两边漂移）。改完样式/令牌最少要过
+命令清单只在 [README §常用命令](README.md#常用命令) 维护一份（本文件不复制，避免两边漂移）。改完样式/令牌最少要过
 `npm run typecheck` + `npm test`：`variables.test.ts` 是令牌消费方守卫，弹窗误用半透明 `--bg-*`
 而不是 `--bg-*-solid` 会被它直接判红。
 

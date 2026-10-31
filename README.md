@@ -24,7 +24,7 @@ SSH 智能运维终端，将连接管理、远程 / 本地终端、SFTP、Docker
 | 隧道 | SSH 隧道 | `Ctrl+Shift+5` | TCP / SOCKS5 / Dynamic 转发 |
 | 轨迹 | 运维轨迹 | `Ctrl+Shift+8` | 变更与 Agent 运行记录 |
 | Bot | cKunBot 个人机器人 | `Ctrl+Shift+9` | 人格化陪聊、人格编辑、多渠道接入 |
-| 设置 | 设置 | `Ctrl+,` | 模型、记忆、主题、权限、Bot 管理 |
+| 设置 | 设置 | `Ctrl+,` | 模型、对话、外观、技能、Agent、记忆、运维 |
 
 ### AI 能力
 
@@ -109,7 +109,7 @@ SSH 智能运维终端，将连接管理、远程 / 本地终端、SFTP、Docker
 - **默认人格**：内置人格在列表置顶、作为新渠道的兜底归属，并禁止删除；界面上以「默认」标记区分。
 - **回复风格与思考开关**：人格级设定简洁 / 适中 / 长文三档与是否展示思考过程，风格档位随关系状态轴自动降档；本地会话在气泡上方提供可折叠的思考过程块，QQ 通道只取最终纯文本。
 - **图片输入**：本地会话可随消息发送图片（单条最多 4 张），由多模态模型直接识图；历史消息以缩略图回显并可放大查看，QQ 通道维持纯文本。
-- **头像体系**：服务端头像画廊与统一选择器，支持自定义用户头像与 QQ 会话的本地显示名 / 头像；未设置时以淡色首字占位。设置页提供「Bot 管理」分类。
+- **头像体系**：服务端头像画廊与统一选择器，支持自定义用户头像与 QQ 会话的本地显示名 / 头像；未设置时以淡色首字占位。
 - **表达 DNA**：句子长短、语气词、标点习惯、emoji、颜文字、表情包六个离散档 + 口头禅与自定义禁用词，把「说话方式」从形容词编译成可执行约束；输出侧再过一遍去 AI 味清洗。
 - **表情包**：模型用独占一条的 `[表情:开心]` 标记「另发一张图」，内置两套「鲸鱼娘」——无字版 8 张（开心 / 害羞 / 无语 / 加油 / 委屈 / 困了 / 生气 / 喜欢）与梗短句版 8 张（好耶 / 诶嘿 / 服了 / 冲鸭 / 呜呜 / 困困 / 哼 / 贴贴），人格编辑器里按包分 tab 预览。本地气泡直接渲染图片；QQ 走富媒体上传后发送，微信仅在配置了公网回调地址时发图片 URL，发不出就回落同义颜文字。
 - **诚实宪章**：不可编辑的 7 条底线（不谄媚、不编造记忆、不假装有身体、不执行命令等）永远压在提示词末尾并声明最高优先级；人格文本在保存时即拒绝覆盖类注入。
@@ -122,7 +122,7 @@ SSH 智能运维终端，将连接管理、远程 / 本地终端、SFTP、Docker
 
 **记忆（保守衰减 + 自进化）**
 
-- 11 类事实正则抽取（称呼 / 住址 / 生日 / 忌口 / 喜好 / 职业 / 宠物 / 家人 / 习惯 / 计划），敏感信息整条不抽，用户可说「别记 / 忘掉 X」；覆盖类注入不得借抽取成为事实。
+- 11 类事实正则抽取（称呼 / 居住 / 生日 / 忌口 / 厌恶 / 喜好 / 职业 / 宠物 / 家人 / 习惯 / 计划），敏感信息整条不抽，用户可说「别记 / 忘掉 X」；覆盖类注入不得借抽取成为事实。
 - 召回 = FTS + 单字重合 + 向量融合，三重注入门控（硬命中 / 情境门 / 旧事钩子）+ 7 天防复读；**被注入即回暖**，长期没被想起的按半衰期降权（地板 0.1，不删除），每人格 200 条硬上限、超限才按「最低热度 + 最旧」淘汰并留审计行——记忆在后台心跳里每轮维护一个人格，聊天热路径零阻塞。
 
 **主动性与多渠道**
@@ -221,10 +221,10 @@ cKunAgentSSH/
 ├── shared/                # 主进程 / 渲染进程 / 网关共享的纯逻辑与协议
 ├── backend/               # Python FastAPI：Agent、记忆、工具、路由与测试
 │   ├── agent/             # Harness、记忆、工具、意图识别、反思演化、桥接转发
-│   ├── routes/            # agent / chat（附件与会话）/ schedules / audit / settings / skills / terminal / workflow
+│   ├── routes/            # agent / chat（附件与会话）/ settings / skills / terminal / audit / schedules / workflow / rollbacks / runbooks / bot（会话与人格）/ bot_channels（渠道）/ bot_stickers（表情包）/ wechat_callback（微信回调）
 │   └── tests/             # pytest 测试
 ├── gateway/               # TLS 接入网关（单文件、零依赖、独立部署）
-├── scripts/               # dev / package / clean / ci-check / rebuild-native / deploy
+├── scripts/               # dev / package / clean / ci-check / rebuild-native / prepare-runtime / deploy
 ├── resources/             # 应用与托盘图标
 ├── docs/                  # 设计与实施 spec
 ├── electron.vite.config.ts
@@ -281,9 +281,10 @@ VLLM_API_KEY=EMPTY
 | `npm run typecheck` | 前端类型检查 |
 | `npm test` | 前端单测（vitest） |
 | `npm run test:backend` | 后端单测（pytest） |
+| `npm run lint:backend` | 后端 lint 闸门（ruff `F,E9`：未用导入/未定义名/语法错；宽规则集存量告警不在门禁内，见 `backend/ruff.toml`） |
 | `npm run ci` | 本地完整门禁，与 CI 检查项一致 |
 | `npm run package` | 打包 Windows 产物与 tar.gz |
-| `npm run clean` | 清理打包产物与中间配置 |
+| `npm run clean` | 清理打包产物、中间配置与测试/lint 缓存 |
 | `npm run preview` | 预览构建结果 |
 
 ## 打包与发布
