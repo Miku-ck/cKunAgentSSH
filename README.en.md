@@ -227,6 +227,14 @@ npm audit --registry=https://registry.npmjs.org              # including the dev
 - **Terminal / SSH / SFTP / tunnels**: Renderer → Electron IPC → node-pty / ssh2, bypassing Python.
 - **Agent remote execution**: Python backend → WebSocket reverse channel `/ws/bridge` → Electron main process → ssh2. When the channel is down the system fails closed and in-flight requests are not retried.
 
+### Startup cost (measured on 2026-10-31)
+
+Backend process start to healthy readiness ≈710ms: 543ms imports + 50ms app assembly + 50ms uvicorn bootstrap + 65ms lifespan init (`init_db` 19ms, the seven concurrent steps 43ms, background components 3ms). Within the import stage, fastapi 164ms, uvicorn 66ms and asyncio 50ms are framework costs that cannot be squeezed out.
+
+What actually saves time is what is *not* imported: `openai` 477ms, `botpy` 271ms and `cryptography` 15ms are all absent from the `import main` graph (763ms together — more than the whole cold start); the main process does the same — node-pty's `.node` load (≈290ms) and ssh2 are deferred to first use (`loadPty()` / `loadSsh2()`).
+
+`backend/tests/test_startup_critical_path.py` pins this invariant: moving them back to module-level imports turns neither the unit tests nor typecheck red — only this guard catches it, which is why startup cost can only be protected here.
+
 ## Project structure
 
 ```

@@ -4,7 +4,9 @@
 
 1. `import main` 不得拉起 Agent 执行栈（harness/driver/reflection/evolution/tools）
    与 httpx —— 它们只在真正发起 run、或用到 webhook 时才需要（实测曾占启动
-   初始化 130ms+，并让 routes.agent 的惰性导入白做）。
+   初始化 130ms+，并让 routes.agent 的惰性导入白做）。同一条不变量的第三方侧：
+   openai / botpy / cryptography 也不许在导入期出现（实测 openai 477ms、
+   botpy 271ms，两个就超过后端从起来到就绪的全部 710ms）。
 2. `agent.harness` 的公开导出保持惰性（PEP 562），但 `from agent.harness import
    Harness` 这种写法必须仍然可用 —— 否则惰性改造就变成了破坏封装。
 3. `init_db` 的结构版本短路必须与 DDL/迁移同步：改了建表或迁移却不升
@@ -26,6 +28,18 @@ _FORBIDDEN_AT_IMPORT = (
     "agent.evolution",
     "agent.tools",
     "httpx",
+)
+
+# 重型第三方库：本机实测 `import openai` 477ms、`import botpy` 271ms、
+# `import cryptography` 15ms —— 前两者相加（748ms）已经超过后端从进程起来到
+# 健康就绪的全部耗时（710ms，其中导入段 543ms）。它们今天全靠惰性取用躲在这条
+# 路径之外：openai 走 llm_adapter 的 `_openai()` 惰性导入，botpy 只在真的恢复
+# QQ 渠道时才要（且那一步在就绪之后）。任何人把它们写回模块级 import，冷启动
+# 就地 +70%，而单元测试与 typecheck 都不会因此变红 —— 所以只能在这里钉住。
+_FORBIDDEN_AT_IMPORT_THIRDPARTY = (
+    "openai",
+    "botpy",
+    "cryptography",
 )
 
 # init_db / 迁移函数体的指纹。改动这些函数的任何一行，都要在
@@ -62,6 +76,28 @@ print(json.dumps({{"loaded": sorted(m for m in forbidden if m in sys.modules)}})
     assert result["loaded"] == [], (
         "后端启动又把这些模块拉回来了（启动成本会因此上涨）："
         f"{result['loaded']}"
+    )
+
+
+def test_import_main_keeps_heavy_third_party_off_critical_path():
+    """`import main` 不得拉起 openai / botpy / cryptography。
+
+    与上一条同一条不变量的第三方侧：这几个包的导入成本量级和整个后端启动相当
+    （见 _FORBIDDEN_AT_IMPORT_THIRDPARTY 上的实测数），一旦被写回模块级 import，
+    冷启动会成倍变贵，而现有单测与 typecheck 全都察觉不到。
+    """
+    result = _run_probe(
+        f"""
+import json, sys
+import main  # noqa: F401
+import agent.harness.reins.gate  # noqa: F401  （lifespan 的审批策略回填会拉到这一层）
+forbidden = {list(_FORBIDDEN_AT_IMPORT_THIRDPARTY)!r}
+print(json.dumps({{"loaded": sorted(m for m in forbidden if m in sys.modules)}}))
+"""
+    )
+    assert result["loaded"] == [], (
+        "后端启动导入期拉起了重型第三方库，冷启动成本会显著上涨："
+        f"{result['loaded']}（把它们改回惰性取用，或在提交说明里写清为什么必须提前）"
     )
 
 

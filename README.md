@@ -226,6 +226,14 @@ npm audit --registry=https://registry.npmjs.org              # 含 dev 工具链
 - **终端 / SSH / SFTP / 隧道**：Renderer → Electron IPC → node-pty / ssh2，不经过 Python。
 - **Agent 远程执行**：Python 后端 → WebSocket 反向通道 `/ws/bridge` → Electron 主进程 → ssh2。通道断开时 fail-closed，在途请求不重发。
 
+### 启动成本（2026-10-31 本机实测）
+
+后端从进程起来到健康就绪 ≈710ms：导入段 543ms + 装配段 50ms + uvicorn 引导 50ms + lifespan 初始化 65ms（`init_db` 19ms、七步并发 43ms、后台组件 3ms）。导入段里 fastapi 164ms、uvicorn 66ms、asyncio 50ms 是框架自身成本，压不下去。
+
+真正省下的是「不导入什么」：`openai` 477ms、`botpy` 271ms、`cryptography` 15ms 都不在 `import main` 的导入图里（三者 763ms，比整个冷启动还贵）；主进程侧同理 —— node-pty 的 `.node` 加载 ≈290ms 与 ssh2 都推迟到首次用时才取（`loadPty()` / `loadSsh2()`）。
+
+这条不变量由 `backend/tests/test_startup_critical_path.py` 钉住：把它们写回模块级 import，单测与 typecheck 都不会变红，只有这个守卫会 —— 所以启动成本只能在这里被守住。
+
 ## 项目结构
 
 ```
