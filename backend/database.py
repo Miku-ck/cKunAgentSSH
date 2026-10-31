@@ -95,7 +95,7 @@ _CONN_IDLE_PROBE_SECONDS = 30.0
 # 核心表齐全就跳过那 360 行 DDL。迁移与一次性数据修复不在此短路段内（见 init_db）。
 # 铁律：改动下方 init_db 的 DDL 或 _migrate_db 的任何迁移，必须 _SCHEMA_VERSION += 1，
 # 否则老库永远不会执行新结构（backend/tests/test_startup_critical_path.py 有守卫）。
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 # 短路前提的核心表。版本号可能被外部工具清零、或迁移脚本自己写错，仅凭
 # user_version 就认定「结构已就绪」，会把缺表的库永久锁在坏状态 —— 再核一遍实表。
@@ -417,6 +417,26 @@ def init_db(db_path: str) -> None:
             );
             CREATE INDEX IF NOT EXISTS ix_bot_proactive_pending
                 ON bot_proactive_log(conversation_id, action, expires_at);
+
+            -- 计划钩子：用户说过的「周末要去看展」，到期后主动问一句。
+            -- 独立于记忆行存活：计划记忆 importance 只有 0.4，是维护首批淘汰对象。
+            CREATE TABLE IF NOT EXISTS bot_plan_hooks (
+                id              TEXT PRIMARY KEY,
+                persona_id      TEXT NOT NULL,
+                conversation_id TEXT,
+                memory_id       TEXT,
+                plan_text       TEXT NOT NULL,
+                when_text       TEXT NOT NULL,
+                due_start       TEXT NOT NULL,
+                due_end         TEXT NOT NULL,
+                state           TEXT NOT NULL DEFAULT 'pending',
+                asked_at        TEXT,
+                created_at      TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_bot_plan_due
+                ON bot_plan_hooks(state, due_end);
+            CREATE INDEX IF NOT EXISTS ix_bot_plan_persona
+                ON bot_plan_hooks(persona_id, state, plan_text);
 
             CREATE TABLE IF NOT EXISTS skills (
                 id          TEXT PRIMARY KEY,
@@ -3084,6 +3104,95 @@ def set_bot_memory_injection(conversation_id: str, memory_ids: list, at: str) ->
 
 
 # ── P3 主动性：寄存队列与日志 ──
+
+# ── 计划钩子（spec 2026-10-31-plan-followup）──
+#
+# 状态四态：pending → asked（问出去了）/ superseded（同一件事改了时间）/ expired
+# （超窗没来得及问）。时间戳一律 UTC 字符串，可按字典序比较。
+
+
+def add_plan_hook(
+    persona_id: str,
+    conversation_id: Optional[str],
+    memory_id: Optional[str],
+    plan_text: str,
+    when_text: str,
+    due_start: str,
+    due_end: str,
+    created_at: str,
+) -> str:
+    """写一条计划钩子；同人格同文本的 pending 先作废 —— 新时间才是对的。
+
+    作废与插入放在同一个事务里：两次 commit 之间断掉会丢一条已经改期的计划。
+    """
+    hook_id = _new_id()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE bot_plan_hooks SET state = 'superseded' "
+            "WHERE persona_id = ? AND plan_text = ? AND state = 'pending'",
+            (persona_id, plan_text),
+        )
+        conn.execute(
+            "INSERT INTO bot_plan_hooks (id, persona_id, conversation_id, memory_id, "
+            "plan_text, when_text, due_start, due_end, state, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,'pending',?)",
+            (
+                hook_id, persona_id, conversation_id, memory_id, plan_text,
+                when_text, due_start, due_end, created_at,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return hook_id
+
+
+def due_plan_hook(persona_id: str, now_iso: str, earliest_iso: str) -> Optional[dict]:
+    """可回溯的钩子：窗口已结束（due_end <= now）且没超过回溯期，最早到期优先。"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM bot_plan_hooks "
+            "WHERE persona_id = ? AND state = 'pending' "
+            "AND due_end <= ? AND due_end >= ? "
+            "ORDER BY due_end ASC LIMIT 1",
+            (persona_id, now_iso, earliest_iso),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def mark_plan_asked(hook_id: str, asked_at: str) -> bool:
+    """把钩子标记为已问。只允许 pending → asked，重复调用返回 False。"""
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE bot_plan_hooks SET state = 'asked', asked_at = ? "
+            "WHERE id = ? AND state = 'pending'",
+            (asked_at, hook_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def expire_plan_hooks(cutoff_iso: str) -> int:
+    """超窗没问出去的 pending 置 expired（保留审计行，不物理删）。"""
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE bot_plan_hooks SET state = 'expired' "
+            "WHERE state = 'pending' AND due_end < ?",
+            (cutoff_iso,),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
 
 def add_bot_proactive_log(
     persona_id: str,
