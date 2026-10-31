@@ -40,7 +40,6 @@ from routes.schedules import router as schedules_router
 from routes.workflow import router as workflow_router
 from routes.rollbacks import router as rollbacks_router
 from routes.runbooks import router as runbooks_router
-from agent.consciousness_tick import get_global_tick
 from agent.audit import AuditWriteError
 from agent.bridge_relay import BridgeRelay, bridge_ws_endpoint, set_bridge_relay
 import win_asyncio_teardown
@@ -250,7 +249,9 @@ class _Background:
 def _start_background_tasks() -> _Background:
     """启动就绪后才需要的后台组件（均不在健康就绪的关键路径上）。"""
     # 意识 tick 延迟启动：仅首次 Agent 运行时触发（ensure_started），
-    # 避免纯聊天用户产生空 DB 查询开销
+    # 避免纯聊天用户产生空 DB 查询开销。import 推迟到此处——该路径在健康
+    # 就绪之后才运行，不应在 `import main` 阶段被装配进模块级导入树。
+    from agent.consciousness_tick import get_global_tick
     tick = get_global_tick()
 
     # 定时任务调度引擎：懒启动，仅在存在定时任务时 begin（ensure_started）

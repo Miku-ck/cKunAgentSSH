@@ -1,7 +1,8 @@
 <template>
   <div class="dashboard-view">
     <!-- 连接状态条：仿 SFTP 风格。页面标题"监控仪表盘"；
-         无会话时提供"连接远程"按钮，有会话时显示主机名并可断开。 -->
+         按钮随连接态切换，任一时刻只有一枚：未连接给「连接远程」，
+         已连接给「断开远程」（不再并排出现连接/断开）。 -->
     <div class="dash-conn-bar">
       <div class="conn-left">
         <div class="conn-dot" :class="hasRemoteSession ? 'online' : 'offline'"></div>
@@ -13,8 +14,8 @@
           监控已中断：{{ monitor.lastError.message }}
           <span v-if="monitor.lastError.retryable" class="conn-stopped-hint">（连接恢复后自动重连）</span>
         </span>
-        <button v-if="hasRemoteSession" class="btn" @click="handleDisconnect">断开</button>
-        <button class="btn btn-primary" @click="showConnPicker = true">连接远程</button>
+        <button v-if="hasRemoteSession" class="btn btn-danger" @click="handleDisconnect">断开远程</button>
+        <button v-else class="btn btn-primary" @click="showConnPicker = true">连接远程</button>
       </div>
     </div>
 

@@ -1,6 +1,7 @@
 <template>
   <div class="docker-view">
-    <!-- 连接状态条：仿监控仪表盘。未连接时给“连接远程”引导；已连接则显示目标主机，可切换/断开 -->
+    <!-- 连接状态条：仿监控仪表盘。按钮单枚随态切换：未连接 =「连接远程」，
+         已连接 =「断开远程」；切其它已连主机走左侧下拉，不另给一枚连接按钮 -->
     <div class="page-head">
       <div class="conn-left">
         <div class="conn-dot" :class="targetSession ? 'online' : 'offline'"></div>
@@ -15,8 +16,8 @@
 
       <span class="head-spacer"></span>
       <div class="conn-right">
-        <button v-if="targetSession" class="btn" @click="disconnectTarget">断开</button>
-        <button class="btn btn-primary" @click="showConnPicker = true">连接远程</button>
+        <button v-if="targetSession" class="btn btn-danger" @click="disconnectTarget">断开远程</button>
+        <button v-else class="btn btn-primary" @click="showConnPicker = true">连接远程</button>
       </div>
     </div>
 

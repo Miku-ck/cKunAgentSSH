@@ -39,7 +39,7 @@
             切换
           </button>
           <button class="btn btn-danger" @click="handleDisconnect">
-            断开
+            断开远程
           </button>
         </template>
       </div>
