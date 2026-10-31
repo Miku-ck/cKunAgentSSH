@@ -132,7 +132,9 @@ async def _run_reflection_and_evolution(
     try:
         await asyncio.to_thread(_work)
     except Exception as e:
-        logger.warning("反思/演化失败: %s", e, exc_info=True)
+        # 反思/演化是 Agent 自我迭代核心链路；失败会让策略静默降级、用户无感。
+        # warning 会被中低频日志淹没，upgrade 到 error 才能让"策略停止进化"被看见。
+        logger.error("反思/演化失败: %s", e, exc_info=True)
 
 
 # ── Helper Functions ──

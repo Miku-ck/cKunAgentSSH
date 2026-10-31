@@ -293,7 +293,9 @@ async def _stop_background_tasks(bg: _Background) -> None:
         return_exceptions=True,
     ):
         if isinstance(result, Exception):
-            logger.warning("[cKunAgentic] 后台循环停止异常: %s", result)
+            # 后台循环关停失败是真实错误（资源泄漏可能），需 error 级 + 完整 trace，
+            # 不能用 warning/%s 吞掉堆栈——否则泄漏现场无法复盘。
+            logger.error("[cKunAgentic] 后台循环停止异常", exc_info=result)
 
     # 注销 Bridge WS relay（优雅关闭时新连接将收到 1013）
     set_bridge_relay(None)
@@ -313,7 +315,9 @@ async def lifespan(_app: FastAPI):
 
     db.init_db(settings.db_path)
     _perf_mark("init_db")
-    logger.info("[cKunAgentic] Database initialized: %s", settings.db_path)
+    # 心跳型稳态信息：DB 初始化极少失败，路径+耗时已由 _log_startup_summary
+    # 统一输出；此处留 debug 便于需要时复现时序，不占 info 通道。
+    logger.debug("[cKunAgentic] Database initialized: %s", settings.db_path)
 
     net_ready = asyncio.Event()
 
@@ -336,7 +340,9 @@ async def lifespan(_app: FastAPI):
     )
     for step, result in zip(_ROUND1_STEPS, results):
         if isinstance(result, Exception):
-            logger.warning("[cKunAgentic] 启动初始化（%s）异常: %s", step, result)
+            # 任一启动步骤抛出都是真实错误（后续依赖它的功能会静默降级），
+            # error + exc_info 保留堆栈；warning/%s 会把故障吃掉只剩一行文本。
+            logger.error("[cKunAgentic] 启动初始化（%s）异常", step, exc_info=result)
     _perf_mark("round1")
 
     background = _start_background_tasks()
@@ -475,7 +481,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default="127.0.0.1", help="监听地址")
     args = parser.parse_args()
 
-    logger.info("[cKunAgentic] Starting backend on %s:%s", args.host, args.port)
+    logger.debug("[cKunAgentic] Starting backend on %s:%s", args.host, args.port)
     # 使用 asyncio.run(Server.serve()) 代替 uvicorn.run()，
     # 避免 PowerShell 后台运行时 WatchFiles reloader 启动缓慢导致健康检查超时
 
