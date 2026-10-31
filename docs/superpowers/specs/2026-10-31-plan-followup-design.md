@@ -103,8 +103,23 @@ PLAN_NEAR_WINDOW_H = 4    # 「待会 / 等会儿」的窗口长度
 ),
 ```
 
-`Fact` 增加字段 `when: str = ""`（frozen dataclass 带默认值，向后兼容），
-`_build` 用 `match.groupdict().get("when", "")` 取值。
+`Fact` 增加两个字段（frozen dataclass 带默认值，向后兼容）：
+
+```python
+@dataclass(frozen=True)
+class Fact:
+    title: str
+    content: str
+    importance: float = 0.8
+    confidence: float = 0.9
+    slot: str = MULTI
+    when: str = ""      # 计划的时间词（「周末」），其余规则为空
+    subject: str = ""   # 计划正文（「看展」），其余规则为空
+```
+
+`_build` 用 `match.groupdict().get("when", "")` 与归一后的 `groups["x"]` 分别填充。
+`subject` 存在的理由：钩子要独立于记忆存活，直接把 `plan_text` 存进表里，
+不能靠对 `content` 做「用户的计划：」前缀切片（前缀文案一改就会静默错位）。
 
 **`content` 保持不变**（仍是「用户的计划：看展」），时间词不进记忆正文。理由：
 
@@ -151,9 +166,14 @@ CREATE INDEX IF NOT EXISTS idx_plan_due ON bot_plan_hooks(state, due_end);
 CREATE INDEX IF NOT EXISTS idx_plan_persona ON bot_plan_hooks(persona_id, state);
 ```
 
-落位在 `init_db` 的 `CREATE TABLE IF NOT EXISTS` 区，无 ALTER、无 `_SCHEMA_VERSION`
-升级——性质与 `2026-10-30-qq-proactive-message` 的「无害重构」路径一致。
-`tests/test_startup_critical_path.py` 的表结构指纹需同步更新。
+落位在 `init_db` 的 `CREATE TABLE IF NOT EXISTS` 区。**这是真正的结构变更，必须
+`_SCHEMA_VERSION` 5 → 6**：`init_db` 在 user_version 命中时整段跳过 DDL
+（`database.py` 第 96 行的铁律），不升版本老库会永远缺这张表，运行时报
+`no such table`。同时把 `_SCHEMA_SOURCE_FINGERPRINT` 更新为实测值
+（`test_startup_critical_path.py` 有守卫，会打印正确值）。
+
+与 `2026-10-30-qq-proactive-message` 的区别在于：那次只改了 DDL 注释，列与索引未动，
+所以可以不升版；本次是新增表，必须升。
 
 **钩子不依赖记忆存活**：计划记忆 `importance=0.4`，是记忆维护首批淘汰对象；
 钩子自带 `plan_text`，记忆没了照样能问。`memory_id` 只做溯源，不参与任何判定。
@@ -209,21 +229,34 @@ pending ──_deliver 成功(send/push/queued)──> asked      (终态)
 - 过期清理：`tick()` 开头与 `expire_stale_proactive` 并列调
   `db.expire_plan_hooks(now - 36h)`，保留审计行不物理删。
 
-### 9. 决策层改动（两行）
+### 9. 决策层改动（plan_due 独立权重项 + 硬底线例外）
 
 `desire()` 的硬底线是 `intimacy < 20` 时无条件压到阈值以下，注释写的是
 「不熟的人哪怕话说一半也不打扰」。但计划回溯不是未完话题，是「你亲口说过的
 事」，对陌生关系恰恰是最自然的开口依据；不处理的话，这个功能在新人格上完全
 不可见（`intimacy` 建表默认 5，永远过不了闸）。
 
-两处各改一行：
+**不能复用 `pending_topic` 的 0.25 权重**——算一遍就知道行不通：
+`intimacy=10` 时 0.30 项只有 `0.30×sigmoid(-1)=0.081`，加 novelty 0.08 与
+pending 0.25 才 0.41，离 0.55 还差 0.14。复用了权重却不破底线，等于什么都没改。
 
-1. `tick` / `probe` 算 desire 时传 `pending_topic = pending_topic or has_due_plan`，
-   复用现有 0.25 权重，**不新增权重项、不动 `FIRE_THRESHOLD`**；
-2. 硬底线条件改为 `intimacy < 20 and not has_due_plan`。
+所以 `plan_due` 做成**独立权重项 0.40**，比 `pending_topic` 的 0.25 更硬：
+它有时效性（36h 窗口，过期作废），而未完话题可以等下次。
 
-四重抑制闸（12h 间隔 / 静音窗 / 冷场冷却 / 日配额）全程不变。放大的是
-「有具体依据时能开口」，不是「开口更频繁」。
+```python
+desire(state, *, speed, pending_topic, gap_hours, plan_due: bool = False) -> float
+# 权重：0.40 * plan_due（独立项，不与 pending_topic 叠加）
+```
+
+硬底线改为 `if intimacy < 20.0 and not plan_due:`。
+
+数值校验（`intimacy=15, novelty=60, energy=0.8`）：
+`0.30×sigmoid(-0.75)=0.096` + `0.20×0.6=0.12` + `0.40` = **0.616 ≥ 0.55**，
+带 plan_due 能过、不带则 0.216 过不了。极端冷淡（`novelty=0, energy=0.5,
+tension=50`）时 `0.096+0.40-0.30-0.25 < 0`，仍被闸拦住——放行的是「有具体
+依据时能开口」，不是「无视状态乱开口」。
+
+四重抑制闸（12h 间隔 / 静音窗 / 冷场冷却 / 日配额）全程不变。
 
 ### 10. 错误处理
 
@@ -261,10 +294,10 @@ pending ──_deliver 成功(send/push/queued)──> asked      (终态)
 | 文件 | 改动 |
 | --- | --- |
 | `backend/bot/plan.py` | **新增**：`plan_window(when_text, base)` 纯函数 + `record_hooks` + `due_hook` 查询封装；`PLAN_FOLLOWUP_H` |
-| `backend/bot/memory.py` | 「计划」规则加 `when` 命名组；`Fact.when`；`_build` 取值；`remember_async` 调 `record_hooks` |
-| `backend/bot/proactive.py` | `Topic` NamedTuple；`pick_topic` 加 `plan_due` 分支与优先级；desire 传参复用 `pending_topic`；`_deliver` 标记 `asked`；`tick` 过期清理 |
-| `backend/database.py` | `bot_plan_hooks` DDL + 索引；`add_plan_hook` / `supersede_plan_hooks` / `due_plan_hook` / `mark_plan_asked` / `expire_plan_hooks` |
-| `backend/tests/` | 新增 `test_bot_plan.py`；`test_bot_proactive.py` 补选题与标记用例；`test_bot_memory.py` 补抽取用例；`test_startup_critical_path.py` 更新表结构指纹 |
+| `backend/bot/memory.py` | 「计划」规则加 `when` 命名组；`Fact.when` / `Fact.subject`；`_build` 取值；`remember_async` 调 `record_hooks` |
+| `backend/bot/proactive.py` | `Topic` NamedTuple；`pick_topic` 加 `plan_due` 分支与优先级；`desire` 加 `plan_due` 参数；`_deliver` 标记 `asked`；`tick` 过期清理 |
+| `backend/database.py` | `bot_plan_hooks` DDL + 索引；`_SCHEMA_VERSION` 5 → 6；`add_plan_hook`（内部 supersede 同文本 pending）/ `due_plan_hook` / `mark_plan_asked` / `expire_plan_hooks` |
+| `backend/tests/` | 新增 `test_bot_plan.py`；`test_bot_proactive.py` 补选题与标记用例；`test_bot_memory.py` 补抽取用例；`test_startup_critical_path.py` 升版本 + 更新指纹 |
 
 代码注释统一用 `spec 2026-10-31-plan-followup` 标签串联。
 
