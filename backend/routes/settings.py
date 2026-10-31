@@ -664,6 +664,7 @@ class LogLevelRequest(BaseModel):
 
 @router.get("/settings/log-level")
 def get_log_level():
+    """读当前后端日志级别，并回附可选级别清单（logconfig.LEVELS）。"""
     import logconfig
     return {"level": logconfig.get_level(), "levels": list(logconfig.LEVELS)}
 
