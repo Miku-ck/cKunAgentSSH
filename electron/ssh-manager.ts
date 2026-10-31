@@ -33,6 +33,15 @@ import { StringDecoder } from 'string_decoder'
  *  改名对齐口径、不改判定逻辑。 */
 const MAX_EXEC_OUTPUT_CHARS = 1024 * 1024
 
+/**
+ * 远端 SFTP 的 stat().size 是不可信输入。说谎的服务器报一个 PB 级数字，下面按
+ * CHUNK_SIZE 预构造的分块表就会在读出第一个字节之前把主进程撑爆（256KB 一块，
+ * 9PB 约 3.6e10 个对象）。「报 0 的未知长度」那一路另有 UNKNOWN_SIZE_LIMIT 软上限，
+ * 这里补的是「声明得太大」这一路。512GiB 覆盖桌面运维真实会拉的东西（镜像离线包、
+ * 大日志），又远在使用上限之内，不影响任何合法下载。
+ */
+const MAX_SFTP_DOWNLOAD_BYTES = 512 * 1024 * 1024 * 1024
+
 /** 断连修复：会话处于自动/手动重连期间，exec 等待会话重新入池的上限。
  *  等待仅在存在重连条目时触发；覆盖大多数前几秒内恢复的路径级抖动，
  *  超时/条目消失仍抛 SESSION_NOT_FOUND（重连随后会继续，无需阻塞 exec）。 */
@@ -2324,6 +2333,14 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
       throw err
     }
     const total = stat.size || 0
+    // 分块表长度直接由远端报的 size 推导，先验它：不可信（超过 2^53 就不是整数语义了）
+    // 或大过实际会下载的的量级，都在这里挡住，而不是等到分配了几十亿个对象才炸。
+    if (!Number.isSafeInteger(total) || total > MAX_SFTP_DOWNLOAD_BYTES) {
+      release()
+      throw new Error(
+        `远端报告的文件大小不可信或超出下载上限（报 ${stat.size}，上限 ${MAX_SFTP_DOWNLOAD_BYTES} 字节）`,
+      )
+    }
 
     const partPath = localPath + '.part'
     let cancelled = false
