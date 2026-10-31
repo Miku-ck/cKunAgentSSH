@@ -1,4 +1,4 @@
-"""陪聊主动性（P3）：她会主动找你说话。
+"""陪聊主动性：她会主动找你说话。
 
 三个纯函数 + 一个调度器，0 次额外模型调用用于**决策**（desire 由状态推导），
 只有真正开口那一次才调模型生成「心里话」。
@@ -7,11 +7,16 @@
 - local：直投 —— 主动消息直接落 bot_messages（assistant），前端进会话即见；
 - QQ 单聊：真主动。先试官方「互动召回」（当天 / 1-3 / 3-7 / 7-30 天各一次，
   is_wakeup=true），本档用掉走普通主动消息；平台拒绝（无权限/拒收）降级寄存；
-- QQ 群聊：真主动，但频率按群算 —— 每个群各自 12h 一次、每日 2 条上限，
-  不与人设名下的单聊共用额度。群主没开「主动推送消息能力」时平台回
-  40034105，降级为寄存（spec 2026-10-30-qq-group-ambient §3）。
+- QQ 群聊：真主动，但要人格的群参与档开到 proactive 才进巡检清单（每群各自
+  12h 一次、每日 2 条上限，不与人设名下的单聊共用额度）。群主没开「主动推送
+  消息能力」时平台回 40034105，降级为寄存（spec 2026-10-30-qq-group-ambient §3）。
 
 寄存有效期 48h，inbound_pipeline 在组回复前取出以「对了，」接入。
+
+手动探口（ProactiveScheduler.probe，「试一句」）：绕开下面所有闸真发一句，但
+照写账本、照占 12h 间隔与日配额 —— 只是把「该不该说」这一步交给人按按钮，
+不是把约束拆掉。唯一豁免是负反馈冷却：试发没人接是调试现场，不是她说话让人
+不想理，不能一次演示就把人设冻 48h。
 
 抑制器四重闸（全部可 mock 时钟单测）：最小间隔 12h、静音窗、负反馈指数冷却、
 每日配额。负反馈 = 主动消息投出 2h 内用户没回话 → 冷却 48h 起步，二次 ×2，
@@ -54,6 +59,8 @@ COLD_REPLY_THRESHOLD = 0.4  # 寄存消息捎带时对当下 desire 的再门槛
 PROACTIVE_MAX_TOKENS = 256
 # 投递被平台拒了之后的退避：skip 不推进开口闸，不退避就是每 60s 重烧一次模型。
 PUSH_BACKOFF_MIN = 30.0
+# 手动探口那句的账本标记：负反馈检查只认它，间隔/配额/召回档照旧统计。
+MANUAL_REASON = "manual:"
 
 
 def _sigmoid(x: float) -> float:
@@ -167,6 +174,34 @@ def _is_group(target: dict) -> bool:
     return (target.get("external_id") or "").startswith("group:")
 
 
+async def _suppressors_for(target: dict) -> "tuple[datetime | None, int]":
+    """间隔与配额读数：(上次开口时刻, 今日已开口数)。自动轮与手动探口读同一份。
+
+    两套口径不是可以共用一个数的事：
+    - 群：间隔与日配额都按会话算，一个群热闹不该挤掉另一个群的额度；
+    - 单聊：exclude_groups 把群的开口剔掉，否则两个群各发一条就能把人设
+      当天的单聊主动性饿死（每群独立，spec 2026-10-30-qq-group-ambient §3）。
+    """
+    persona_id = target["persona_id"]
+    conversation_id = target["conversation_id"]
+    day_start = datetime.now().astimezone().strftime("%Y-%m-%d 00:00:00")
+    if _is_group(target):
+        last_send = _parse(await asyncio.to_thread(
+            db.last_proactive_at_for_conversation, conversation_id
+        ))
+        sent_today = await asyncio.to_thread(
+            db.proactive_sent_today_for_conversation, conversation_id, day_start
+        )
+        return last_send, sent_today
+    last_send = _parse(await asyncio.to_thread(
+        db.last_proactive_at, persona_id, exclude_groups=True
+    ))
+    sent_today = await asyncio.to_thread(
+        db.proactive_sent_today, persona_id, day_start, exclude_groups=True
+    )
+    return last_send, sent_today
+
+
 def _count_past_colds(persona_id: str) -> int:
     """历史上因冷场被记冷却的次数（按 reason 前缀计）。"""
     conn = db._get_conn()
@@ -182,7 +217,7 @@ def _count_past_colds(persona_id: str) -> int:
 
 
 def used_wakeup_periods(conversation_id: str) -> "set[int]":
-    """该会话已经用掉的召回档位（reason 前缀 wakeup{n}:）。"""
+    """该会话已经用掉的召回档位（reason 里的 wakeup{n}: 标记）。"""
     return {
         index
         for index in range(len(WAKEUP_PERIODS_H))
@@ -211,7 +246,7 @@ def _proactive_sender(channel_id: str):
 def _state_snapshot(persona_id: str, speed: str) -> "tuple[dict, float, bool, str | None, str]":
     """(状态向量, 距上次互动小时数, 话说一半?, 冷却截止, 关系阶段)。
 
-    pending_topic / proactive_cooldown_until 不在 P1 状态向量里（那是
+    pending_topic / proactive_cooldown_until 不在状态向量里（那是
     relation.record_turn 的领地），直接从账本行取。阶段走 relation 的
     score 口径——全项目唯一阶段事实源，与 UI 进度条、聊天 prompt 同源。
     """
@@ -242,8 +277,10 @@ async def _compose(
 
     svc = BotChatService()
     model = await asyncio.to_thread(svc._model_for_persona, persona)
-    # 渠道要传对：QQ 发出去是纯文本，Markdown 会原样显示成符号
-    system = BotChatService._system_prompt(persona, channel, state_desc=state_desc)
+    # 渠道要传对：QQ 发出去是纯文本，Markdown 会原样显示成符号。
+    # 必须走实例而不是类：拿 `BotChatService._system_prompt(...)` 调时，persona 会被
+    # 当成 self、channel 当成 persona，下一行就在字符串上 .get() 当场炸。
+    system = svc._system_prompt(persona, channel, state_desc=state_desc)
     # 有选题时把「说什么」钉住：别报菜名、别一字不差背原话，让她用自己的口气接
     if topic:
         ask = (
@@ -419,24 +456,7 @@ class ProactiveScheduler:
 
             local_now = datetime.now().astimezone()
             local_hour = local_now.hour + local_now.minute / 60.0
-            day_start = local_now.strftime("%Y-%m-%d 00:00:00")
-            # 配额口径分渠道：群里每群独立（一个群热闹不该挤掉另一个群的额度），
-            # 单聊仍按人设算（同一个人不会同时开两个私聊）。
-            if _is_group(target):
-                last_send = _parse(await asyncio.to_thread(
-                    db.last_proactive_at_for_conversation, conversation_id
-                ))
-                sent_today = await asyncio.to_thread(
-                    db.proactive_sent_today_for_conversation, conversation_id, day_start
-                )
-            else:
-                # exclude_groups：群的开口不占单聊的间隔与日配额（每群独立算）
-                last_send = _parse(await asyncio.to_thread(
-                    db.last_proactive_at, persona_id, exclude_groups=True
-                ))
-                sent_today = await asyncio.to_thread(
-                    db.proactive_sent_today, persona_id, day_start, exclude_groups=True
-                )
+            last_send, sent_today = await _suppressors_for(target)
             cooldown_until = _parse(cooldown_raw)
             ok, reason = gate(
                 d, local_hour=local_hour, last_send_at=last_send,
@@ -471,21 +491,95 @@ class ProactiveScheduler:
         await self._maintain_memories()
         return fired
 
-    async def _deliver(
-        self, target: dict, persona: dict, text: str, *,
-        desire_value: float, topic: "tuple[str, str] | None", now: datetime,
-    ) -> bool:
-        """按渠道投递。返回「这句话是不是真说出去了/憋在手里了」。"""
+    async def probe(self, target: dict) -> dict:
+        """手动探口：不等「聊熟」也不等窗口，真发一句并回显它去哪了。
+
+        自动路径对新人格几乎是空转：intimacy 建表默认 5，而 desire 有不到 20
+        就不开口的硬底线 —— 档位、静音窗、配额调到什么程度都看不见效果。
+        这里把抑制器照算一遍但不拦：结果（本来差多少、卡在哪一道闸）原样
+        回显给操作者，账本、间隔、配额照旧推进 —— 不拿「只是试一下」骗自己。
+        """
         persona_id = target["persona_id"]
         conversation_id = target["conversation_id"]
         channel = target.get("channel") or "local"
+        speed = target.get("relationship_speed") or "normal"
+
+        persona = await asyncio.to_thread(db.get_bot_persona, persona_id)
+        if not persona:
+            # 人格都没了就不必再烧一次模型：当场报 missing 比拿空 persona 生成一句好。
+            return {
+                "conversation_id": conversation_id, "action": "missing",
+                "desire": 0.0, "gate_reason": "persona not found",
+                "text": "", "detail": "",
+            }
+
+        state, gap_hours, pending_topic, cooldown_raw, stage = await asyncio.to_thread(
+            _state_snapshot, persona_id, speed
+        )
+        d = desire(state, speed=speed, pending_topic=pending_topic, gap_hours=gap_hours)
+        local_now = datetime.now().astimezone()
+        local_hour = local_now.hour + local_now.minute / 60.0
+        last_send, sent_today = await _suppressors_for(target)
+        # 算而不拦：原因是要给人看的正文（「本来这句话过不了闸」就是想看的东西）。
+        # 过得去时留空串：前端据此决定要不要挂那句「本来会卡在」，
+        # 把 gate 的 "ok" 原样带回去等于每句话都谎称「本来会被拦」。
+        _ok, why = gate(
+            d, local_hour=local_hour, last_send_at=last_send,
+            cooldown_until=_parse(cooldown_raw), sent_today=sent_today,
+        )
+        gate_reason = "" if _ok else why
+
+        state_desc = state_mod.describe_state(state, local_hour, speed, stage=stage)
+        try:
+            topic = await asyncio.to_thread(pick_topic, persona_id, state)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("主动消息选题失败: %s", exc)
+            topic = None
+        text = await _compose(persona, state_desc, topic=topic, channel=channel)
+        if not text:
+            return {
+                "conversation_id": conversation_id, "action": "skip",
+                "desire": d, "gate_reason": gate_reason,
+                "text": "", "detail": "模型没生成出一句话",
+            }
+
+        await self._deliver(
+            target, persona, text, desire_value=d, topic=topic,
+            now=datetime.now(timezone.utc), manual=True,
+        )
+        # 回显念的就是账本上那一行：屏幕上的结论与落库结果不会两套口径。
+        row = await asyncio.to_thread(db.latest_proactive_row, conversation_id) or {}
+        return {
+            "conversation_id": conversation_id,
+            "action": row.get("action") or "skip",
+            "desire": d,
+            "gate_reason": gate_reason,
+            "text": text,
+            "detail": row.get("reason") or "",
+        }
+
+    async def _deliver(
+        self, target: dict, persona: dict, text: str, *,
+        desire_value: float, topic: "tuple[str, str] | None", now: datetime,
+        manual: bool = False,
+    ) -> bool:
+        """按渠道投递。返回「这句话是不是真说出去了/憋在手里了」。
+
+        manual=True 只多干一件事：给 reason 挂上 manual: 标记。落账、间隔、
+        配额、寄存、召回档全部走同一条路 —— 试一句与自动开口的区别只到
+        负反馈那一层为止。
+        """
+        persona_id = target["persona_id"]
+        conversation_id = target["conversation_id"]
+        channel = target.get("channel") or "local"
+        pfx = MANUAL_REASON if manual else ""
         # 选题来源供调 θ（ok:fresh_fact / ok:fatigue_care / ok:old_memory / ok:free）
         src = topic[1] if topic else "free"
 
         if channel == "local":
             await asyncio.to_thread(
                 db.add_bot_proactive_log,
-                persona_id, conversation_id, desire_value, "send", f"ok:{src}", text,
+                persona_id, conversation_id, desire_value, "send", f"{pfx}ok:{src}", text,
             )
             await _fire_local(persona, conversation_id, text)
             return True
@@ -496,13 +590,13 @@ class ProactiveScheduler:
             await asyncio.to_thread(
                 db.add_bot_proactive_log,
                 persona_id, conversation_id, desire_value, "push",
-                f"{prefix}ok:{src}", text, None, _fmt_ts(now),
+                f"{pfx}{prefix}ok:{src}", text, None, _fmt_ts(now),
             )
             return True
         if action == "skip":
             await asyncio.to_thread(
                 db.add_bot_proactive_log,
-                persona_id, conversation_id, desire_value, "skip", f"push:{tag}", text,
+                persona_id, conversation_id, desire_value, "skip", f"{pfx}push:{tag}", text,
             )
             return False
 
@@ -511,7 +605,7 @@ class ProactiveScheduler:
         await asyncio.to_thread(
             db.add_bot_proactive_log,
             persona_id, conversation_id, desire_value, "queued",
-            f"queued:{tag}:{src}", text, expires_at,
+            f"{pfx}queued:{tag}:{src}", text, expires_at,
         )
         logger.info("QQ 主动消息降级寄存（%s）：%s", tag, conversation_id)
         return True
@@ -594,6 +688,10 @@ class ProactiveScheduler:
         unchecked = await asyncio.to_thread(db.list_unchecked_proactive, cutoff)
         for entry in unchecked:
             await asyncio.to_thread(db.mark_proactive_checked, entry["id"])
+            # 负反馈：投出去 2h 没人接 → 冷却。手动试的那句不算：没人在群里
+            # 接台是常态，拿它冷却人设会把所有单聊一起冻住（账照占，只退这一项）。
+            if (entry.get("reason") or "").startswith(MANUAL_REASON):
+                continue
             conversation = await asyncio.to_thread(
                 db.get_bot_conversation, entry["conversation_id"]
             )
@@ -615,7 +713,7 @@ class ProactiveScheduler:
                 entry["persona_id"], entry["conversation_id"], entry["desire"],
                 "skip", f"cold:{cold_count}:{until}",
             )
-            # 冷却写进关系状态行（P1 的 proactive_cooldown_until 列）
+            # 冷却写进关系状态行的 proactive_cooldown_until 列
             await asyncio.to_thread(
                 db.set_bot_proactive_cooldown, entry["persona_id"], until
             )

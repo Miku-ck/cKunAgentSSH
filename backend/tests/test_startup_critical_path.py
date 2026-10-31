@@ -30,7 +30,7 @@ _FORBIDDEN_AT_IMPORT = (
 
 # init_db / 迁移函数体的指纹。改动这些函数的任何一行，都要在
 # 「升级 _SCHEMA_VERSION」与「更新本常量」之间做一次显式决定。
-_SCHEMA_SOURCE_FINGERPRINT = "f85a61f7710ac96c"
+_SCHEMA_SOURCE_FINGERPRINT = "7ae05ebc67db3f4b"
 
 
 def _run_probe(code: str) -> dict:

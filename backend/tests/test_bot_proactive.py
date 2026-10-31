@@ -190,6 +190,34 @@ def test_targets_keep_qq_conversations_inside_the_30_day_wakeup_window(base_db):
     assert targets[conv["id"]]["external_id"] == "c2c:user-1"
 
 
+def _qq_targets(persona_id, **conv_kw):
+    db.update_bot_persona(persona_id, proactive_enabled=True)
+    conv = db.create_bot_conversation(
+        persona_id=persona_id, channel="qq", channel_id=None, **conv_kw
+    )
+    return conv, {t["conversation_id"] for t in db.list_proactive_targets()}
+
+
+def test_group_targets_need_the_highest_group_mode(base_db):
+    """群里主动开口是最重的一档：没开到就只进单聊，不进群。"""
+    persona = db.create_bot_persona(name="晚风")
+    group, targets = _qq_targets(persona["id"], external_id="group:g1")
+    assert group["id"] not in targets, "默认档不该在群里主动说话"
+    c2c, targets = _qq_targets(persona["id"], external_id="c2c:user-9")
+    assert c2c["id"] in targets, "单聊主动只看 proactive_enabled，与档位无关"
+
+    db.update_bot_persona(persona["id"], group_mode="proactive")
+    assert group["id"] in {t["conversation_id"] for t in db.list_proactive_targets()}
+
+
+def test_local_conversations_ignore_the_group_mode(base_db):
+    """档位只管群：本地会话不是群，不能被它挡掉。"""
+    persona = db.create_bot_persona(name="晚风")
+    db.update_bot_persona(persona["id"], proactive_enabled=True)
+    local = db.create_bot_conversation(persona_id=persona["id"], channel="local")
+    assert local["id"] in {t["conversation_id"] for t in db.list_proactive_targets()}
+
+
 # ── ③' 记账口径：谁算「已经开过口」──
 
 
@@ -215,13 +243,19 @@ def test_skip_and_expired_do_not_count_as_spoken(base_db):
     assert db.last_proactive_at(persona["id"]) is None
 
 
-def test_has_wakeup_period_matches_the_reason_prefix(base_db):
+def test_has_wakeup_period_matches_the_reason_marker(base_db):
     persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
     db.add_bot_proactive_log(
         persona["id"], conv["id"], 0.7, "push", "wakeup1:ok:fresh_fact", "在忙吗"
     )
     assert db.has_wakeup_period(conv["id"], 1) is True
     assert db.has_wakeup_period(conv["id"], 0) is False
+    # 手动探口那句带 manual: 前缀：召回档被试发用掉了也算用掉，
+    # 否则下一轮自动开口会拿同一档再撞一次平台的墙。
+    db.add_bot_proactive_log(
+        persona["id"], conv["id"], 0.2, "push", "manual:wakeup2:ok:free", "在吗"
+    )
+    assert db.has_wakeup_period(conv["id"], 2) is True
 
 
 def test_expire_stale_proactive_flips_only_overdue_stashes(base_db):
@@ -804,3 +838,237 @@ def test_pick_topic_recent_fact_is_not_old_news(base_db, monkeypatch):
 def test_pick_topic_nothing_to_say(base_db):
     persona = db.create_bot_persona(name="晚风")
     assert pro.pick_topic(persona["id"], {}) is None
+
+
+# ── ⑦ 手动探口：想看效果时不必先聊熟、也不必等窗口 ──
+
+
+def _stub_compose(monkeypatch, text="想起你上次说的那个展"):
+    """生成路径自己有 E2E 用例覆盖：这里只钉住「探口确实生成了一句话」。"""
+    seen = []
+
+    async def fake_compose(persona, state_desc, *, topic=None, channel="local"):
+        seen.append((persona["id"], channel, topic))
+        return text
+
+    monkeypatch.setattr(pro, "_compose", fake_compose)
+    return seen
+
+
+def _backdate_delivery(log_id: str, hours_ago: int) -> None:
+    conn = db._get_conn()
+    try:
+        conn.execute(
+            "UPDATE bot_proactive_log SET delivered_at = datetime('now', ?) WHERE id = ?",
+            (f"-{hours_ago} hours", log_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_probe_speaks_even_when_the_suppressors_would_block(base_db, monkeypatch):
+    """新人格 intimacy 才 5，desire 永远过不了 θ：不手动就看不到效果。"""
+    persona, conv = _persona_conv(channel="qq", external_id="group:group-1")
+    target = _qq_target(persona, conv, external_id="group:group-1")
+    monkeypatch.setattr(
+        pro, "_state_snapshot",
+        lambda *_a: ({"intimacy": 5, "novelty": 0}, 0.0, False, None, "陌生"),
+    )
+    composed = _stub_compose(monkeypatch)
+    calls = _stub_sender(monkeypatch, [("ok", "")])
+
+    result = await pro.ProactiveScheduler().probe(target)
+
+    assert calls == [("group:group-1", "想起你上次说的那个展", False)], "真走一次投递"
+    assert composed and composed[0][0] == persona["id"], "按这个人格生成"
+    assert result["action"] == "push" and result["text"], "回显要能说清这句话去哪了"
+    assert result["desire"] < pro.FIRE_THRESHOLD, "回显里要看得见「本来过不了闸」"
+    assert result["gate_reason"].startswith("desire")
+    row = _proactive_rows(persona["id"])[-1]
+    assert row["action"] == "push" and row["reason"].startswith("manual:"), "手动也要落账"
+    assert db.last_proactive_at_for_conversation(conv["id"]) is not None, "照常占这一群的 12h"
+
+
+@pytest.mark.asyncio
+async def test_probe_leaves_the_reason_empty_when_the_gate_would_pass(base_db, monkeypatch):
+    """聊熟了、窗口也开着：回显不能硬造一句「自动开口本来会卡在」。"""
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    target = _qq_target(persona, conv)
+    monkeypatch.setattr(
+        pro, "_state_snapshot",
+        lambda *_a: ({"intimacy": 60, "novelty": 80, "energy": 1.0}, 0.0, True, None, "熟人"),
+    )
+    monkeypatch.setattr(pro, "_in_quiet_window", lambda _hour: False)
+    _stub_compose(monkeypatch)
+    _stub_sender(monkeypatch, [("ok", "")])
+
+    result = await pro.ProactiveScheduler().probe(target)
+
+    assert result["action"] == "push"
+    assert result["gate_reason"] == "", "闸本来就该过 → 没原因可说"
+    assert result["desire"] >= pro.FIRE_THRESHOLD
+
+
+@pytest.mark.asyncio
+async def test_probe_reports_the_stash_when_the_channel_is_offline(base_db, monkeypatch):
+    """机器人没连着就如实说「憋着」，不许报「已发出」。"""
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    target = _qq_target(persona, conv)
+    monkeypatch.setattr(pro, "_proactive_sender", lambda _channel_id: None)
+    _stub_compose(monkeypatch)
+
+    result = await pro.ProactiveScheduler().probe(target)
+
+    assert result["action"] == "queued"
+    assert db.get_pending_proactive(conv["id"]), "离线那句照旧寄存"
+    assert _proactive_rows(persona["id"])[-1]["reason"].startswith("manual:queued:offline")
+
+
+@pytest.mark.asyncio
+async def test_probe_without_a_persona_says_so_and_sends_nothing(base_db, monkeypatch):
+    """人格已被删/账本脏了：探口要给出原因，不带着空 persona 去烧模型。"""
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    target = dict(_qq_target(persona, conv), persona_id="gone")
+    composed = _stub_compose(monkeypatch)
+
+    result = await pro.ProactiveScheduler().probe(target)
+
+    assert result["action"] == "missing" and composed == []
+    assert _proactive_rows(persona["id"]) == []
+
+
+@pytest.mark.asyncio
+async def test_a_manual_probe_does_not_count_as_cold_silence(base_db, monkeypatch):
+    """试发不是「她自己想说话」：没人接不等于冷场，不该把人设冻 48h。"""
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    target = _qq_target(persona, conv)
+    monkeypatch.setattr(
+        pro, "_state_snapshot",
+        lambda *_a: ({"intimacy": 5, "novelty": 0}, 0.0, False, None, "陌生"),
+    )
+    _stub_compose(monkeypatch)
+    _stub_sender(monkeypatch, [("ok", "")])
+    scheduler = pro.ProactiveScheduler()
+    await scheduler.probe(target)
+    _backdate_delivery(_proactive_rows(persona["id"])[-1]["id"], 3)
+
+    await scheduler._check_cold_replies()
+
+    row = db.get_bot_relation(persona["id"])
+    assert not (row or {}).get("proactive_cooldown_until"), "手动那句不参与负反馈冷却"
+
+
+@pytest.mark.asyncio
+async def test_an_auto_send_still_gets_the_cold_penalty(base_db):
+    """上一用例的反面：自动开口投出去没人回，照旧要冻 —— 豁免只给手动。"""
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    log_id = db.add_bot_proactive_log(persona["id"], conv["id"], 0.8, "push", "ok:free", "在忙吗")
+    _backdate_delivery(log_id, 3)
+
+    await pro.ProactiveScheduler()._check_cold_replies()
+
+    row = db.get_bot_relation(persona["id"])
+    assert (row or {}).get("proactive_cooldown_until")
+
+
+def test_proactive_target_carries_the_shape_the_scheduler_reads(base_db):
+    """探口用的是巡检那一行的形状：少一个键调度器就 KeyError。"""
+    persona = db.create_bot_persona(name="晚风")
+    conv = db.create_bot_conversation(
+        persona_id=persona["id"], channel="qq", external_id="group:g9"
+    )
+    target = db.get_proactive_target(conv["id"])
+    assert target["persona_id"] == persona["id"]
+    assert target["conversation_id"] == conv["id"]
+    assert target["channel"] == "qq"
+    assert target["external_id"] == "group:g9"
+    assert target["relationship_speed"] == "normal"
+
+
+def test_proactive_target_ignores_the_automatic_gates(base_db):
+    """没开主动性、档位也停在最保守：手动指定了会话就不该被这些闸挡下。"""
+    persona = db.create_bot_persona(name="晚风")
+    conv = db.create_bot_conversation(
+        persona_id=persona["id"], channel="qq", external_id="group:g9"
+    )
+    assert db.get_proactive_target(conv["id"]) is not None
+    assert db.get_proactive_target("no-such-conversation") is None
+
+
+# ── ⑧ 生成层：_compose 自己跑一遍（以前的单测全部桩掉了它）──
+
+
+@pytest.mark.asyncio
+async def test_compose_builds_the_system_prompt_from_the_persona(base_db, monkeypatch):
+    """探口第一次真跑到 `_compose`，把「拿类直接调实例方法」扫了出来。
+
+    `BotChatService._system_prompt(persona, channel, ...)` 在 Python 3 里是普通函数，
+    两个位置参数会被吃成 self=persona、persona=channel，下一行就
+    `AttributeError: 'str' object has no attribute 'get'`。自动路径因为 desire
+    硬底线几乎从不走到这里，所以单测一直桩掉整个 _compose 也没人报。这里
+    只桩模型流，提示词组装必须真跑。
+    """
+    from bot.chat_service import BotChatService
+
+    seen = {}
+
+    class _Chunk:
+        content = "在吗"
+
+    async def fake_stream(base_url, api_key, model_id, messages, **_kw):
+        seen["messages"] = messages
+        seen["model_id"] = model_id
+        yield _Chunk()
+
+    monkeypatch.setattr(BotChatService, "_model_for_persona", lambda _self, _p: {
+        "base_url": "http://model.test", "api_key": "k", "model_id": "m1",
+    })
+    import llm_adapter
+
+    monkeypatch.setattr(llm_adapter, "chat_stream", fake_stream)
+    persona = db.create_bot_persona(name="晚风", address_user="小林")
+
+    text = await pro._compose(persona, "此刻：想找她说说话", channel="qq")
+
+    assert text == "在吗"
+    assert seen["model_id"] == "m1"
+    system = seen["messages"][0]["content"]
+    assert "晚风" in system and "小林" in system, "人格与称呼得真进 prompt"
+    assert "禁止表格" in system, "QQ 渠道口径：发出去是纯文本"
+    assert "此刻：想找她说说话" in system, "状态快照也要进去"
+
+
+@pytest.mark.asyncio
+async def test_probe_runs_the_real_compose_path(base_db, monkeypatch):
+    """探口整条线真跑一次：不桩状态快照也不桩 _compose，只桩模型流与发送器。
+
+    上面那个 bug 能在仓里躺一轮，就是因为每个用例都把生成层整段换掉了；
+    `_state_snapshot` 以前也被每个用例桩掉（它读的是新人格还没有关系行时的空行）。
+    探口、状态快照、生成、投递这几段的接口形状必须被一个用例真正串过一次。
+    """
+    import llm_adapter
+    from bot.chat_service import BotChatService
+
+    persona, conv = _persona_conv(channel="qq", external_id="group:group-1")
+    target = _qq_target(persona, conv, external_id="group:group-1")
+    monkeypatch.setattr(BotChatService, "_model_for_persona", lambda _self, _p: {
+        "base_url": "http://model.test", "api_key": "k", "model_id": "m1",
+    })
+
+    class _Chunk:
+        content = "晚上有空一起打一把吗"
+
+    async def fake_stream(*_a, **_kw):
+        yield _Chunk()
+
+    monkeypatch.setattr(llm_adapter, "chat_stream", fake_stream)
+    calls = _stub_sender(monkeypatch, [("ok", "")])
+
+    result = await pro.ProactiveScheduler().probe(target)
+
+    assert result["action"] == "push", "生成→投递整条线不能报错"
+    assert result["text"] == "晚上有空一起打一把吗"
+    assert result["desire"] < pro.FIRE_THRESHOLD, "新人格本来就开不了口：探口绕过它"
+    assert calls == [("group:group-1", "晚上有空一起打一把吗", False)]

@@ -61,8 +61,11 @@ class FakeProvider:
     def fallback(self, kind):
         return "超时兜底" if kind == "timeout" else "失败兜底"
 
-    async def push(self, channel_id, key, event_id, text, *, send_fails=False):
-        """模拟平台推来一条消息：平台原始对象不外泄，只交 InboundMessage。"""
+    async def push(self, channel_id, key, event_id, text, *, send_fails=False, plain=None):
+        """模拟平台推来一条消息：平台原始对象不外泄，只交 InboundMessage。
+
+        plain 给了就顺带挂上「不 @」那条通道（真实的 QQ 适配层只在群会话才挂）。
+        """
         sent = []
 
         async def send(part):
@@ -71,6 +74,12 @@ class FakeProvider:
             sent.append(part)
             self.sent.append((channel_id, part))
 
+        send_plain = None
+        if plain is not None:
+            async def send_plain(part):
+                plain.append(part)
+                self.sent.append((channel_id, part))
+
         await self.handlers[channel_id](
             InboundMessage(
                 channel_id=channel_id,
@@ -78,6 +87,7 @@ class FakeProvider:
                 event_id=event_id,
                 text=text,
                 send=send,
+                send_plain=send_plain,
             )
         )
         return sent
@@ -190,6 +200,35 @@ async def test_reply_goes_out_through_the_provided_closure(rig):
     conversation = db.list_bot_conversations(channel_id=channel["id"])[0]
     stored = db.get_bot_message_by_external_id(conversation["id"], "event-1")
     assert stored["answered_at"]
+
+
+@pytest.mark.asyncio
+async def test_group_reply_uses_the_plain_lane_when_mention_is_off(rig):
+    """人格关掉「回复 @ 提问者」：这句改走不带 msg_id 的主动消息通道。"""
+    runtime, provider, _service = rig
+    channel, persona = _channel("小暖", "机器人A", "100001")
+    db.update_bot_persona(persona["id"], mention_sender=False)
+    await runtime.start(channel)
+
+    plain: list[str] = []
+    sent = await provider.push(channel["id"], "group:g-1", "event-1", "在吗", plain=plain)
+
+    assert plain == ["回复：在吗"], "不 @ 就换通道，不是换文案"
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_group_reply_still_mentions_when_the_switch_is_on(rig):
+    """开关默认开：没动设置就照旧走被动回复，升级不改观感。"""
+    runtime, provider, _service = rig
+    channel, _persona = _channel("小暖", "机器人A", "100001")
+    await runtime.start(channel)
+
+    plain: list[str] = []
+    sent = await provider.push(channel["id"], "group:g-1", "event-1", "在吗", plain=plain)
+
+    assert sent == ["回复：在吗"]
+    assert plain == []
 
 
 @pytest.mark.asyncio

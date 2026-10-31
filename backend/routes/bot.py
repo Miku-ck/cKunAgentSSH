@@ -93,6 +93,10 @@ class PersonaRequest(_PersonaValidationMixin, BaseModel):
     memory_directive: str = Field("", max_length=2000)
     dialogue_samples: str = Field("", max_length=4000)
     advanced_play: str = Field("", max_length=2000)
+    # 群参与档：新建就落在最保守档，要她在群里开口得去编辑器调上去。
+    group_mode: Literal["mention_only", "ambient", "proactive"] = "mention_only"
+    # 群回复要不要 @ 提问者：默认开（维持现有观感），关掉才换发送通道。
+    mention_sender: bool = True
 
     _check_avatar = field_validator("avatar")(_validate_avatar)
 
@@ -115,8 +119,12 @@ class PersonaUpdateRequest(_PersonaValidationMixin, BaseModel):
     memory_directive: Optional[str] = Field(None, max_length=2000)
     dialogue_samples: Optional[str] = Field(None, max_length=4000)
     advanced_play: Optional[str] = Field(None, max_length=2000)
-    # P3 主动性开关：她会主动找你说话（调度器 + 四重抑制器守着分寸）
+    # 主动性开关：她会主动找你说话（调度器 + 四重抑制器守着分寸）
     proactive_enabled: Optional[bool] = None
+    # 群参与档：只 @ 才答 / @ 后可接话 / 接话 + 每群主动（spec 2026-10-30-qq-group-ambient §5）
+    group_mode: Optional[Literal["mention_only", "ambient", "proactive"]] = None
+    # 群回复要不要 @ 提问者
+    mention_sender: Optional[bool] = None
 
     _check_avatar = field_validator("avatar")(_validate_avatar)
 
@@ -145,6 +153,12 @@ class BotChatRequest(BaseModel):
             if len(url) > 1_500_000:
                 raise ValueError("单张图片过大，请换一张更小或更简单的")
         return value
+
+
+class ProactiveProbeRequest(BaseModel):
+    """手动探口：只对这一个会话试一句。空 id 当场 422，不拿去查一次表。"""
+
+    conversation_id: str = Field(..., min_length=1)
 
 
 @router.get("/bot/persona-options")
@@ -231,7 +245,7 @@ def delete_persona(persona_id: str):
 
 @router.get("/bot/personas/{persona_id}/proactive-log")
 def list_proactive_log(persona_id: str, limit: int = 50):
-    """主动性记录（P3）：她什么时候想找你、过没过闸、说了什么。调 θ 用。"""
+    """主动性记录：她什么时候想找你、过没过闸、说了什么。调 θ 用。"""
     if not db.get_bot_persona(persona_id):
         raise HTTPException(status_code=404, detail="人格不存在")
     conn = db._get_conn()
@@ -245,6 +259,25 @@ def list_proactive_log(persona_id: str, limit: int = 50):
     finally:
         conn.close()
     return [dict(row) for row in rows]
+
+
+@router.post("/bot/proactive/probe")
+async def probe_proactive(req: ProactiveProbeRequest):
+    """手动探口：对指定会话真发一句主动消息，回显它去哪了。
+
+    新人格 intimacy 才 5，自动路径有「不熟不打扰」的硬底线：不调到这个数以下
+    就永远看不见效果。这里绕开意愿分与抑制器，但账本、间隔、日配额照旧。
+    """
+    target = db.get_proactive_target(req.conversation_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    # 微信没有主动发送通道：当场说不支持，比默默寄存一句永远发不出去好。
+    if (target.get("channel") or "") not in ("local", "qq"):
+        raise HTTPException(status_code=409, detail="这个渠道不支持主动发消息")
+
+    from bot.proactive import get_scheduler  # 惰性导入：避免路由模块拖起整个调度链
+
+    return await get_scheduler().probe(target)
 
 
 @router.get("/bot/personas/{persona_id}/memories")

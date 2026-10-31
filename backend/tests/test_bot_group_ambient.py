@@ -98,6 +98,21 @@ def test_seen_event_history_is_bounded():
     assert not group_ambient.seen_event("ch", "g1", "e0"), "只看最近几条，不留长期台账"
 
 
+# ── ① 'b 群参与档位：接话归档位管 ──
+
+def test_only_the_two_upper_modes_allow_ambient_replies():
+    assert not group_ambient.ambient_allowed("mention_only"), "只 @ 才答 = 不插话"
+    assert group_ambient.ambient_allowed("ambient")
+    assert group_ambient.ambient_allowed("proactive"), "最高档当然也能接话"
+    assert not group_ambient.ambient_allowed(""), "脏值按最保守档读"
+    assert not group_ambient.ambient_allowed(None)
+
+
+def test_modes_are_ordered_from_quietest_to_loudest():
+    """档位顺序即打扰程度顺序：UI 平铺与判定都按这一份走。"""
+    assert group_ambient.GROUP_MODES == ("mention_only", "ambient", "proactive")
+
+
 # ── ② QQ 适配层 ──
 
 
@@ -260,9 +275,13 @@ async def _no_sleep(_seconds):
     return None
 
 
-def _setup_group():
-    """人格 + 已配置的机器人：bot_conversations.channel_id 有外键，不能瞎填。"""
+def _setup_group(group_mode="ambient"):
+    """人格 + 已配置的机器人：bot_conversations.channel_id 有外键，不能瞎填。
+
+    默认给「@ 后可接话」：这些用例要跑的是接话本身的行为，档位闸另开用例测。
+    """
     persona = db.create_bot_persona(name="晚风")
+    db.update_bot_persona(persona["id"], group_mode=group_mode)
     channel = db.create_bot_channel(
         provider="qq",
         display_name="主号",
@@ -316,6 +335,21 @@ async def test_ambient_inbound_answers_with_context_and_leaves_no_user_message(b
     assert rows == [], "环境消息不写用户消息（会话内没有落库的 user 行）"
     # 自己的发言进临时上下文：下一句才知道刚才说过什么
     assert group_ambient.context_lines(channel_id, "g1")[-1] == ("晚风", "火锅吧")
+
+
+@pytest.mark.asyncio
+async def test_ambient_inbound_dropped_when_the_persona_only_answers_at_mentions(base_db):
+    """档位在管线这一层兜住：渠道适配层不知道人格配置，也不该知道。"""
+    persona, channel_id = _setup_group(group_mode="mention_only")
+    group_ambient.note_mention(channel_id, "g1")
+    group_ambient.note_line(channel_id, "g1", "小明", "今晚吃啥")
+    chat = _Chat()
+    inbound = _Inbound(channel_id)
+    pipeline = pipeline_mod.InboundPipeline(chat, sleep=_no_sleep)
+    await pipeline.handle(inbound, _Provider(), persona["id"])
+
+    assert chat.seen == {}, "不接话就不该碰模型"
+    assert inbound.parts == []
 
 
 @pytest.mark.asyncio

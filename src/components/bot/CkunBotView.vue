@@ -167,7 +167,20 @@
           <span>{{ store.error }}</span>
           <button v-if="store.lastFailedText" class="btn btn-sm" @click="retry">重试</button>
         </div>
-        <p v-if="store.isRemote && store.remoteActiveId" class="readonly-bar">来自 {{ store.remoteChannelLabel }} · 仅供查看，回复请在{{ store.remoteChannelLabel }}里进行</p>
+        <div v-if="store.isRemote && store.remoteActiveId" class="readonly-bar">
+          <span>来自 {{ store.remoteChannelLabel }} · 仅供查看，回复请在{{ store.remoteChannelLabel }}里进行</span>
+          <!-- 只读侧唯一的出口：不等阈值与窗口，真往这个会话发一句并把结果念回来。
+               微信没有主动发送通道（后端会直接拒），所以这个按钮只在 QQ 上挂。 -->
+          <button
+            v-if="store.channel === 'qq'"
+            type="button"
+            class="btn btn-sm"
+            title="不等频率窗口，直接往这个会话发一句主动消息（照常占 12 小时间隔与当日配额）"
+            :disabled="store.probing"
+            @click="store.probeProactive(store.remoteActiveId)"
+          >{{ store.probing ? '发送中…' : '试一句' }}</button>
+          <span v-if="store.probeNote" class="probe-note">{{ store.probeNote }}</span>
+        </div>
         <form v-if="!store.isRemote && store.activeConversationId" class="chat-composer" @submit.prevent="send">
           <textarea
             ref="composerRef"
@@ -706,7 +719,8 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 @media (prefers-reduced-motion: reduce) { .typing-dots i { animation: none; } }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .chat-error { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-12); margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-8); padding: var(--spacing-10) var(--spacing-12); border: 1px solid var(--danger-border); border-radius: var(--radius-md); background: var(--danger-bg); color: var(--danger-text); font-size: 0.9231rem; line-height: 1.6; } .chat-error span { min-width: 0; overflow-wrap: anywhere; }
-.readonly-bar { margin: 0; padding: var(--spacing-8) var(--spacing-24) var(--spacing-12); color: var(--text-tertiary); font-size: 0.7692rem; text-align: center; }
+.readonly-bar { display: flex; flex-direction: column; align-items: center; gap: var(--spacing-8); margin: 0; padding: var(--spacing-8) var(--spacing-24) var(--spacing-12); color: var(--text-tertiary); font-size: 0.7692rem; text-align: center; }
+.probe-note { max-width: 760px; line-height: 1.6; overflow-wrap: anywhere; }
 .chat-composer { position: relative; display: flex; align-items: center; gap: var(--spacing-8); margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-20); padding: var(--spacing-6) var(--spacing-6) var(--spacing-6) var(--spacing-16); border: 1px solid var(--border-subtle); border-radius: var(--radius-pill); background: var(--bg-elevated); box-shadow: var(--shadow-lg); transition: border-color var(--transition-fast), box-shadow var(--transition-fast); }
 .chat-composer:focus-within { border-color: var(--accent-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent), var(--shadow-lg); }
 .composer-input { flex: 1; min-width: 0; display: block; max-height: 32vh; overflow-y: auto; border: 0; outline: 0; resize: none; background: transparent; color: var(--text-primary); padding: var(--spacing-8) 0; font-family: var(--font-sans); font-size: 1.1538rem; line-height: 1.6; caret-color: var(--accent-primary); }

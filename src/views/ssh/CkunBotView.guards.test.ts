@@ -147,10 +147,37 @@ describe('cKunBot 页面注册与关键交互', () => {
     // 保存必须回传全部字段，否则后端收到的永远是默认档
     for (const field of [
       'expression_dna', 'reaction_style', 'refusal_style', 'address_user', 'relationship_speed',
+      'group_mode', 'mention_sender',
       'likes_landmines', 'memory_directive', 'dialogue_samples', 'advanced_play',
     ]) {
       expect(editor).toContain(field)
     }
+  })
+
+  it('只读侧的「试一句」：不等窗口真发一句，结果只落回显条', () => {
+    const view = read('src/components/bot/CkunBotView.vue')
+    const store = read('src/stores/bot.ts')
+    const api = read('src/api/bot.ts')
+    expect(api).toContain("request<ProactiveProbeResult>('/bot/proactive/probe'")
+    expect(view).toContain('试一句')
+    expect(view).toContain('store.probeProactive(store.remoteActiveId)')
+    expect(view).toContain(':disabled="store.probing"')
+    // 微信没有主动发送通道：按钮只能在 QQ 上挂（后端会当场拒）
+    expect(view).toMatch(/v-if="store\.channel === 'qq'"[\s\S]{0,200}?store\.probeProactive/)
+    expect(view).toContain('<span v-if="store.probeNote" class="probe-note">{{ store.probeNote }}</span>')
+    // 回显是会话级的：换会话/换渠道都得清空，否则旧群的原因顶在新群头上
+    expect(store).toContain('probeNote.value = \'\'')
+    expect(store.match(/probeNote\.value = ''/g)?.length).toBeGreaterThanOrEqual(2)
+    // 探口不往消息列表里写东西：群主动那句本来就不落本地库，伪造一条就是假记录
+    expect(store).not.toMatch(/probeProactive[\s\S]{0,600}?remoteMessages\.value\.push/)
+  })
+
+  it('群回复不 @ 人：人格开关默认开，旧记录缺字段也照旧 @', () => {
+    const editor = read('src/components/bot/PersonaEditor.vue')
+    expect(editor).toContain('回复 @ 提问者')
+    // `=== 1` 会把缺字段的旧人格读成关掉：升级等于悄悄换了一批人的群回复通道
+    expect(editor).toContain('source?.mention_sender !== 0')
+    expect(editor).not.toContain('mention_sender: source?.mention_sender === 1')
   })
 
   it('陪聊页展示关系阶段，气泡走 MarkdownStream、思考可折叠', () => {

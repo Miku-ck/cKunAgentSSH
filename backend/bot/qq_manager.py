@@ -22,6 +22,7 @@ from bot.qq_channel import (
     split_qq_parts,
     strip_markdown_for_qq,
 )
+from bot.text_format import strip_at_markup
 
 logger = logging.getLogger(__name__)
 
@@ -391,7 +392,8 @@ class QQProvider:
         return connection
 
     def outbound_parts(self, text: str) -> list[str]:
-        cleaned = strip_markdown_for_qq(text).strip() or text
+        # @ 标记先剔：QQ 的纯文本里写尖括号标记不会变成艾特，只会让人看见一串源码。
+        cleaned = strip_markdown_for_qq(strip_at_markup(text)).strip() or text
         return split_qq_parts(cleaned)
 
     def fallback(self, kind: str) -> str:

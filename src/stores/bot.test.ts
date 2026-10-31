@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import type { BotConversation, BotMessage, BotPersona } from '@/api/bot'
+import type { BotConversation, BotMessage, BotPersona, ProactiveProbeResult } from '@/api/bot'
 
 vi.mock('@/api/bot', () => ({
   botApi: {
@@ -12,6 +12,7 @@ vi.mock('@/api/bot', () => ({
     deleteConversation: vi.fn(),
     getRelations: vi.fn(),
     updateConversationDisplay: vi.fn(),
+    probeProactive: vi.fn(),
     getUserAvatar: vi.fn(),
     setUserAvatar: vi.fn(),
   },
@@ -213,5 +214,56 @@ describe('cKunBot store', () => {
     vi.mocked(botApi.getUserAvatar).mockResolvedValueOnce({ avatar: 'data:image/webp;base64,UHJ' })
     await store.loadUserAvatar()
     expect(store.userAvatar).toBe('data:image/webp;base64,UHJ')
+  })
+
+  it('试一句：后端回什么就显什么，不冒充聊天记录', async () => {
+    vi.mocked(botApi.probeProactive).mockResolvedValue({
+      conversation_id: 'q1', action: 'push', desire: 0.2,
+      gate_reason: 'desire 0.20 < 0.55', text: '想起你上次说的那个展', detail: '',
+    })
+    const store = useBotStore()
+    store.selectChannel('qq')
+    await store.probeProactive('q1')
+    expect(botApi.probeProactive).toHaveBeenCalledWith('q1')
+    expect(store.probeNote).toContain('已发出')
+    expect(store.probing).toBe(false)
+    expect(store.remoteMessages).toEqual([])
+  })
+
+  it('试一句：失败只落在回显条上，不弹聊天错误条', async () => {
+    vi.mocked(botApi.probeProactive).mockRejectedValue(new Error('403 没有主动推送权限'))
+    const store = useBotStore()
+    store.selectChannel('qq')
+    await store.probeProactive('q1')
+    expect(store.probeNote).toContain('主动推送权限')
+    expect(store.error).toBe('')
+  })
+
+  it('试一句：在途时再点不重发，一句就是一句', async () => {
+    let resolveProbe: (value: ProactiveProbeResult) => void = () => {}
+    vi.mocked(botApi.probeProactive).mockReturnValue(
+      new Promise((resolve) => { resolveProbe = resolve }),
+    )
+    const store = useBotStore()
+    store.selectChannel('qq')
+    const pending = store.probeProactive('q1')
+    await store.probeProactive('q1')
+    expect(botApi.probeProactive).toHaveBeenCalledTimes(1)
+    resolveProbe({ conversation_id: 'q1', action: 'push', desire: 0.8, gate_reason: '', text: '在吗', detail: '' })
+    await pending
+    expect(store.probing).toBe(false)
+  })
+
+  it('换一条会话就清掉上一条的试一句回显', async () => {
+    const a = { ...conversation, id: 'q1', channel: 'qq' as const, external_id: 'group:g1' }
+    const b = { ...conversation, id: 'q2', channel: 'qq' as const, external_id: 'group:g2' }
+    vi.mocked(botApi.getMessages).mockResolvedValue([])
+    const store = useBotStore()
+    store.selectChannel('qq')
+    store.remoteConversations = [a, b]
+    store.remoteActiveId = 'q1'
+    store.probeNote = '已发出：「刚才那句」'
+    await store.selectRemoteConversation('q2')
+    expect(store.probeNote).toBe('')
   })
 })

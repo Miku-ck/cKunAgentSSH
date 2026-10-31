@@ -36,11 +36,22 @@ class InboundPipeline:
             if lock.locked():
                 # 这条会话正在答真消息：不插队也不排队，这句接话直接作废。
                 return
+            if not await self._may_ambient(persona_id):
+                return
             async with lock:
                 await self._handle_ambient(inbound, provider, persona_id)
             return
         async with lock:
             await self._handle_locked(inbound, provider, persona_id)
+
+    async def _may_ambient(self, persona_id: str) -> bool:
+        """群参与档没开到「可接话」就不说话。
+
+        闸放在管线而不是渠道适配层：接不接话是人格的属性，而适配层只认识机器人。
+        人格读不到（已删/脏数据）按最保守档处理：宁可少说一句。
+        """
+        persona = await asyncio.to_thread(db.get_bot_persona, persona_id)
+        return group_ambient.ambient_allowed((persona or {}).get("group_mode"))
 
     async def _handle_ambient(self, inbound, provider, persona_id: str) -> None:
         """只接一句话：拿到近期群消息当临时上下文，回一句就结束。"""
@@ -69,7 +80,7 @@ class InboundPipeline:
             logger.warning("%s 群聊接话失败: %s", provider.name, exc, exc_info=True)
             return
         spoken = await self._deliver(
-            inbound, provider, conversation["id"], reply, mark_answered=False
+            inbound, provider, conversation, reply, mark_answered=False
         )
         # 自己的发言也进上下文：下一句接话才知道刚才说过什么，避免复读。
         if spoken:
@@ -124,7 +135,7 @@ class InboundPipeline:
             greeting = (conversation.get("persona") or {}).get("greeting") or ""
             if first_turn and greeting:
                 reply = f"{greeting}\n\n{reply}"
-            # P3 意愿寄存：过了意愿闸但这条发不出去的「心里话」（无主动推送权限
+            # 意愿寄存：过了意愿闸但这条发不出去的「心里话」（无主动推送权限
             # /离线/已不在群里），见到对方来消息时以「对了，」捎上 ——
             # 协议仍是被动回复，行为上等价于「她憋了一句话，见到你终于说了」。
             try:
@@ -138,13 +149,29 @@ class InboundPipeline:
                 pending_text = None
             if pending_text:
                 reply = f"对了，{pending_text}\n\n{reply}"
-        await self._deliver(inbound, provider, conversation["id"], reply)
+        await self._deliver(inbound, provider, conversation, reply)
+
+    @staticmethod
+    def _send_lane(inbound, conversation: dict):
+        """这句回复走哪条发送通道：人格关掉「@ 提问者」就走不带 msg_id 的主动消息。
+
+        读会话快照而不是再查一次人格：入站热路径不该多一次查询，而快照在人格
+        编辑时就会被回填（revise_persona_snapshots）。旧快照没这个字段就按
+        默认「照旧 @」处理：宁可多一个 @，也不冒群主没开主动推送权限的风险。
+        没挂 send_plain 的渠道（本地/微信）也不换：那边本来就没有 @ 这回事。
+        """
+        plain = getattr(inbound, "send_plain", None)
+        if plain is None:
+            return inbound.send
+        raw = (conversation.get("persona") or {}).get("mention_sender")
+        mention = 1 if raw is None else int(raw or 0)
+        return inbound.send if mention else plain
 
     async def _deliver(
         self,
         inbound,
         provider,
-        conversation_id: str,
+        conversation: dict,
         reply: str,
         *,
         mark_answered: bool = True,
@@ -154,6 +181,8 @@ class InboundPipeline:
         mark_answered=False 用于群聊接话：那条事件本来就没有落库记录，
         也没有人要靠「已答」做幂等。
         """
+        conversation_id = conversation["id"]
+        send = self._send_lane(inbound, conversation)
         parts = provider.outbound_parts(reply)
         gaps = outbound_gaps(parts)
         for index, part in enumerate(parts):
@@ -162,7 +191,7 @@ class InboundPipeline:
             if gaps[index]:
                 await self._sleep(gaps[index])
             try:
-                await inbound.send(part)
+                await send(part)
             except Exception as exc:
                 # 发送失败就不标已答：平台重投同一条事件时还要能再答一次。
                 logger.warning(

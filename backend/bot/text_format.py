@@ -24,6 +24,18 @@ def strip_markdown(text: str) -> str:
     return cleaned
 
 
+# QQ 入站原文里的 @ 标记长这样：`<@!1234>`（带昵称）/ `<at id="..."></at>`（纯文本）。
+# 模型把它们当正文照抄进回复时，QQ 的纯文本消息会把尖括号原样显示。
+_AT_MARKUP = re.compile(r"<@!?[^>]*>|<at\b[^>]*>(?:[ \t]*</at>)?")
+
+
+def strip_at_markup(text: str) -> str:
+    """剔掉照抄进来的 @ 标记：出站没有「在纯文本里 @ 某人」这个语法。"""
+    cleaned = _AT_MARKUP.sub("", text or "")
+    # 标记夹在句中时会留下连续空格，挤一下再去首尾空白，不把缝隙留在正文里。
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+
+
 def split_point(text: str, limit: int) -> int:
     floor = limit // 2
     for separator in ("\n", "。", "！", "？", "，", ". "):

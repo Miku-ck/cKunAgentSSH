@@ -118,6 +118,25 @@
             <input type="checkbox" v-model="form.proactive_enabled" />
             <em class="field-hint">她会在想找你时主动开口（有静音时段、频率上限和冷场冷却守着分寸）</em>
           </label>
+          <div class="field">
+            <span>{{ options?.group_mode.label || '群参与' }}</span>
+            <div class="chips" role="group" aria-label="在群里说到什么程度">
+              <button
+                v-for="item in options?.group_mode.options || []"
+                :key="item.value"
+                type="button"
+                class="chip"
+                :class="{ active: form.group_mode === item.value }"
+                :aria-pressed="form.group_mode === item.value"
+                @click="form.group_mode = item.value as BotGroupMode"
+              >{{ item.label }}</button>
+            </div>
+            <em class="field-hint">接话需群主开「接收全量消息」，群里主动开口需「主动推送」，缺一项平台就拒</em>
+          </div>
+          <label class="field field-inline"><span>回复 @ 提问者</span>
+            <input type="checkbox" v-model="form.mention_sender" />
+            <em class="field-hint">关掉后群里这句不再挂「回复某人」，改走主动消息（需群主开「主动推送」）；平台拒收就回落成带 @ 的回复</em>
+          </label>
         </section>
 
         <section v-for="item in textSections" :key="item.key" class="editor-section" :data-section="item.key">
@@ -163,6 +182,7 @@ import { toFriendlyMessage } from '@/api/base'
 import {
   botApi,
   type BotExpressionDna,
+  type BotGroupMode,
   type BotPersona,
   type BotPersonaOptions,
   type BotPersonaPayload,
@@ -257,6 +277,9 @@ const form = reactive({
   refusal_style: (source?.refusal_style || 'soft') as BotRefusalStyle,
   address_user: source?.address_user || '',
   relationship_speed: (source?.relationship_speed || 'normal') as BotRelationshipSpeed,
+  group_mode: (source?.group_mode || 'mention_only') as BotGroupMode,
+  // 旧的记录没这个字段：按默认「照旧 @」读，升级不能悄悄把群回复换到主动消息通道上
+  mention_sender: source?.mention_sender !== 0,
   // 人格内核四件套：旧记录可能没有，缺省读空串
   likes_landmines: source?.likes_landmines || '',
   memory_directive: source?.memory_directive || '',
@@ -318,6 +341,8 @@ function buildPayload(): BotPersonaPayload {
     refusal_style: form.refusal_style,
     address_user: form.address_user,
     relationship_speed: form.relationship_speed,
+    group_mode: form.group_mode,
+    mention_sender: form.mention_sender,
     likes_landmines: form.likes_landmines,
     memory_directive: form.memory_directive,
     dialogue_samples: form.dialogue_samples,

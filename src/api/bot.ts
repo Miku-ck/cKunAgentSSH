@@ -15,6 +15,8 @@ export interface BotExpressionDna {
 export type BotReactionStyle = 'reserved' | 'warm' | 'playful' | 'blunt'
 export type BotRefusalStyle = 'soft' | 'direct' | 'playful' | 'concise'
 export type BotRelationshipSpeed = 'slow' | 'normal' | 'fast'
+/** 群参与档：从只 @ 才答到群里主动开口，打扰程度递增（后端 GROUP_MODES 同序）。 */
+export type BotGroupMode = 'mention_only' | 'ambient' | 'proactive'
 
 export interface BotPersona {
   id: string
@@ -32,6 +34,10 @@ export interface BotPersona {
   refusal_style: BotRefusalStyle
   address_user: string
   relationship_speed: BotRelationshipSpeed
+  /** 群参与档：迁移前的旧人格记录里没这个字段，后端按最保守档读。 */
+  group_mode?: BotGroupMode
+  /** 群回复要不要 @ 提问者：1 = 照旧 @（被动回复）。旧记录缺字段同样按照旧 @ 读。 */
+  mention_sender?: number
   /** 人格内核扩展四件套：可选 —— 旧人格记录里没有这四列，后端也按缺省读。 */
   likes_landmines?: string
   memory_directive?: string
@@ -57,6 +63,9 @@ export interface BotPersonaPayload {
   refusal_style: BotRefusalStyle
   address_user: string
   relationship_speed: BotRelationshipSpeed
+  group_mode: BotGroupMode
+  /** 群回复要不要 @ 提问者（关掉后这句改走不带 msg_id 的主动消息）。 */
+  mention_sender: boolean
   /** 人格内核扩展四件套：可选 —— 局部更新时不必带全。 */
   likes_landmines?: string
   memory_directive?: string
@@ -84,7 +93,7 @@ export interface BotOptionGroup {
 /** 人格编辑器的档位字典：label 与可选项都由服务端给出，前端不手抄文案。 */
 export type BotPersonaOptions = Record<
   | 'sentence' | 'particles' | 'punctuation' | 'emoji' | 'kaomoji' | 'sticker'
-  | 'reaction_style' | 'refusal_style' | 'relationship_speed',
+  | 'reaction_style' | 'refusal_style' | 'relationship_speed' | 'group_mode',
   BotOptionGroup
 >
 
@@ -156,6 +165,23 @@ export interface BotWebhook {
   base_url: string
 }
 
+/**
+ * 手动探口（「试一句」）的回显：后端把结果念回同一本账本，这里只摊开给人看。
+ *
+ * action 就是那一行的动作：push=已发出、send=已直投本地会话、
+ * queued=通道现在发不出去所以寄存、skip=平台拒了、missing=人格已不存在。
+ */
+export interface ProactiveProbeResult {
+  conversation_id: string
+  action: 'push' | 'send' | 'queued' | 'skip' | 'missing' | string
+  /** 本来想开口的意愿分（0..1）：自动路径卡不卡就看过不过 0.55。 */
+  desire: number
+  /** 自动路径本来会被哪道闸拦下；能自动开口时为空串。 */
+  gate_reason: string
+  text: string
+  detail: string
+}
+
 /** 头像图库条目：各处头像存自己的 data URL 副本，删图库项不影响已设头像。 */
 export interface BotGalleryItem {
   id: string
@@ -203,6 +229,8 @@ export const botApi = {
   getUserAvatar: () => request<{ avatar: string }>('/bot/user-avatar'),
   setUserAvatar: (avatar: string) => request<{ avatar: string }>('/bot/user-avatar', { method: 'PUT', body: JSON.stringify({ avatar }) }),
   updateConversationDisplay: (id: string, payload: { display_name?: string; display_avatar?: string }) => request<BotConversation>(`/bot/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  /** 试一句：绕开意愿分与频率闸真发一次，但间隔与配额照占（失败文案由前端拼）。 */
+  probeProactive: (conversationId: string) => request<ProactiveProbeResult>('/bot/proactive/probe', { method: 'POST', body: JSON.stringify({ conversation_id: conversationId }) }),
 }
 
 interface BotSseEvent {

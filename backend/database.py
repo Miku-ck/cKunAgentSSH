@@ -95,7 +95,7 @@ _CONN_IDLE_PROBE_SECONDS = 30.0
 # 核心表齐全就跳过那 360 行 DDL。迁移与一次性数据修复不在此短路段内（见 init_db）。
 # 铁律：改动下方 init_db 的 DDL 或 _migrate_db 的任何迁移，必须 _SCHEMA_VERSION += 1，
 # 否则老库永远不会执行新结构（backend/tests/test_startup_critical_path.py 有守卫）。
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 5
 
 # 短路前提的核心表。版本号可能被外部工具清零、或迁移脚本自己写错，仅凭
 # user_version 就认定「结构已就绪」，会把缺表的库永久锁在坏状态 —— 再核一遍实表。
@@ -291,9 +291,17 @@ def init_db(db_path: str) -> None:
                 memory_directive    TEXT NOT NULL DEFAULT '',
                 dialogue_samples    TEXT NOT NULL DEFAULT '',
                 advanced_play       TEXT NOT NULL DEFAULT '',
-                -- P3 主动性开关：默认关（0）。这是「她会主动找你」的总闸，
+                -- 主动性总开关：默认关（0）。这是「她会主动找你」的总闸，
                 -- 打开后由 bot/proactive.py 的意愿函数 + 四重抑制器决定何时开口。
                 proactive_enabled   INTEGER NOT NULL DEFAULT 0,
+                -- 群参与档位：管的是「在多人场合说到什么程度」，与单聊主动性分开。
+                -- mention_only = 只 @ 才答；ambient = @ 后窗口内可接话；
+                -- proactive = 再接每群独立 12h 一次的主动开口。默认最保守档，
+                -- 升级不会让机器人忽然在群里说话（spec 2026-10-30-qq-group-ambient §5）。
+                group_mode          TEXT NOT NULL DEFAULT 'mention_only',
+                -- 群里回复要不要 @ 提问者：1 = 照旧带 @（被动回复，平台加的样式），
+                -- 0 = 改走不带 msg_id 的主动消息通道。默认开，升级不改既有观感。
+                mention_sender      INTEGER NOT NULL DEFAULT 1,
                 is_builtin   INTEGER NOT NULL DEFAULT 0,
                 created_at   TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -780,6 +788,11 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         ("dialogue_samples", "TEXT NOT NULL DEFAULT ''"),
         ("advanced_play", "TEXT NOT NULL DEFAULT ''"),
         ("proactive_enabled", "INTEGER NOT NULL DEFAULT 0"),
+        # 旧库补出来的档位列必须落在最保守档：ALTER 的 DEFAULT 会回填存量行。
+        ("group_mode", "TEXT NOT NULL DEFAULT 'mention_only'"),
+        # 补出来的 @ 开关必须开：升级不能悄悄把群回复换到主动消息通道上，
+        # 那条通道要群主开「主动推送」权限，换过去等于让回复整批失败。
+        ("mention_sender", "INTEGER NOT NULL DEFAULT 1"),
     ):
         if col not in persona_cols:
             conn.execute(f"ALTER TABLE bot_personas ADD COLUMN {col} {ddl}")
@@ -2488,6 +2501,10 @@ def _bot_persona_dict(row: sqlite3.Row) -> dict:
     result["is_builtin"] = int(result.get("is_builtin") or 0)
     result["enable_thinking"] = int(result.get("enable_thinking") or 0)
     result["proactive_enabled"] = int(result.get("proactive_enabled") or 0)
+    result.setdefault("group_mode", "mention_only")
+    # 不能用 `or 1`：关掉的 0 会被当成缺字段读成 1，等于开关拨了没反应。
+    raw_mention = result.get("mention_sender")
+    result["mention_sender"] = 1 if raw_mention is None else int(raw_mention)
     result.setdefault("reply_style", "moderate")
     # expression_dna 以对象形态进出：库里是 JSON 文本，读出来就当 dict 用，
     # 脏数据（手工写坏/半截 JSON）一律退回空对象，宁可少一层约束也不能让陪聊 500。
@@ -2527,6 +2544,8 @@ def create_bot_persona(
     memory_directive: str = "",
     dialogue_samples: str = "",
     advanced_play: str = "",
+    group_mode: str = "mention_only",
+    mention_sender: int = 1,
 ) -> dict:
     persona_id = _new_id()
     now = _now()
@@ -2538,13 +2557,15 @@ def create_bot_persona(
             "reply_style, enable_thinking, expression_dna, reaction_style, "
             "refusal_style, address_user, relationship_speed, "
             "likes_landmines, memory_directive, dialogue_samples, advanced_play, "
+            "group_mode, mention_sender, "
             "created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (persona_id, name, avatar, personality, background, greeting, model_id,
              reply_style, int(bool(enable_thinking)),
              json.dumps(expression_dna or {}, ensure_ascii=False),
              reaction_style, refusal_style, address_user, relationship_speed,
-             likes_landmines, memory_directive, dialogue_samples, advanced_play, now, now),
+             likes_landmines, memory_directive, dialogue_samples, advanced_play,
+             group_mode, int(bool(mention_sender)), now, now),
         )
         conn.commit()
     finally:
@@ -2578,7 +2599,7 @@ def update_bot_persona(persona_id: str, **fields) -> Optional[dict]:
     allowed = {"name", "avatar", "personality", "background", "greeting", "model_id",
                "reply_style", "enable_thinking", "expression_dna", "reaction_style",
                "refusal_style", "address_user", "relationship_speed",
-               "proactive_enabled",
+               "proactive_enabled", "group_mode", "mention_sender",
                *_PERSONA_TEXT_FIELDS}
     data = {key: value for key, value in fields.items() if key in allowed}
     # expression_dna 对外是对象、对内是 JSON 文本：入口统一序列化，
@@ -2589,6 +2610,8 @@ def update_bot_persona(persona_id: str, **fields) -> Optional[dict]:
         data["enable_thinking"] = int(data["enable_thinking"])
     if isinstance(data.get("proactive_enabled"), bool):
         data["proactive_enabled"] = int(data["proactive_enabled"])
+    if isinstance(data.get("mention_sender"), bool):
+        data["mention_sender"] = int(data["mention_sender"])
     if not data:
         return get_bot_persona(persona_id)
     assignments = ", ".join(f"{key} = ?" for key in data)
@@ -2645,6 +2668,8 @@ def copy_bot_persona(persona_id: str) -> Optional[dict]:
         refusal_style=persona.get("refusal_style") or "soft",
         address_user=persona.get("address_user") or "",
         relationship_speed=persona.get("relationship_speed") or "normal",
+        # @ 不 @ 是「说话分寸」不是「开口资格」：与 reply_style 同口径跟着人格走。
+        mention_sender=persona.get("mention_sender", 1),
         **{field: persona.get(field) or "" for field in _PERSONA_TEXT_FIELDS},
     )
 
@@ -3127,13 +3152,17 @@ def last_user_message_at(conversation_id: str) -> Optional[str]:
 
 
 def has_wakeup_period(conversation_id: str, period: int) -> bool:
-    """这一档召回（当天/1-3/3-7/7-30 天）是否已经用掉。"""
+    """这一档召回（当天/1-3/3-7/7-30 天）是否已经用掉。
+
+    子串匹配而不是前缀匹配：手动探口那句的 reason 带着 manual: 前缀，钉在开头
+    就会把「靠试发用掉的召回档」当成没用过，下一轮自动开口再撞同一档被平台拒。
+    """
     conn = _get_conn()
     try:
         row = conn.execute(
             "SELECT 1 FROM bot_proactive_log WHERE conversation_id = ? "
             "AND reason LIKE ? LIMIT 1",
-            (conversation_id, f"wakeup{int(period)}:%"),
+            (conversation_id, f"%wakeup{int(period)}:%"),
         ).fetchone()
     finally:
         conn.close()
@@ -3160,6 +3189,11 @@ def list_proactive_targets() -> "list[dict]":
 
     窗口按官方召回口径取 30 天：7 天会把「7-30 天」那一档整段砍掉；更久没动静的
     会话寄存心里话也没意义，还白撑队列。
+
+    群会话还要再过一道群参与档：只有开到 proactive 的人格才允许在群里自己开口。
+    闸口留在 SQL 里而不是调度循环：这里拦掉就不会白跑一次状态快照与意愿计算。
+    两处 NULL 都要先兜住：LIKE 与 <> 遇上 NULL 结果都是 NULL，NOT 之后会把
+    external_id 还是 NULL 的本地会话整条误删（三值逻辑不报错，只是静默少行）。
     """
     conn = _get_conn()
     try:
@@ -3170,11 +3204,52 @@ def list_proactive_targets() -> "list[dict]":
             "FROM bot_personas p JOIN bot_conversations c ON c.persona_id = p.id "
             "WHERE p.proactive_enabled = 1 AND ("
             "  c.channel = 'local'"
-            "  OR (c.channel = 'qq' AND c.updated_at >= datetime('now', '-30 days')))"
+            "  OR (c.channel = 'qq' AND c.updated_at >= datetime('now', '-30 days'))) "
+            "AND NOT (IFNULL(c.external_id, '') LIKE 'group:%' "
+            "     AND IFNULL(p.group_mode, 'mention_only') <> 'proactive')"
         ).fetchall()
     finally:
         conn.close()
     return [dict(row) for row in rows]
+
+
+def get_proactive_target(conversation_id: str) -> "Optional[dict]":
+    """指定会话的探口行：与 list_proactive_targets 同一形状，但不带任何行为闸。
+
+    手动「试一句」要绕过的正是总闸/群档/30 天窗口这三道「该不该自动开口」的判据，
+    但调度器读的字段必须一字不少 —— 所以复用同一段 SELECT，只把 WHERE 换成按 id 定位。
+    """
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT p.id AS persona_id, p.name, p.relationship_speed, "
+            "c.id AS conversation_id, c.channel, c.channel_id AS bot_channel_id, "
+            "c.external_id "
+            "FROM bot_personas p JOIN bot_conversations c ON c.persona_id = p.id "
+            "WHERE c.id = ?",
+            (conversation_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def latest_proactive_row(conversation_id: str) -> "Optional[dict]":
+    """该会话最近一条主动消息账本行：手动探口的回显就念这一行。
+
+    不给调度器开「自己拼回显结果」的口 —— 屏幕上的那句结论与落库的那一行同源，
+    不会对不上。created_at 只到秒，同秒写入时用 rowid 定序。
+    """
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM bot_proactive_log WHERE conversation_id = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
 
 
 def proactive_sent_today(persona_id: str, day_start: str, *, exclude_groups: bool = False) -> int:

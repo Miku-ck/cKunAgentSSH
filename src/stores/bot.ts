@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { botApi, streamBotChat, type BotConversation, type BotMessage, type BotPersona, type BotRelation } from '@/api/bot'
 import { toFriendlyMessage } from '@/api/base'
+import { probeOutcomeText } from '@/utils/bot-probe'
 
 export const useBotStore = defineStore('bot', () => {
   const personas = ref<BotPersona[]>([])
@@ -30,6 +31,9 @@ export const useBotStore = defineStore('bot', () => {
   const remoteError = ref('')
   /** 「你的头像」（Phase 4）：Bot 管理面板设置，本地会话用户气泡使用；QQ 里你不发言不吃它。 */
   const userAvatar = ref('')
+  /** 「试一句」在途标记与回显：只读侧的手动探口，不进聊天错误条也不碰消息列表。 */
+  const probing = ref(false)
+  const probeNote = ref('')
   let abortController: AbortController | null = null
   let remoteRefreshing = false
   /** 远程列表请求序号：删除会让在途的轮询结果作废，否则刚删的行会被旧快照写回来。 */
@@ -55,12 +59,36 @@ export const useBotStore = defineStore('bot', () => {
     remoteMessages.value = []
     remoteActiveId.value = ''
     remoteError.value = ''
+    probeNote.value = ''
+  }
+
+  /**
+   * 手动探口：绕过意愿分/间隔/静音窗，真发一句到这个会话并回显结果。
+   * 回显只落在会话栏那一小条上：它不是聊天记录（群主动那句本来就不落本地库），
+   * 失败也不该把「回复生成失败」的错误条弹出来——这里一句回复都没生成。
+   */
+  async function probeProactive(id: string) {
+    const provider = channel.value
+    if (!id || probing.value) return
+    probing.value = true
+    probeNote.value = '正在生成并发送…'
+    try {
+      const result = await botApi.probeProactive(id)
+      // 在途时切了渠道：旧渠道的结果不该写进新 tab 的回显条
+      if (channel.value === provider) probeNote.value = probeOutcomeText(result)
+    } catch (e) {
+      if (channel.value === provider) probeNote.value = toFriendlyMessage(e, '试一句没成功')
+    } finally {
+      probing.value = false
+    }
   }
 
   async function selectRemoteConversation(id: string) {
     const provider = channel.value
     remoteActiveId.value = id
     remoteMessages.value = []
+    // 上一条会话的探口结论对它自己才成立：不换会话就会把旧群的原因顶在新群头上
+    probeNote.value = ''
     try {
       const rows = await botApi.getMessages(id)
       if (remoteActiveId.value !== id || channel.value !== provider) return
@@ -257,8 +285,9 @@ export const useBotStore = defineStore('bot', () => {
     channel, isRemote, remoteChannelLabel,
     remoteConversations, remoteMessages, remoteActiveId, remoteError, remoteActiveConversation,
     userAvatar,
+    probing, probeNote,
     init, selectPersona, selectConversation, createConversation, deleteConversation,
     sendMessage, stopGenerating, selectChannel, selectRemoteConversation, refreshRemote,
-    deleteRemoteConversation, updateConversationDisplay, loadUserAvatar,
+    deleteRemoteConversation, updateConversationDisplay, loadUserAvatar, probeProactive,
   }
 })

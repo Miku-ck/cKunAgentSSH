@@ -332,6 +332,86 @@ def test_provider_fallback_text_is_per_kind():
     assert provider.reply_window_s == 150
 
 
+# ── 群里不 @ 人：换发送通道而不是换文案 ──
+
+
+@pytest.mark.asyncio
+async def test_group_inbound_carries_a_plain_lane_but_private_does_not():
+    adapter, received = collect_adapter()
+    await adapter.handle_group(FakeMessage("event-1", "在吗", group_openid="group-1"))
+    await adapter.handle_c2c(FakeMessage("event-2", "私下说", user_openid="user-9"))
+
+    assert received[0].send_plain is not None, "群回复才有「不 @」这条通道"
+    assert received[1].send_plain is None, "单聊本来就不 @ 人"
+
+
+@pytest.mark.asyncio
+async def test_plain_lane_posts_the_group_message_without_a_msg_id():
+    adapter, received = collect_adapter()
+    message = FakeMessage("event-1", "在吗", group_openid="group-1")
+    await adapter.handle_group(message)
+
+    await received[0].send_plain("在的")
+
+    route, payload = message.http.calls[0]
+    assert route.method == "POST"
+    assert route.path == "/v2/groups/{group_openid}/messages"
+    assert route.parameters == {"group_openid": "group-1"}
+    # msg_id 一进请求体就是「回复某人」，那个 @ 是平台加的：这条通道必须完全不碰它
+    assert payload == {"msg_type": 0, "content": "在的"}
+    assert message.replies == [], "没走被动通道"
+
+
+@pytest.mark.asyncio
+async def test_plain_lane_posts_a_sticker_media_without_a_msg_id():
+    adapter, received = collect_adapter()
+    message = FakeMessage("event-1", "在吗", group_openid="group-1")
+    await adapter.handle_group(message)
+
+    await received[0].send_plain("[表情:开心]")
+
+    assert message.http.calls[0][0].path == "/v2/groups/{group_openid}/files"
+    assert message.http.calls[1][1] == {"msg_type": 7, "media": {"file_info": "media-1"}}
+    assert message.replies == []
+
+
+@pytest.mark.asyncio
+async def test_plain_lane_falls_back_to_the_passive_reply_without_permission():
+    """群主没开「主动推送」：宁可这句带着 @，也不能让它消失。"""
+    adapter, received = collect_adapter()
+    message = FakeMessage("event-1", "在吗", group_openid="group-1")
+    message.http.files = ForbiddenError("403 主动消息无权限")
+    await adapter.handle_group(message)
+
+    await received[0].send_plain("在的")
+
+    assert message.replies == ["在的"]
+    assert message.seqs == [1]
+
+
+@pytest.mark.asyncio
+async def test_plain_lane_does_not_retry_when_the_network_is_uncertain():
+    """超时可能已经发出去了：再回落一次就是群里同样的两句话。"""
+    adapter, received = collect_adapter()
+    message = FakeMessage("event-1", "在吗", group_openid="group-1")
+    message.http.files = asyncio.TimeoutError()
+    await adapter.handle_group(message)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await received[0].send_plain("在的")
+
+    assert message.replies == []
+
+
+def test_qq_outbound_never_carries_at_markup():
+    """模型照抄入站原文里的 @ 标记时，纯文本通道会把尖括号原样显示：发送前剔掉。"""
+    from bot.qq_manager import QQProvider
+
+    provider = QQProvider()
+    assert provider.outbound_parts('好呀<at id="u1"></at> 明天见') == ["好呀 明天见"]
+    assert provider.outbound_parts("<@!999> 我在") == ["我在"]
+
+
 def test_provider_start_creates_an_independent_connection():
     """provider 每次 start 交出一个新句柄：这是「多个机器人」的最低要求。"""
     from bot.qq_manager import QQProvider

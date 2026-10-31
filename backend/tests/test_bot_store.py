@@ -100,6 +100,46 @@ def test_migrate_db_adds_expansion_columns_to_legacy_db(base_db):
     assert db.get_bot_persona(persona["id"])["personality"] == "温和"
 
 
+def test_migrate_db_backfills_the_group_mode_column(base_db):
+    """旧库补出来的档位列必须落在最保守档：升级不能让人格忽然在群里开口。"""
+    persona = db.create_bot_persona(name="旧人格")
+    db.update_bot_persona(persona["id"], group_mode="proactive")
+    conn = db._get_conn()
+    try:
+        conn.execute("ALTER TABLE bot_personas DROP COLUMN group_mode")
+        conn.commit()
+    finally:
+        conn.close()
+
+    db._migrate_db(db._get_conn())
+    assert db.get_bot_persona(persona["id"])["group_mode"] == "mention_only"
+
+
+def test_migrate_db_backfills_mention_sender_as_on(base_db):
+    """旧库补出来的 @ 开关必须开：升级不能悄悄把回复换到主动消息通道。"""
+    persona = db.create_bot_persona(name="旧人格")
+    db.update_bot_persona(persona["id"], mention_sender=False)
+    conn = db._get_conn()
+    try:
+        conn.execute("ALTER TABLE bot_personas DROP COLUMN mention_sender")
+        conn.commit()
+    finally:
+        conn.close()
+
+    db._migrate_db(db._get_conn())
+    assert db.get_bot_persona(persona["id"])["mention_sender"] == 1
+
+
+def test_conversation_snapshot_carries_the_mention_preference(base_db):
+    """入站管线读会话快照决定走哪条发送通道：这个字段必须进快照。"""
+    persona = db.create_bot_persona(name="小暖")
+    conv = db.create_bot_conversation(
+        persona_id=persona["id"], channel="qq", external_id="group:g1"
+    )
+    db.update_bot_persona(persona["id"], mention_sender=False)
+    assert db.get_bot_conversation(conv["id"])["persona"]["mention_sender"] == 0
+
+
 def test_update_persona_revises_open_conversation_snapshots(base_db):
     """人格是「当前怎么说话」而不是开会话那一刻的存档：改完正在聊的会话也要跟着变。"""
     persona = db.create_bot_persona(name="小暖", personality="温和", background="靠海小城")

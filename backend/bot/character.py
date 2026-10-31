@@ -13,6 +13,8 @@
 
 import re
 
+from bot.group_ambient import GROUP_MODES
+
 # ── 诚实宪章 ──
 # 每条都针对一个具体的失真行为，不写「要真诚」这种没人能执行的形容词。
 
@@ -187,6 +189,14 @@ def stage_guide(stage: str) -> str:
     return STAGE_GUIDE.get(stage, STAGE_GUIDE["陌生"])
 
 
+# 群参与档的文案：前端只拿 label 渲染，不再有第二份。
+_GROUP_MODE_LABELS = {
+    "mention_only": "只 @ 才答",
+    "ambient": "@ 后可接话",
+    "proactive": "接话 + 主动开口",
+}
+
+
 def persona_options() -> dict:
     """人格编辑器控件的取值字典（前后端唯一事实源）。"""
     return {
@@ -214,6 +224,14 @@ def persona_options() -> dict:
                 {"value": "slow", "label": "慢热"},
                 {"value": "normal", "label": "正常"},
                 {"value": "fast", "label": "自来熟"},
+            ],
+        },
+        # 档位名与判定的事实源在 group_ambient.GROUP_MODES，这里只贴文案，
+        # 免得字典与判定各自长出一份。
+        "group_mode": {
+            "label": "群参与",
+            "options": [
+                {"value": mode, "label": _GROUP_MODE_LABELS[mode]} for mode in GROUP_MODES
             ],
         },
     }

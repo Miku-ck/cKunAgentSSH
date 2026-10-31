@@ -184,6 +184,9 @@ class QQInboundAdapter:
         event_id = message.event_id or message.id
         if not content or not event_id:
             return
+        # 「不 @」通道只在群会话挂：单聊本来就不 @ 人，挂上它等于白白
+        # 把回复换到主动消息那条限频、要权限的通道上。
+        plain_seq = count(1) if conversation_key.startswith("group:") else None
         await self.on_inbound(
             InboundMessage(
                 channel_id=self.channel_id,
@@ -194,6 +197,11 @@ class QQInboundAdapter:
                 # 序号按事件独立：QQ 用 (msg_id, msg_seq) 去重，同一条消息的多次回复
                 # 必须各占一个序号，否则第 2 段起被 40054005「消息被去重」静默丢弃。
                 send=partial(self._reply, message, count(1)),
+                send_plain=(
+                    partial(self._reply_plain, message, plain_seq)
+                    if plain_seq is not None
+                    else None
+                ),
                 ambient=ambient,
             )
         )
@@ -216,8 +224,8 @@ class QQInboundAdapter:
         await message.reply(content=part, msg_type=0, msg_seq=next(seq))
 
     @staticmethod
-    async def _reply_sticker(message, key: str, seq) -> None:
-        """QQ 富媒体：先上传拿 file_info，再用 msg_type=7 发出去。
+    async def _upload_sticker(message, key: str) -> dict:
+        """表情包上传拿 file_info：两条群发送通道共用这一段。
 
         botpy 1.2.1 的 post_group_file 只透传 url，本机没有公网图床，
         所以直接走 SDK 的 HTTP 通道带 file_data（base64），鉴权头由 SDK 补。
@@ -244,5 +252,58 @@ class QQInboundAdapter:
                 "/v2/users/{openid}/files",
                 openid=message.author.user_openid,
             )
-        media = await message._api._http.request(route, json=payload)
+        return await message._api._http.request(route, json=payload)
+
+    @staticmethod
+    async def _reply_sticker(message, key: str, seq) -> None:
+        """被动回复的富媒体：先上传拿 file_info，再用 msg_type=7 发出去。"""
+        media = await QQInboundAdapter._upload_sticker(message, key)
         await message.reply(msg_type=7, media=media, msg_seq=next(seq))
+
+    @classmethod
+    async def _reply_plain(cls, message, seq, part: str) -> None:
+        """群里不 @ 人那句：走不带 msg_id 的群消息接口。
+
+        msg_id 一进请求体就是「回复某人」，那个 @ 是平台加的样式（接口层没有
+        「不要 @」这个参数）：想不 @ 就只能换通道，把整句改走主动消息。
+        代价是这句要群主开「主动推送消息能力」，被拒时按失败性质分流：
+        权限/参数错 = 什么都没发出去，回落被动回复（宁可带 @ 也不让这句消失）；
+        网络不确定 = 可能已经发过，再回落就是群里同样的两句，所以不回落。
+        """
+        key = sticker_mod.bubble_key(part)
+        try:
+            media = await cls._upload_sticker(message, key) if key else None
+        except Exception as exc:  # noqa: BLE001 —— 上传没成功 = 什么都没发，回落不重复
+            logger.warning("QQ 不 @ 通道素材上传失败，回落被动回复: %s", exc)
+            await cls._reply(message, seq, part)
+            return
+        payload = (
+            {"msg_type": 7, "media": media}
+            if media is not None
+            else {"msg_type": 0, "content": part}
+        )
+        try:
+            await cls._post_group_plain(message, payload)
+            return
+        except Exception as exc:  # noqa: BLE001 —— 定性交给分类器，只有可确定的失败才回落
+            kind, detail = classify_proactive_error(exc)
+            if kind not in ("permission", "invalid"):
+                raise
+            logger.info("QQ 不 @ 通道被平台拒（%s）：%s，回落被动回复", kind, detail)
+        await cls._reply(message, seq, part)
+
+    @staticmethod
+    async def _post_group_plain(message, payload: dict) -> None:
+        """最小 payload 直调群消息接口：payload 里永远没有 msg_id。
+
+        不用 SDK 的 post_group_message：1.2.1 的 `payload = locals()` 会把 msg_id
+        等可选参数以 null 一并塞进 JSON，而「带 msg_id 的被动回复」正是这里要避免的。
+        """
+        from botpy.api import Route
+
+        route = Route(
+            "POST",
+            "/v2/groups/{group_openid}/messages",
+            group_openid=message.group_openid,
+        )
+        await message._api._http.request(route, json=payload)

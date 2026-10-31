@@ -57,6 +57,9 @@ class InboundMessage:
     # 群聊环境消息：只为接一句话而收进来，不落用户消息、不抽记忆、不记关系
     # （spec 2026-10-30-qq-group-ambient §2）。
     ambient: bool = False
+    # 「不 @」那条通道：不带 msg_id 的主动消息。只有群会话才有（单聊本来
+    # 就不 @ 人），平台不让主动发时由适配层自己回落被动回复。
+    send_plain: "Callable[[str], Awaitable[None]] | None" = None
 
 
 class ConnectionHandle(Protocol):

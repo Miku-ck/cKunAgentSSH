@@ -5,6 +5,8 @@
 
 跨线程：这张表是进程内单例，而每个机器人各有一条 `ckunbot-qq-*` 收包线程，
 多个机器人的事件会落进同一个 dict（key 带 channel_id），所以读写都要过锁。
+
+档位判定（`ambient_allowed`）只是纯函数：取人格字段由入站管线做，这里不碰库。
 """
 
 from __future__ import annotations
@@ -24,6 +26,20 @@ CONTEXT_TTL_MIN = 10.0
 CONTEXT_MAX_LINES = 20
 # 重投去重只看最近几条事件：同一条消息的重复投递只会紧邻发生，不需要长期台账。
 EVENT_HISTORY = 64
+
+# 群参与档位（人格字段，库里一列）：从最安静到最吵排序，UI 平铺顺序也按这一份。
+GROUP_MODES = ("mention_only", "ambient", "proactive")
+# 允许不 @ 就接话的档位。proactive 包含 ambient：开到最高档自然也能接。
+AMBIENT_MODES = ("ambient", "proactive")
+
+
+def ambient_allowed(group_mode) -> bool:
+    """这个人格在群里能不能不 @ 就开口。
+
+    默认不接：未知值/空值一律按最保守档读 —— 这里出错多说的话，用户听不到任何
+    报错，只能看到机器人忽然在群里插嘴。
+    """
+    return (group_mode or "") in AMBIENT_MODES
 
 
 @dataclass

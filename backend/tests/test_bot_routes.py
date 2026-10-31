@@ -266,11 +266,116 @@ def test_persona_rejects_unknown_style_but_sanitizes_dna(client):
     assert persona["expression_dna"]["emoji"] == "medium"
 
 
+def test_persona_group_mode_defaults_quietest_and_rejects_unknown_values(client):
+    """群参与档位是行为开关：默认最保守，乱值进不来。"""
+    persona = create_persona(client)
+    assert persona["group_mode"] == "mention_only", "新建人格不能在群里插话"
+
+    loud = create_persona(client, group_mode="ambient")
+    assert loud["group_mode"] == "ambient"
+
+    patched = client.patch(
+        f"/api/bot/personas/{persona['id']}", json={"group_mode": "proactive"}
+    ).json()
+    assert patched["group_mode"] == "proactive"
+    # 局部更新不得把没传的主动性总闸冲掉
+    assert patched["proactive_enabled"] == persona["proactive_enabled"]
+
+    bad = client.patch(
+        f"/api/bot/personas/{persona['id']}", json={"group_mode": "always"}
+    )
+    assert bad.status_code == 422
+
+
+def test_persona_options_lists_the_group_modes_in_order(client):
+    options = client.get("/api/bot/persona-options").json()["group_mode"]
+    assert [item["value"] for item in options["options"]] == [
+        "mention_only", "ambient", "proactive"
+    ]
+    assert all(item["label"] for item in options["options"]), "文案不能空"
+
+
+def test_copy_persona_does_not_carry_the_group_mode_over(client):
+    """副本不继承群参与档：与主动性总闸同口径，不拿复制多开一张嘴。"""
+    persona = create_persona(client, group_mode="proactive")
+    copy = client.post(f"/api/bot/personas/{persona['id']}/copy").json()
+    assert copy["group_mode"] == "mention_only"
+
+
 def test_copy_persona_keeps_voice_settings(client):
     persona = create_persona(client, expression_dna={"sentence": "long"}, address_user="小林")
     copy = client.post(f"/api/bot/personas/{persona['id']}/copy").json()
     assert copy["expression_dna"]["sentence"] == "long"
     assert copy["address_user"] == "小林"
+
+
+def test_persona_mention_switch_defaults_on_and_survives_partial_update(client):
+    """群回复 @ 人不 @ 是偏好，不是闸：默认维持现状（照旧 @）。"""
+    persona = create_persona(client)
+    assert persona["mention_sender"] == 1
+
+    patched = client.patch(
+        f"/api/bot/personas/{persona['id']}", json={"mention_sender": False}
+    ).json()
+    assert patched["mention_sender"] == 0
+    # 局部更新不能把另一个行为开关冲掉
+    assert patched["group_mode"] == persona["group_mode"]
+
+    renamed = client.patch(f"/api/bot/personas/{persona['id']}", json={"name": "小暖二号"}).json()
+    assert renamed["mention_sender"] == 0, "没传就该保持原值"
+
+    loud = client.post(
+        "/api/bot/personas", json={"name": "乱值", "mention_sender": "sometimes"}
+    )
+    assert loud.status_code == 422
+
+
+def test_copy_persona_carries_the_mention_preference(client):
+    """副本不继承「开口类」开关，但 @ 不 @ 是说话分寸：跟着人格走。"""
+    persona = create_persona(client, mention_sender=False)
+    copy = client.post(f"/api/bot/personas/{persona['id']}/copy").json()
+    assert copy["mention_sender"] == 0
+
+
+def test_probe_endpoint_runs_the_scheduler_for_the_named_conversation(client, monkeypatch):
+    from bot.proactive import ProactiveScheduler
+
+    persona = create_persona(client)
+    conv = db.create_bot_conversation(
+        persona_id=persona["id"], channel="qq", external_id="group:g1"
+    )
+    seen = []
+
+    async def fake_probe(_self, target):
+        seen.append(target["conversation_id"])
+        return {
+            "conversation_id": target["conversation_id"], "action": "push",
+            "desire": 0.2, "gate_reason": "desire 0.20 < 0.55", "text": "在吗", "detail": "",
+        }
+
+    monkeypatch.setattr(ProactiveScheduler, "probe", fake_probe)
+    response = client.post(
+        "/api/bot/proactive/probe", json={"conversation_id": conv["id"]}
+    )
+
+    assert response.status_code == 200, response.text
+    assert seen == [conv["id"]]
+    assert response.json()["action"] == "push"
+
+
+def test_probe_endpoint_rejects_an_unknown_or_unsupported_conversation(client):
+    assert client.post(
+        "/api/bot/proactive/probe", json={"conversation_id": "nope"}
+    ).status_code == 404
+    persona = create_persona(client)
+    # 微信没有主动发送通道：当场说不支持，比让调度器默默寄存一句好
+    wechat = db.create_bot_conversation(
+        persona_id=persona["id"], channel="wechat", external_id="wx:o1"
+    )
+    assert client.post(
+        "/api/bot/proactive/probe", json={"conversation_id": wechat["id"]}
+    ).status_code == 409
+    assert client.post("/api/bot/proactive/probe", json={"conversation_id": ""}).status_code == 422
 
 
 def test_relations_are_listed_per_persona_and_start_unknown(client):

@@ -72,12 +72,13 @@ async def test_delivery_waits_between_parts_but_not_before_the_first(monkeypatch
 
     class Inbound:
         event_id = "e1"
+        send_plain = None
 
         async def send(self, part: str) -> None:
             sent.append(part)
 
     pipeline = pipeline_mod.InboundPipeline(None, sleep=fake_sleep)
-    await pipeline._deliver(Inbound(), Provider(), "c1", "随便")
+    await pipeline._deliver(Inbound(), Provider(), {"id": "c1"}, "随便")
 
     assert sent == ["在的", "你吃了吗", "我在楼下"]
     assert len(sleeps) == 2
