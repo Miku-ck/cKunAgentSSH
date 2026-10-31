@@ -1,7 +1,10 @@
 <template>
   <!-- 节点页签：只读。集群级资源，不受命名空间选择器影响 -->
   <div class="list">
-    <div v-if="error" class="list-empty err-hint">节点取数失败：{{ error.message }}</div>
+    <div v-if="error" class="list-empty err-hint">
+      <div>节点取数失败：{{ error.message }}</div>
+      <div v-if="error.hint" class="err-hint-hint">{{ error.hint }}</div>
+    </div>
     <table v-else-if="rows.length" class="ptable clickable">
       <colgroup>
         <col style="width:16%"><col style="width:12%"><col style="width:16%"><col style="width:14%">
@@ -10,7 +13,7 @@
       <thead>
         <tr>
           <th>名称</th><th>状态</th><th>角色</th><th>内部 IP</th>
-          <th>版本</th><th>CPU</th><th>内存</th><th>就绪</th>
+          <th>版本</th><th>CPU</th><th>内存</th><th>Pod / AGE</th>
         </tr>
       </thead>
       <tbody>

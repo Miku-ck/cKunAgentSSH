@@ -5,8 +5,8 @@
  * 全仓只此一处）之下；详情与缩放弹窗 Teleport 到 body、不在 .k8s-view 内，它们自带的部分
  * 收在 `.k8s-dt` / `.k8s-scale` 下。
  *
- * 表格骨架 `.ptable`、弹窗骨架 `.dt-overlay` / `.dt-dialog` / `.dp-head` / `.kv` / `.badge` /
- * `.logs` 由 docker-modal.css 提供 —— 那是全仓唯一一份，K8s 页复用而不是抄第二份。
+ * 表格骨架 `.ptable`、弹窗骨架 `.dt-overlay` / `.dt-dialog` / `.dp-head` / `.dt-tabs` / `.st-dot` /
+ * `.kv` / `.badge` / `.logs` 由 docker-modal.css 提供 —— 那是全仓唯一一份，K8s 页复用而不是抄第二份。
  * 页内布局（page-head / toolbar / seg / statusbar）留在 K8sView.vue 的 scoped 样式里，
  * 因为只有页面壳自己用；这里的都是页签子组件与弹窗要共享的。
  *
@@ -18,6 +18,8 @@
 .k8s-view .list-empty { padding: var(--spacing-24) var(--spacing-16); color: var(--text-tertiary); font-size: 0.9231rem; text-align: center; }
 /* 某一类资源取数失败：不走空态，如实标红上浮（用随主题 status token） */
 .k8s-view .list-empty.err-hint { color: var(--status-error-text); }
+/* 第二行给「怎么办」：与页顶错误带同一读法（结论 → 建议 → 现场），但弱一档 */
+.k8s-view .list-empty .err-hint-hint { margin-top: var(--spacing-6); color: var(--text-secondary); font-size: 0.8462rem; }
 
 /* ── 等宽与弱化 ── */
 .k8s-view .mono { font-family: var(--font-mono); }
@@ -54,7 +56,7 @@
 .k8s-view .c-acts .act-scale:hover { color: var(--accent-text); }
 .k8s-view .c-acts .act-del:hover { color: var(--status-error-text); }
 
-.k8s-view .spin { animation: k8s-rot .8s linear infinite; }
+.k8s-view .spin { width: 16px; height: 16px; flex-shrink: 0; animation: k8s-rot .8s linear infinite; }
 @keyframes k8s-rot { to { transform: rotate(360deg); } }
 
 /* 可点击行：整行 hover + 选中态。选中条放首单元格左边框（td 上的 inset shadow 会沿列区断裂） */
@@ -81,9 +83,11 @@
   display: flex; align-items: center; gap: var(--spacing-12); flex-shrink: 0;
   padding: var(--spacing-6) 18px; border-top: 1px solid var(--divider-primary);
   font-size: 0.8462rem; color: var(--text-tertiary);
+  overflow: hidden;
 }
-.k8s-dt .k8s-dt-foot .sb-right { margin-left: auto; }
-.k8s-dt .dt-tab:disabled { opacity: .4; cursor: default; }
+/* 页脚左侧是 类型/名称，长名字截断；右侧取数时间固定可见 */
+.k8s-dt .k8s-dt-foot > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k8s-dt .k8s-dt-foot .sb-right { margin-left: auto; flex-shrink: 0; }
 
 /* ── 缩放弹窗 ── */
 .k8s-scale .field { display: flex; align-items: center; gap: var(--spacing-10); margin: var(--spacing-8) 0; }

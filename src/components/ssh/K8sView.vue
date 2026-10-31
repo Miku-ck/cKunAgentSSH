@@ -6,7 +6,7 @@
         <div class="conn-dot" :class="targetSession ? 'online' : 'offline'"></div>
         <span class="conn-name">K8s</span>
         <span v-if="targetHost" class="conn-host mono" :title="targetHost">{{ targetHost }}</span>
-        <span v-if="contextName" class="ctx-chip mono" title="当前 context（本页只展示不切换）">{{ contextName }}</span>
+        <span v-if="contextName" class="ctx-chip mono" :title="`当前 context：${contextName}（本页只展示不切换）`">{{ contextName }}</span>
       </div>
 
       <select v-if="remoteSessions.length > 1" v-model="targetId" class="host-sel" aria-label="切换目标主机">
@@ -14,9 +14,10 @@
       </select>
 
       <span class="head-spacer"></span>
+      <!-- 按钮单枚随态切换，与 Docker / 监控仪表盘同一口径 -->
       <div class="conn-right">
-        <button v-if="targetSession" class="btn" @click="disconnectTarget">断开</button>
-        <button class="btn btn-primary" @click="showConnPicker = true">连接远程</button>
+        <button v-if="targetSession" class="btn btn-danger" @click="disconnectTarget">断开远程</button>
+        <button v-else class="btn btn-primary" @click="showConnPicker = true">连接远程</button>
       </div>
     </div>
 
@@ -44,12 +45,13 @@
         </div>
       </div>
 
-      <div v-if="hostError" class="err-band" :class="{ quiet: notDetected }" :role="notDetected ? 'status' : 'alert'">
+      <div v-if="hostCopy" class="err-band" :class="{ quiet: notDetected }" :role="notDetected ? 'status' : 'alert'">
         <div class="eb-text">
-          <div class="eb-msg">{{ notDetected ? `未检测到 k8s：${hostError.message}` : hostError.message }}</div>
-          <div v-if="hostError.hint" class="eb-hint">{{ hostError.hint }}</div>
+          <div class="eb-msg">{{ hostCopy.title }}</div>
+          <div v-if="hostCopy.hint" class="eb-hint">{{ hostCopy.hint }}</div>
+          <div v-if="probeNote" class="eb-note">{{ probeNote }}</div>
         </div>
-        <button v-if="hostError.retryable" class="btn btn-sm" @click="refresh">重试</button>
+        <button v-if="hostError?.retryable" class="btn btn-sm" @click="refresh">重试</button>
       </div>
       <div v-else-if="loading && !currentRows.length" class="load-band">
         <svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
@@ -100,7 +102,7 @@
       <!-- 状态栏：计数跟着当前 tab 走，永远报「这一屏是什么」。
            取数失败时不许报 0 —— 「0 个负载」和「没读到」是两回事，后者读成前者就是谎报空集。 -->
       <div class="statusbar">
-        <span>{{ targetName }}</span>
+        <span class="sb-name" :title="targetName">{{ targetName }}</span>
         <span>远程 · SSH · 全命名空间</span>
         <span v-if="activeListFailed">{{ tabLabel }} <span class="bad">读取失败</span></span>
         <template v-else>
@@ -154,13 +156,14 @@ import {
   ACTION_CONSEQUENCE,
   deleteJobCmd, deletePodCmd, rolloutRestartCmd, scaleCmd,
   isAbnormalPod, parseEvents, parseNodes, parsePods, parseServices,
-  parseTopNodes, parseWorkloads, isHostLevelError, mergeNodeUsage, isNotDetectedState,
+  parseTopNodes, parseWorkloads, isHostLevelError, mergeNodeUsage, isNotDetectedState, hostErrorCopy,
+  envProbeNote,
   workloadRowKey, podRowKey, serviceRowKey, nodeRowKey,
   detailOfNode, detailOfPod, detailOfService, detailOfWorkload,
   type DetailTarget,
   type EventRow, type K8sError, type NodeRow, type PodRow, type ServiceRow, type WorkloadRow,
 } from '@/stores/k8s-core'
-import { provideK8sHost, readK8sContext, TABS, type ListPin, type TabKey } from './k8s/context'
+import { provideK8sHost, readK8sContext, probeK8sEnv, TABS, type ListPin, type TabKey } from './k8s/context'
 import IconK8s from '@/components/icons/IconK8s.vue'
 import DockerConnectionPicker from './docker/DockerConnectionPicker.vue'
 import K8sNodesTab from './k8s/K8sNodesTab.vue'
@@ -180,7 +183,7 @@ const { confirm } = useConfirm()
 const {
   sshStore, remoteSessions, targetId, targetName, targetHost, targetSession,
   showConnPicker, connecting, pendingConnId, handleConnect, disconnectTarget,
-  busy, tab, showNormalEvents, truncated, lastSync, contextName,
+  busy, tab, showNormalEvents, truncated, lastSync, contextName, envProbe,
 } = host
 
 const query = ref('')
@@ -265,6 +268,10 @@ const LIST_ERRS = computed<(K8sError | undefined)[]>(() => [
 const hostError = computed<K8sError | undefined>(() => LIST_ERRS.value.find(e => isHostLevelError(e?.code)))
 /** 这台主机压根没有 k8s（没装 / 没配 / 说不出 context）：页顶报状态，不报故障 */
 const notDetected = computed(() => isNotDetectedState(hostError.value, contextName.value))
+/** 页顶那两行由 k8s-core 定案（「回包是网页」要看 context 才说得清） */
+const hostCopy = computed(() => hostErrorCopy(hostError.value, contextName.value))
+/** 未检测到时补一句现场（哪个账号、HOME 在哪、KUBECONFIG 指着哪） */
+const probeNote = computed(() => (notDetected.value ? envProbeNote(envProbe.value) : ''))
 /** 当前这一屏自己读没读到：读失败时状态栏不许报 0，那会被看成「这里真的没有资源」 */
 const ACTIVE_LISTS = {
   nodes: nodeList, workloads: workloadList, pods: podList, services: serviceList, events: eventList,
@@ -303,20 +310,32 @@ async function enrichNodeUsage(id: string, pin: ListPin): Promise<void> {
 
 async function loadAll(): Promise<void> {
   const id = targetId.value
-  if (!id) return
   const gen = ++loadGen
+  if (!id) {
+    // 刚断开：后面不会再有哪一轮替这一轮关灯，自己复位
+    loading.value = false
+    return
+  }
   loading.value = true
   truncated.value = false
-  // context 单独先取：它是本地命令（不碰网络），而页顶那句要靠「说不说得出 context」
-  // 决定报「未检测到 k8s」还是「集群出错」。塞进并行里会出现列表先失败、context 后落定
-  // 的窗口，同一屏换两次措辞。
-  await readK8sContext(host)
-  if (gen !== loadGen || targetId.value !== id) return
-  await Promise.allSettled([
-    workloadList.reload(), podList.reload(), serviceList.reload(), eventList.reload(), nodeList.reload(),
-  ])
-  if (gen !== loadGen || targetId.value !== id) return
-  loading.value = false
+  envProbe.value = null
+  try {
+    // context 单独先取：它是本地命令（不碰网络），而页顶那句要靠「说不说得出 context」
+    // 决定报「未检测到 k8s」还是「集群出错」。塞进并行里会出现列表先失败、context 后落定
+    // 的窗口，同一屏换两次措辞。
+    await readK8sContext(host)
+    if (gen !== loadGen) return
+    await Promise.allSettled([
+      workloadList.reload(), podList.reload(), serviceList.reload(), eventList.reload(), nodeList.reload(),
+    ])
+    // 失败后单独补一次现场：换账号重试、KUBECONFIG 指错、exec PATH 缺 kubectl，
+    // 这三种在用户自己的终端里都看不出来。
+    if (gen === loadGen && notDetected.value) await probeK8sEnv(host)
+  } finally {
+    // 只有最新一代关灯：切主机 / 卸载时这一轮提前返回，也不能把 loading 留在 true，
+    // 否则页面永远停在「正在经 SSH 会话执行 kubectl …」
+    if (gen === loadGen) loading.value = false
+  }
 }
 
 function refresh(): void { void loadAll() }
@@ -438,12 +457,12 @@ watch(() => props.active, (a) => {
   flex-shrink: 0; height: var(--page-head-h); padding: 0 var(--spacing-16);
   border-bottom: 1px solid var(--border-subtle);
 }
-.conn-left { display: flex; align-items: center; gap: var(--spacing-8); min-width: 0; }
+.conn-left { display: flex; align-items: center; gap: var(--spacing-8); min-width: 0; overflow: hidden; }
 .conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary); }
 .conn-dot.online { background: var(--status-success-text); }
 .conn-dot.offline { background: var(--text-tertiary); }
 .conn-name { font-size: var(--page-title-size); font-weight: 600; color: var(--text-primary); }
-.conn-host { font-size: 0.9231rem; font-weight: 400; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-host { font-size: 0.9231rem; font-weight: 400; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .head-spacer { flex: 1; }
 .conn-right { display: flex; align-items: center; gap: var(--spacing-10); flex-shrink: 0; }
 .host-sel {
@@ -452,9 +471,11 @@ watch(() => props.active, (a) => {
   color: var(--text-primary); font-size: 0.9231rem; font-family: inherit; cursor: pointer;
 }
 .host-sel option { background: var(--bg-elevated); color: var(--text-primary); }
+/* context 名可能很长（gke_项目_区域_集群）：让它先截断，别把切主机和断开按钮挤出页面 */
 .ctx-chip {
   font-size: 0.7692rem; color: var(--text-tertiary); padding: 1px var(--spacing-6);
   border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-input);
+  max-width: 220px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 /* 工具条 */
@@ -471,6 +492,8 @@ watch(() => props.active, (a) => {
 }
 .seg-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 .seg-btn.on { background: var(--bg-elevated); color: var(--accent-text); }
+/* 分段控件是纯按钮：键盘焦点用内嵌柔光，不画硬描边 */
+.seg-btn:focus-visible { outline: none; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 55%, transparent); }
 .search {
   display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 var(--spacing-10); width: 210px;
   background: var(--bg-input); border: 1px solid var(--border-input); border-radius: var(--radius-md); color: var(--text-tertiary);
@@ -482,7 +505,6 @@ watch(() => props.active, (a) => {
 
 .body { flex: 1; display: flex; min-height: 0; }
 .list-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.btn:disabled { opacity: .45; cursor: default; }
 
 /* 取数错误带 */
 .err-band {
@@ -492,11 +514,13 @@ watch(() => props.active, (a) => {
   border: 1px solid color-mix(in srgb, var(--status-error-text) 28%, transparent);
   border-radius: var(--radius-md);
 }
-.err-band .eb-text { flex: 1; min-width: 0; }
+.err-band .eb-text { flex: 1; min-width: 0; word-break: break-word; }
 /* 「未检测到 k8s」是状态不是故障：一台没装 k8s 的机器不该看着像出了事 */
 .err-band.quiet { background: var(--bg-elevated); border-color: var(--divider-primary); }
 .err-band .eb-msg { font-size: 1rem; color: var(--text-primary); line-height: 1.5; }
 .err-band .eb-hint { font-size: 0.9231rem; color: var(--text-secondary); margin-top: var(--spacing-4); line-height: 1.5; }
+/* 现场事实（哪个账号 / HOME / KUBECONFIG）排在建议之后、再弱一档，不和建议抢读 */
+.err-band .eb-note { font-size: 0.8462rem; color: var(--text-tertiary); margin-top: var(--spacing-2); line-height: 1.5; }
 .load-band {
   display: flex; align-items: center; justify-content: center; gap: var(--spacing-8); flex: 1;
   color: var(--text-tertiary); font-size: 0.9231rem;
@@ -506,7 +530,11 @@ watch(() => props.active, (a) => {
 .statusbar {
   height: 24px; flex-shrink: 0; display: flex; align-items: center; gap: var(--spacing-16); padding: 0 var(--spacing-16);
   border-top: 1px solid var(--divider-primary); font-size: 0.8462rem; color: var(--text-tertiary); user-select: none;
+  overflow: hidden;
 }
+/* 只有主机名可收缩：计数与时间宁可留白，也不能被长主机名挤出去 */
+.statusbar > span { white-space: nowrap; flex-shrink: 0; }
+.statusbar .sb-name { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .statusbar .mono { color: var(--text-secondary); }
 .statusbar .ok { color: var(--status-success-text); }
 .statusbar .bad { color: var(--status-error-text); }

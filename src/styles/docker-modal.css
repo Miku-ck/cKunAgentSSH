@@ -27,15 +27,36 @@
 /* 卷/网络详情：元数据展示不需要固定弹性高，自适应高度 + 内部滚动 */
 .dt-dialog-auto { height: auto; max-height: min(78vh, 100vh - 96px); }
 
-.dp-head { padding: var(--spacing-12) 18px; border-bottom: 1px solid var(--divider-primary); display: flex; align-items: center; gap: var(--spacing-8); flex-shrink: 0; }
-.dt-dialog .dp-name { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
+.dp-head { padding: var(--spacing-12) 18px; border-bottom: 1px solid var(--divider-primary); display: flex; align-items: center; gap: var(--spacing-8); flex-shrink: 0; min-width: 0; }
+/* 资源名可以很长（Pod 带 hash 后缀）：先截断，别把类型徽章和关闭按钮挤出去 */
+.dt-dialog .dp-name { font-size: 1rem; font-weight: 600; color: var(--text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dp-close {
-  margin-left: auto; width: 24px; height: 24px; border: none; background: transparent; border-radius: var(--radius-sm);
+  margin-left: auto; width: 24px; height: 24px; border: none; background: transparent; border-radius: var(--radius-sm); flex-shrink: 0;
   color: var(--text-secondary); display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);
   font-size: 1.2308rem; line-height: 1;
 }
 .dp-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ── 弹窗内分段页签（容器详情 / K8s 详情共用一份） ── */
+.dt-dialog .dt-tabs {
+  display: flex; gap: var(--spacing-2); padding: var(--spacing-6) 18px 0;
+  border-bottom: 1px solid var(--divider-primary); flex-shrink: 0;
+}
+.dt-dialog .dt-tab {
+  border: none; background: transparent; border-bottom: 2px solid transparent;
+  color: var(--text-secondary); font-size: 0.9231rem; padding: var(--spacing-6) var(--spacing-10) var(--spacing-8); cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+.dt-dialog .dt-tab:hover { color: var(--text-primary); }
+.dt-dialog .dt-tab.on { color: var(--accent-text); border-bottom-color: var(--accent-primary); }
+.dt-dialog .dt-tab:focus-visible { outline: none; color: var(--text-primary); border-bottom-color: color-mix(in srgb, var(--accent-primary) 55%, transparent); }
+.dt-dialog .dt-tab:disabled { opacity: .4; cursor: default; }
+/* 标题前的状态圆点：容器用 running/stopped/exited，K8s 详情用 ok/bad/muted */
+.dt-dialog .st-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary); }
+.dt-dialog .st-dot.running, .dt-dialog .st-dot.ok { background: var(--status-success-text); }
+.dt-dialog .st-dot.exited, .dt-dialog .st-dot.bad { background: var(--status-error-text); }
+.dt-dialog .st-dot.stopped, .dt-dialog .st-dot.muted { background: var(--text-tertiary); }
 
 .dp-body { flex: 1; min-height: 0; padding: var(--spacing-16) 18px; display: flex; flex-direction: column; gap: var(--spacing-16); }
 .dp-body-auto { overflow-y: auto; }

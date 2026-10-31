@@ -22,9 +22,13 @@ import {
 } from '@/utils/remote-audit'
 import {
   CONTEXT_CMD,
+  ENV_PROBE_CMD,
   describeThrownK8sError,
   k8sErrorFromResult,
+  parseEnvProbe,
   toK8sError,
+  withExecDeadline,
+  type K8sEnvProbe,
   type K8sError,
 } from '@/stores/k8s-core'
 import { isOutputTruncated } from '../../../../shared/exec-outcome-core'
@@ -84,6 +88,8 @@ export interface K8sHost extends RemoteTarget {
   showNormalEvents: Ref<boolean>
   /** 只展示不切换：多 context 管理是另一套凭据模型，不在这一页 */
   contextName: Ref<string>
+  /** 未检测到时抓取的执行现场；正常时为空 */
+  envProbe: Ref<K8sEnvProbe | null>
   lastSync: ComputedRef<string>
   k8sExec: (cmd: string, id?: string, timeoutSec?: number, auditAction?: string) => Promise<string>
   actionExec: (cmd: string) => Promise<string>
@@ -107,6 +113,7 @@ export function provideK8sHost(): K8sHost {
   const tab = ref<TabKey>('workloads')
   const showNormalEvents = ref(false)
   const contextName = ref('')
+  const envProbe = ref<K8sEnvProbe | null>(null)
 
   // 同步时间按资源分槽：共用一个字段时，刷完节点再切到事件页仍显示「kubectl get
   // nodes · 12:00」，读起来像事件也是那一刻取的。状态栏只展示当前 tab 那一格。
@@ -174,7 +181,9 @@ export function provideK8sHost(): K8sHost {
     const started = Date.now()
     let res
     try {
-      res = await api.sshExec(id, cmd, timeoutSec)
+      // 渲染层闸门：主进程超时兜的是命令，兜不住「IPC 回包丢失」——那时 await 永不结算，
+      // 页面就永远转圈。多给 3 秒，正常路径轮不到它。
+      res = await withExecDeadline(api.sshExec(id, cmd, timeoutSec), timeoutSec)
     } catch (err) {
       const kErr = describeThrownK8sError(err)
       if (auditCtx) {
@@ -238,6 +247,7 @@ export function provideK8sHost(): K8sHost {
     tab,
     showNormalEvents,
     contextName,
+    envProbe,
     lastSync,
     k8sExec,
     actionExec,
@@ -266,5 +276,21 @@ export async function readK8sContext(host: K8sHost): Promise<void> {
     host.contextName.value = out.trim()
   } catch {
     host.contextName.value = ''
+  }
+}
+
+/**
+ * 未检测到 k8s 时的现场自检：以应用实际使用的账号、HOME、PATH 去读 kubeconfig。
+ * 只在失败后跑一次，且不参与任何列表判定 —— 它回答「为什么读不到」，不改变结论。
+ */
+export async function probeK8sEnv(host: K8sHost): Promise<void> {
+  const id = host.targetId.value
+  if (!id) return
+  try {
+    const out = await host.k8sExec(ENV_PROBE_CMD, id)
+    if (host.targetId.value !== id) return
+    host.envProbe.value = parseEnvProbe(out)
+  } catch {
+    host.envProbe.value = null
   }
 }

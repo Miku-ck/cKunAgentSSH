@@ -470,23 +470,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.dt-tabs {
-  display: flex; gap: var(--spacing-2); padding: var(--spacing-6) 18px 0;
-  border-bottom: 1px solid var(--divider-primary); flex-shrink: 0;
-}
-.dt-tab {
-  border: none; background: transparent; border-bottom: 2px solid transparent;
-  color: var(--text-secondary); font-size: 0.9231rem; padding: var(--spacing-6) var(--spacing-10) var(--spacing-8); cursor: pointer;
-  transition: color var(--transition-fast), border-color var(--transition-fast);
-}
-.dt-tab:hover { color: var(--text-primary); }
-.dt-tab.on { color: var(--accent-text); border-bottom-color: var(--accent-primary); }
-
-.st-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary); }
-.st-dot.running { background: var(--status-success-text); }
-.st-dot.exited { background: var(--status-error-text); }
-.st-dot.stopped { background: var(--text-tertiary); }
-
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: var(--spacing-8); }
 .stat {
   min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: var(--spacing-8) var(--spacing-10);

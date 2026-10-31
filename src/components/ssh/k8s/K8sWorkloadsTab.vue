@@ -1,11 +1,14 @@
 <template>
   <!-- 负载页签：五个 kind 合并一张表；动作只给不造成不可逆后果的那几个 -->
   <div class="list">
-    <div v-if="error" class="list-empty err-hint">负载取数失败：{{ error.message }}</div>
+    <div v-if="error" class="list-empty err-hint">
+      <div>负载取数失败：{{ error.message }}</div>
+      <div v-if="error.hint" class="err-hint-hint">{{ error.hint }}</div>
+    </div>
     <table v-else-if="rows.length" class="ptable clickable">
       <colgroup>
         <col style="width:10%"><col style="width:16%"><col style="width:12%"><col style="width:9%">
-        <col style="width:11%"><col style="width:9%"><col style="width:25%"><col style="width:8%">
+        <col style="width:11%"><col style="width:9%"><col style="width:23%"><col style="width:10%">
       </colgroup>
       <thead>
         <tr>

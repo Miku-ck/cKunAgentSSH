@@ -930,8 +930,8 @@ export function dockerErrorFromResult(stderr: string, exitCode: number | null, m
   if (exitCode === 127 || /docker:.*command not found|command not found: docker|No such file or directory.*docker/i.test(e)) {
     return {
       code: 'DOCKER_NOT_FOUND',
-      message: '该主机未安装 Docker，或 docker 不在登录 shell 的 PATH 中',
-      hint: '确认 Docker 已安装；若已安装，检查 sshd 给非交互 shell 的 PATH 是否含 docker 所在目录',
+      message: '未检测到 Docker',
+      hint: '这台主机没有安装 Docker，或当前账号找不到它；装上或修复安装后再试',
       retryable: false,
     }
   }
@@ -939,8 +939,8 @@ export function dockerErrorFromResult(stderr: string, exitCode: number | null, m
   if (/permission denied.*docker|docker\.sock|Cannot connect to the Docker daemon|Is the docker daemon running/i.test(e)) {
     return {
       code: 'DOCKER_PERM',
-      message: '无权访问 Docker：当前用户无法连接 docker.sock，或 dockerd 未运行',
-      hint: '把用户加入 docker 组（usermod -aG docker $USER，重新登录生效），或以有权限的用户连接',
+      message: '无权访问 Docker',
+      hint: '让管理员把当前账号加入 docker 组，或确认 Docker 服务已启动',
       retryable: false,
     }
   }
@@ -948,8 +948,8 @@ export function dockerErrorFromResult(stderr: string, exitCode: number | null, m
   if (/unauthorized|authentication required|denied: requested access|no basic auth credentials/i.test(e)) {
     return {
       code: 'DOCKER_AUTH',
-      message: '镜像仓库鉴权失败',
-      hint: '先在目标主机执行 docker login <registry>（或检查镜像是否公开），再重试拉取',
+      message: '镜像仓库认证失败',
+      hint: '先在目标主机登录镜像仓库（docker login），或确认镜像是否公开，再重试拉取',
       retryable: false,
     }
   }
@@ -966,8 +966,8 @@ export function dockerErrorFromResult(stderr: string, exitCode: number | null, m
   if (/No such (container|image|network|volume)/i.test(e)) {
     return {
       code: 'DOCKER_NOT_FOUND_OBJ',
-      message: first || '目标已不存在',
-      hint: '该资源可能已被删除，刷新列表后重试',
+      message: '这个资源已经不在了',
+      hint: '可能已被删除；刷新列表再试',
       retryable: true,
     }
   }
@@ -975,8 +975,8 @@ export function dockerErrorFromResult(stderr: string, exitCode: number | null, m
   if (/volume is in use|being used by some container|network .* has active endpoints|network is not empty/i.test(e)) {
     return {
       code: 'DOCKER_IN_USE',
-      message: first || '资源仍被容器使用',
-      hint: '先停止并删除引用它的容器，再重试删除；或使用「清理未使用」一键回收未引用的卷/网络',
+      message: '资源仍被容器使用',
+      hint: '先停止并删除引用它的容器，再重试；或用「清理未使用」回收未引用的卷 / 网络',
       retryable: false,
     }
   }

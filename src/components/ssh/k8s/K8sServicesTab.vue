@@ -1,7 +1,10 @@
 <template>
   <!-- 服务页签：Service 与 Ingress 合并一张表，kind 决定末列读法 -->
   <div class="list">
-    <div v-if="error" class="list-empty err-hint">服务取数失败：{{ error.message }}</div>
+    <div v-if="error" class="list-empty err-hint">
+      <div>服务取数失败：{{ error.message }}</div>
+      <div v-if="error.hint" class="err-hint-hint">{{ error.hint }}</div>
+    </div>
     <table v-else-if="rows.length" class="ptable clickable">
       <colgroup>
         <col style="width:9%"><col style="width:18%"><col style="width:12%"><col style="width:11%">

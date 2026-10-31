@@ -204,9 +204,25 @@ describe('样式归属', () => {
     expect(cssSrc).not.toContain('.dt-overlay {')
     expect(cssSrc).not.toContain('.dt-dialog {')
   })
+  it('弹窗页签与状态圆点在共享骨架上：容器详情与 K8s 详情都要用', () => {
+    // 这三个原子曾经只写在容器详情的 scoped 样式里，K8s 详情用了同名类却掉成浏览器默认按钮
+    const srcRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+    const modalCssSrc = lf(readFileSync(resolve(srcRoot, 'styles/docker-modal.css'), 'utf8'))
+    expect(detailSrc).toContain('class="dt-tabs"')
+    expect(detailSrc).toContain('class="st-dot"')
+    expect(modalCssSrc).toContain('.dt-dialog .dt-tabs {')
+    expect(modalCssSrc).toContain('.dt-dialog .dt-tab {')
+    expect(modalCssSrc).toContain('.dt-dialog .st-dot {')
+  })
   it('转圈动画自带独立 keyframes 名，不与 docker 页的 dk-rot 抢', () => {
     expect(cssSrc).toContain('@keyframes k8s-rot')
     expect(cssSrc).not.toContain('dk-rot')
+  })
+  it('转圈图标必须有尺寸：只有 animation 的 SVG 会在 flex 里铺满整块', () => {
+    const rule = /\.k8s-view \.spin \{[^}]*\}/.exec(cssSrc)?.[0] || ''
+    expect(rule).toContain('width:')
+    expect(rule).toContain('height:')
+    expect(rule).toContain('flex-shrink: 0')
   })
 })
 
@@ -245,19 +261,37 @@ describe('新增文件的 .vue 导入必须落到真实文件', () => {
 describe('截断与错误带的分工', () => {
   it('整机级错误只在页顶说一次，单类失败由列表自己说', () => {
     expect(src).toContain('isHostLevelError(e?.code)')
-    expect(src).toContain('v-if="hostError"')
+    expect(src).toContain('v-if="hostCopy"')
     expect(ctxSrc).toContain('toK8sError(e)')
   })
   it('「没有 k8s」说成状态而不是故障，措辞判据留在 k8s-core', () => {
     // 判据要能在纯函数里测：页面只提供 hostError 与 contextName 两个已落定的读数
     expect(src).toContain('isNotDetectedState(hostError.value, contextName.value)')
-    expect(src).toContain('未检测到 k8s：')
+    // 文案也由纯函数定案：页面不再自己拼「未检测到 k8s：${...}」，否则两种措辞两处维护
+    expect(src).toContain('hostErrorCopy(hostError.value, contextName.value)')
+    expect(src).toContain('{{ hostCopy.title }}')
+    expect(src).not.toContain('未检测到 k8s：')
     expect(src).toContain(':role="notDetected ? \'status\' : \'alert\'"')
+  })
+  it('未检测到时自查现场：账号 / HOME / kubeconfig，直接回答「为什么读不到」', () => {
+    expect(ctxSrc).toContain('ENV_PROBE_CMD')
+    expect(ctxSrc).toContain('probeK8sEnv')
+    expect(src).toContain('probeK8sEnv(host)')
+    expect(src).toContain('gen === loadGen && notDetected.value')
+    expect(src).toContain('probeNote')
+    expect(src).toContain('envProbeNote(envProbe.value)')
   })
   it('context 先于五个列表取：措辞靠它定夺，并行会让同一屏换两次说法', () => {
     const body = sliceUntil(src, 'async function loadAll(', 'function refresh()')
     expect(body.indexOf('await readK8sContext(host)')).toBeGreaterThan(-1)
     expect(body.indexOf('await readK8sContext(host)')).toBeLessThan(body.indexOf('Promise.allSettled'))
+  })
+  it('转圈必须由 finally 复位：提前返回（切主机 / 断开 / 卸载）不能把 loading 留在 true', () => {
+    const body = sliceUntil(src, 'async function loadAll(', 'function refresh()')
+    expect(body).toContain('finally')
+    expect(body).toContain('if (gen === loadGen) loading.value = false')
+    // 目标为空（刚断开）那一条也要自己关灯：不会有下一轮 loadAll 替它复位
+    expect(body.indexOf('loading.value = false')).toBeLessThan(body.indexOf('await readK8sContext'))
   })
   it('1M 截断必须在状态栏明示，不能让用户把缺行当全量', () => {
     expect(src).toContain('v-if="truncated"')

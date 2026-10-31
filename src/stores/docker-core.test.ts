@@ -401,6 +401,20 @@ describe('dockerErrorFromResult', () => {
   it('stderr 优先于合并 stdout（两者都有时取 stderr）', () => {
     expect(dockerErrorFromResult('permission denied while trying to connect to the Docker daemon socket', 1, 'irrelevant log')?.code).toBe('DOCKER_PERM')
   })
+  it('用户看到的措辞说人话：不夹 sshd / shell 命令 / daemon 原文', () => {
+    const cases: Array<[string, number, string, string]> = [
+      ['bash: docker: command not found', 127, 'DOCKER_NOT_FOUND', '未检测到 Docker'],
+      ['permission denied while trying to connect to the Docker daemon socket', 1, 'DOCKER_PERM', '无权访问 Docker'],
+      ['Error response from daemon: No such container: foo', 1, 'DOCKER_NOT_FOUND_OBJ', '这个资源已经不在了'],
+      ['Error response from daemon: volume is in use - foo', 1, 'DOCKER_IN_USE', '资源仍被容器使用'],
+    ]
+    for (const [stderr, exitCode, code, message] of cases) {
+      const d = dockerErrorFromResult(stderr, exitCode)
+      expect(d?.code).toBe(code)
+      expect(d?.message).toBe(message)
+      expect(`${d?.message} ${d?.hint ?? ''}`).not.toMatch(/sshd|usermod|unix:\/\/|Error response|daemon:/i)
+    }
+  })
 })
 
 describe('shortId / imageLabel / imageHaystack', () => {

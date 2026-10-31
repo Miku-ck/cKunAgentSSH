@@ -201,6 +201,18 @@ const WORKLOAD_KINDS = ['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cr
  * K8S_TRUNCATED（带可操作建议），不会谎报成「这里没有资源」。
  */
 export const CONTEXT_CMD = `kubectl config current-context`
+/**
+ * 未检测到 k8s 时的现场自检：应用实际以哪个账号、哪个 HOME、哪个 kubectl 执行，
+ * KUBECONFIG 指到哪、默认配置文件读不读得到。全部是本地读取，不碰网络。
+ * 输出用 key=value 而不是人读表格，解析不依赖列对齐。
+ */
+export const ENV_PROBE_CMD = [
+  'echo "user=$(id -un 2>/dev/null)"',
+  'echo "home=$HOME"',
+  'echo "kubeconfig=${KUBECONFIG:-}"',
+  'echo "kubectl=$(command -v kubectl 2>/dev/null)"',
+  'if [ -r "$HOME/.kube/config" ]; then echo "config_file=readable"; else echo "config_file=missing"; fi',
+].join('; ')
 export const NODES_CMD = `kubectl get nodes ${REQ} -o json`
 /** top 是人读表格：列数随版本变（3 或 5），--no-headers 后按空白拆比 -o json 稳 */
 export const TOP_NODES_CMD = `kubectl top nodes --no-headers ${REQ}`
@@ -860,6 +872,59 @@ const API_FALLBACK_ADDR = /(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):8080\b/
 const API_REPLY_NOT_JSON = /invalid character .* looking for beginning of value/i
 
 /**
+ * 用户看到的措辞：message 说「哪里不对」，hint 说「怎么办」，各留一句人话。
+ * kubectl 的日志行、调试开关、RBAC / 证书术语只对排障者有意义，对页面使用者只会读成
+ * 「程序坏了」。认不出的失败才保留原始首行 —— 那是在如实说「不知道这是什么」，而不是
+ * 编一句像样的解释。
+ */
+const ERROR_COPY = {
+  KUBECTL_NOT_FOUND: {
+    message: '未检测到 k8s',
+    hint: '这台主机没有安装 kubectl，或当前账号找不到它；装上后再试',
+  },
+  KUBECONFIG_UNREADABLE: {
+    message: '未检测到 k8s',
+    hint: '当前 SSH 账号读不到 kubeconfig，或它引用的证书文件；整理成一份自带证书的配置，放到该账号的 ~/.kube/config 后再试',
+  },
+  K8S_CONTEXT_MISSING: {
+    message: '未检测到 k8s',
+    hint: '当前 SSH 账号的 kubeconfig 里没有指定集群；先选定一个 context 再试',
+  },
+  K8S_NOT_DETECTED: {
+    message: '未检测到 k8s',
+    hint: '当前 SSH 账号没有可用的集群配置；从集群取一份 kubeconfig 放到该账号的 ~/.kube/config 后再试',
+  },
+  K8S_API_NOT_JSON: {
+    message: '集群地址配置有误',
+    hint: '这个地址回的是网页，不是 Kubernetes API；核对 kubeconfig 里的 server 地址和端口',
+  },
+  K8S_NO_CLUSTER: {
+    message: '连不上集群',
+    hint: '请检查网络，或确认 API server 在运行、端口已放通',
+  },
+  K8S_AUTH: {
+    message: '集群认证失败',
+    hint: '登录凭据或证书已失效；重新取一份 kubeconfig 再试',
+  },
+  K8S_FORBIDDEN: {
+    message: '当前账号没有读取权限',
+    hint: '需要管理员给这个账号授予查看权限',
+  },
+  K8S_MISSING_KIND: {
+    message: '集群里没有这类资源',
+    hint: '例如没有安装 Ingress，或集群版本较旧；其他页签不受影响',
+  },
+  K8S_NO_METRICS: {
+    message: '集群没有安装 metrics-server',
+    hint: '实时 CPU / 内存用量需要它；列表照常显示，用量列留空',
+  },
+  K8S_NOT_FOUND_OBJ: {
+    message: '这个资源已经不在了',
+    hint: '可能已被删除；刷新列表再试',
+  },
+} as const
+
+/**
  * 依据 kubectl 的 stderr + 退出码归类，返回 null 表示无 kubectl 层错误。
  * 与 dockerErrorFromResult 同构：exit 0 即成功（kubectl 常把 warning 打到 stderr，
  * 那句不代表失败），非零才继续分类；顺序敏感，最具体的判据在前。
@@ -870,96 +935,44 @@ export function k8sErrorFromResult(stderr: string, exitCode: number | null, merg
   const first = e.split('\n')[0] || ''
 
   if (exitCode === 127 || /kubectl:.*command not found|command not found: kubectl|No such file or directory.*kubectl/i.test(e)) {
-    return {
-      code: 'KUBECTL_NOT_FOUND',
-      message: '该主机未安装 kubectl，或 kubectl 不在登录 shell 的 PATH 中',
-      hint: '确认该主机能直接执行 kubectl；已安装时检查 sshd 给非交互 shell 的 PATH 是否含 kubectl 所在目录',
-      retryable: false,
-    }
+    return { code: 'KUBECTL_NOT_FOUND', ...ERROR_COPY.KUBECTL_NOT_FOUND, retryable: false }
   }
-  // kubeconfig 读不到：kubeadm/k3s 上非 root 用户最常见的一条，且修法非显然
-  if (/error loading config file|\.kube\/config.*(no such file|permission denied)|permission denied.*(admin\.conf|kubelet\.conf|\.kube)/i.test(e)) {
-    return {
-      code: 'KUBECONFIG_UNREADABLE',
-      message: '读不到 kubeconfig：文件不存在，或当前 SSH 用户无权限',
-      hint: '把可读的 kubeconfig 放到 ~/.kube/config（或导出 KUBECONFIG）。kubeadm 的 /etc/kubernetes/admin.conf 只有 root 可读，需 root cat 一份再 chown 给该用户',
-      retryable: false,
-    }
+  // kubeconfig 读不到：kubeadm/k3s 上非 root 用户最常见的一条。
+  // 「Error in configuration」多是配置里的证书仍是绝对路径、指向别的账号的目录
+  // （minikube 的 kubeconfig 就引用 /root/.minikube 下的 client.crt/key）——
+  // 把 root 的配置直接拷给别的账号时必然踩到，和「读不到配置文件」同一族。
+  if (/error loading config file|Error in configuration:|unable to read (client-cert|client-key|certificate-authority)|\.kube\/config.*(no such file|permission denied)|permission denied.*(admin\.conf|kubelet\.conf|\.kube)/i.test(e)) {
+    return { code: 'KUBECONFIG_UNREADABLE', ...ERROR_COPY.KUBECONFIG_UNREADABLE, retryable: false }
   }
   if (/current-context is not set|no configuration has been provided|invalid configuration|empty initial config/i.test(e)) {
-    return {
-      code: 'K8S_CONTEXT_MISSING',
-      message: '该主机没有可用的 kubeconfig current-context',
-      hint: '在目标主机执行 kubectl config use-context <name> 选定一个上下文后重试',
-      retryable: false,
-    }
+    return { code: 'K8S_CONTEXT_MISSING', ...ERROR_COPY.K8S_CONTEXT_MISSING, retryable: false }
   }
   if (/error: Metrics API not available|Metrics API not available|not found: metrics\.k8s\.io/i.test(e)) {
-    return {
-      code: 'K8S_NO_METRICS',
-      message: '集群没有 metrics-server，取不到实时用量',
-      hint: 'top 类数据依赖 metrics-server；未安装时列表照常显示，用量列留空',
-      retryable: false,
-    }
+    return { code: 'K8S_NO_METRICS', ...ERROR_COPY.K8S_NO_METRICS, retryable: false }
   }
   if (/Unauthorized|x509|certificate signed by unknown authority|tls: /i.test(e)) {
-    return {
-      code: 'K8S_AUTH',
-      message: '集群鉴权失败或证书不被信任',
-      hint: '检查 kubeconfig 里的 token / 客户端证书是否过期（x509 也常由主机时钟偏差引起），重新取一份 kubeconfig 再试',
-      retryable: false,
-    }
+    return { code: 'K8S_AUTH', ...ERROR_COPY.K8S_AUTH, retryable: false }
   }
   if (/cannot (list|get|watch) resource|is forbidden|error: forbidden/i.test(e)) {
-    return {
-      code: 'K8S_FORBIDDEN',
-      message: first || '当前身份无权读取该类资源',
-      hint: 'RBAC 未授予 list/get：换用有权限的身份，或让管理员补一个 ClusterRole 绑定',
-      retryable: false,
-    }
+    return { code: 'K8S_FORBIDDEN', ...ERROR_COPY.K8S_FORBIDDEN, retryable: false }
   }
   if (/the server doesn't have a resource type/i.test(e)) {
-    return {
-      code: 'K8S_MISSING_KIND',
-      message: first || '该集群没有这一类资源',
-      hint: '集群版本不含这个 API（如未装 Ingress、旧版本没有 cronjobs）；这一类取不到，其余分类不受影响',
-      retryable: false,
-    }
+    return { code: 'K8S_MISSING_KIND', ...ERROR_COPY.K8S_MISSING_KIND, retryable: false }
   }
   if (/the connection to the server .* (was refused|failed)|dial tcp .*connection refused|no such host|was rejected by the server|context deadline exceeded|client\.timeout exceeded|net\.http: request timed out/i.test(e)) {
     // kubectl 找不到可用 kubeconfig 时不说「没配置」，而是连它自己的默认地址
     // http://localhost:8080。落在这里说明这台主机压根没接集群，按「连不上」报会给用户
     // 一个永远点不通的重试。
     if (API_FALLBACK_ADDR.test(e)) {
-      return {
-        code: 'K8S_NOT_DETECTED',
-        message: 'kubectl 没有集群配置：它在连自己的默认地址 localhost:8080',
-        hint: '把 master 上的 /etc/kubernetes/admin.conf 交给该用户，落到 ~/.kube/config（非 root 需 chown）；worker 节点用 kubelet.conf 或向管理员要一份只读 kubeconfig',
-        retryable: false,
-      }
+      return { code: 'K8S_NOT_DETECTED', ...ERROR_COPY.K8S_NOT_DETECTED, retryable: false }
     }
-    return {
-      code: 'K8S_NO_CLUSTER',
-      message: '连不上 API server（地址不可达或超时）',
-      hint: '确认该主机能访问 kubeconfig 里的 server 地址；控制面已停或 API 端口未对该主机开放都会落到这里',
-      retryable: true,
-    }
+    return { code: 'K8S_NO_CLUSTER', ...ERROR_COPY.K8S_NO_CLUSTER, retryable: true }
   }
   if (/Error from server \(NotFound\)|^error: (no |resource )?".*" not found|not found$/i.test(first)) {
-    return {
-      code: 'K8S_NOT_FOUND_OBJ',
-      message: first || '目标已不存在',
-      hint: '该资源可能已被删除，或已不在当前命名空间；刷新列表后重试',
-      retryable: true,
-    }
+    return { code: 'K8S_NOT_FOUND_OBJ', ...ERROR_COPY.K8S_NOT_FOUND_OBJ, retryable: true }
   }
   if (API_REPLY_NOT_JSON.test(e)) {
-    return {
-      code: 'K8S_API_NOT_JSON',
-      message: 'kubectl 请求的地址回了一段网页，不是 API server 的 JSON',
-      hint: '在该主机执行 kubectl get nodes -v=6 看它实际请求的 URL，再 kubectl config view --minify 核对 server 是不是 API 端口；8080/443 上挂着面板或 Web 服务时就是这个形状',
-      retryable: false,
-    }
+    return { code: 'K8S_API_NOT_JSON', ...ERROR_COPY.K8S_API_NOT_JSON, retryable: false }
   }
   if (exitCode !== null && exitCode !== 0) {
     return { code: 'K8S_EXEC_FAILED', message: first || `kubectl 命令失败（退出码 ${exitCode}）`, retryable: true }
@@ -1018,6 +1031,77 @@ export function isNotDetectedState(err: K8sError | undefined, contextName: strin
   if (!err) return false
   if (isNotDetectedError(err.code)) return true
   return err.code === 'K8S_API_NOT_JSON' && !contextName
+}
+
+/**
+ * 页顶错误带最终显示的那两行。分类层归类时不知道 context 读没读到，而「回包是网页」
+ * 的意思由它决定：读不到 context = 这台主机没有 kubeconfig（kubectl 去连 default 的
+ * localhost:8080，那里的 Web 服务回了网页）；读得到 = 配置在，只是 server 地址指错了。
+ */
+export function hostErrorCopy(
+  err: K8sError | undefined, contextName: string,
+): { title: string; hint: string } | null {
+  if (!err) return null
+  if (err.code === 'K8S_API_NOT_JSON' && !contextName) {
+    return { title: ERROR_COPY.K8S_NOT_DETECTED.message, hint: ERROR_COPY.K8S_NOT_DETECTED.hint }
+  }
+  return { title: err.message, hint: err.hint || '' }
+}
+
+/** 未检测到 k8s 时的执行现场（ENV_PROBE_CMD 的输出） */
+export interface K8sEnvProbe {
+  user: string
+  home: string
+  /** 非空说明 KUBECONFIG 被显式指向了别处 */
+  kubeconfigEnv: string
+  kubectl: string
+  configReadable: boolean
+}
+
+export function parseEnvProbe(raw: string): K8sEnvProbe {
+  const read = (key: string): string =>
+    new RegExp(`^${key}=(.*)$`, 'm').exec(raw)?.[1].trim() || ''
+  return {
+    user: read('user'),
+    home: read('home'),
+    kubeconfigEnv: read('kubeconfig'),
+    kubectl: read('kubectl'),
+    configReadable: read('config_file') === 'readable',
+  }
+}
+
+/**
+ * 把现场翻成一句人话。用户在自己终端里跑得通、页面却读不到，原因通常就三样：
+ * 执行账号不同、KUBECONFIG 指到别处、kubectl 不在 exec 的 PATH 里 —— 直接说出来，
+ * 不让用户在两套 shell 之间猜。
+ */
+export function envProbeNote(p: K8sEnvProbe | null): string {
+  if (!p) return ''
+  const who = p.user ? `应用使用的 SSH 账号 ${p.user}（HOME=${p.home || '?'}）` : '应用使用的 SSH 账号'
+  if (!p.kubectl) return `${who}的 PATH 里找不到 kubectl。`
+  if (p.kubeconfigEnv) {
+    return `${who}的 KUBECONFIG 指向 ${p.kubeconfigEnv}，那里读不到可用的集群配置。`
+  }
+  if (p.configReadable) {
+    return `${who}能读到 ~/.kube/config，但里面没有可用的集群配置（证书文件可能不在这个账号下）。`
+  }
+  return `${who}下没有可读的 ~/.kube/config。`
+}
+
+/**
+ * 渲染层的兜底闸门。主进程的 exec 自己会超时，但 IPC 回包一旦丢失，渲染层这边的
+ * await 就再也不会结算——表现是页面永远停在「正在经 SSH 会话执行 …」，连刷新都被
+ * loading 禁用。比主进程预算多 3 秒，正常路径永远轮不到它。
+ */
+export function withExecDeadline<T>(p: Promise<T>, timeoutSec: number): Promise<T> {
+  const deadlineSec = timeoutSec + 3
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`命令 ${deadlineSec} 秒未返回`)), deadlineSec * 1000)
+    p.then(
+      (v) => { clearTimeout(timer); resolve(v) },
+      (e) => { clearTimeout(timer); reject(e) },
+    )
+  })
 }
 
 /** 任何抛出的东西 → K8sError（requireParsableJson 抛的是纯对象，不是 Error） */

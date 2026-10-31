@@ -6,7 +6,7 @@
  * waiting.reason 压过 phase、Gi 与 G 差 7.4%。这些口径一旦漂开，界面就会把
  * 「正在崩溃重启」读成「正常运行」。
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   NODES_CMD, WORKLOADS_CMD, PODS_CMD, SERVICES_CMD, EVENTS_CMD, EVENTS_CMD_WITH_NORMAL,
   TOP_NODES_CMD, getOneCmd, objectEventsCmd, logsCmd,
@@ -18,6 +18,7 @@ import {
   podReadyCounts, podDisplayStatus, podRestarts, isAbnormalPod, podTone, nodeRoles,
   type PodRow, type K8sError,
   k8sErrorFromResult, describeThrownK8sError, k8sErrText, isHostLevelError, isNotDetectedError, isNotDetectedState,
+  hostErrorCopy, parseEnvProbe, envProbeNote, withExecDeadline,
 } from './k8s-core'
 
 const NOW = Date.parse('2026-10-30T12:00:00Z')
@@ -573,10 +574,19 @@ describe('k8sErrorFromResult', () => {
     expect(k8sErrorFromResult('bash: kubectl: command not found', 127)?.code).toBe('KUBECTL_NOT_FOUND')
     expect(k8sErrorFromResult('', 127)?.code).toBe('KUBECTL_NOT_FOUND')
   })
-  it('kubeconfig 读不到（kubeadm 上非 root 最常见）单独成类，给出 chown 的修法', () => {
+  it('kubeconfig 读不到（kubeadm 上非 root 最常见）单独成类', () => {
     const e = k8sErrorFromResult('error loading config file "/home/app/.kube/config": open /home/app/.kube/config: permission denied', 1)
     expect(e?.code).toBe('KUBECONFIG_UNREADABLE')
-    expect(e?.hint).toContain('admin.conf')
+    expect(e?.message).toBe('未检测到 k8s')
+    expect(e?.hint).toContain('~/.kube/config')
+  })
+  it('配置里的证书指向别的账号目录：也算读不到 kubeconfig，不透裸的 Error in configuration', () => {
+    const e = k8sErrorFromResult(
+      'error: Error in configuration: \n* unable to read client-cert /root/.minikube/profiles/minikube/client.crt for minikube due to open /root/.minikube/profiles/minikube/client.crt: permission denied', 1)
+    expect(e?.code).toBe('KUBECONFIG_UNREADABLE')
+    expect(e?.message).toBe('未检测到 k8s')
+    expect(e?.message).not.toContain('Error in configuration')
+    expect(e?.hint).toContain('证书')
   })
   it('没有 current-context 与连不上 API server 是两回事', () => {
     expect(k8sErrorFromResult('error: current-context is not set', 1)?.code).toBe('K8S_CONTEXT_MISSING')
@@ -616,6 +626,7 @@ describe('k8sErrorFromResult', () => {
     const e = k8sErrorFromResult(
       'The connection to the server localhost:8080 was refused - did you specify the right host or port?', 1)
     expect(e?.code).toBe('K8S_NOT_DETECTED')
+    expect(e?.message).toBe('未检测到 k8s')
     expect(e?.retryable).toBe(false)
     expect(k8sErrorFromResult(
       'Unable to connect to the server: dial tcp 127.0.0.1:8080: connect: connection refused', 1)?.code,
@@ -628,8 +639,109 @@ describe('k8sErrorFromResult', () => {
       'E1030 16:17:17.042406 1116243 memcache.go:265] "Unhandled Error" err="couldn\'t get current server API group list: invalid character \'<\' looking for beginning of value"', 1)
     expect(e?.code).toBe('K8S_API_NOT_JSON')
     expect(e?.message).not.toContain('memcache.go')
-    expect(e?.hint).toContain('-v=6')
+    expect(e?.message).toBe('集群地址配置有误')
+    expect(e?.hint).toContain('server 地址')
     expect(e?.retryable).toBe(false)
+  })
+})
+
+describe('用户看到的措辞：什么问题就说什么问题', () => {
+  const cases: Array<[string, number, string]> = [
+    ['bash: kubectl: command not found', 127, 'KUBECTL_NOT_FOUND'],
+    ['error loading config file "/home/app/.kube/config": open /home/app/.kube/config: permission denied', 1, 'KUBECONFIG_UNREADABLE'],
+    ['error: current-context is not set', 1, 'K8S_CONTEXT_MISSING'],
+    ['The connection to the server localhost:8080 was refused - did you specify the right host or port?', 1, 'K8S_NOT_DETECTED'],
+    ['E1030 16:17:17.042406 1116243 memcache.go:265] "Unhandled Error" err="couldn\'t get current server API group list: invalid character \'<\' looking for beginning of value"', 1, 'K8S_API_NOT_JSON'],
+    ['Unable to connect to the server: dial tcp 10.0.0.5:6443: connect: connection refused', 1, 'K8S_NO_CLUSTER'],
+    ['error: x509: certificate has expired or is not yet valid', 1, 'K8S_AUTH'],
+    ['Error from server (Forbidden): pods is forbidden: User "app" cannot list resource "pods"', 1, 'K8S_FORBIDDEN'],
+    ['error: the server doesn\'t have a resource type "ingresses"', 1, 'K8S_MISSING_KIND'],
+    ['error: Metrics API not available', 1, 'K8S_NO_METRICS'],
+    ['Error from server (NotFound): pods "web-9" not found', 1, 'K8S_NOT_FOUND_OBJ'],
+  ]
+  it('不夹 kubectl 日志、调试开关、RBAC / 证书术语', () => {
+    for (const [stderr, exitCode, code] of cases) {
+      const e = k8sErrorFromResult(stderr, exitCode)
+      expect(e?.code).toBe(code)
+      const copy = `${e?.message} ${e?.hint ?? ''}`
+      expect(copy).not.toMatch(/memcache\.go|-v=6|admin\.conf|kubelet\.conf|sshd|RBAC|ClusterRole|x509/i)
+    }
+  })
+  it('没检测到 k8s 的几种原因，标题统一「未检测到 k8s」，细节各说各的', () => {
+    const titles = new Set<string>()
+    for (const [stderr, exitCode, code] of cases.filter(c => isNotDetectedError(c[2]))) {
+      const e = k8sErrorFromResult(stderr, exitCode)
+      expect(e?.message, code).toBe('未检测到 k8s')
+      titles.add(e?.hint || '')
+    }
+    // 细节不能退化成同一句：读不到配置和没装 kubectl 要做的事不一样
+    expect(titles.size).toBe(4)
+  })
+  it('说「当前账号」而不是「这台主机没有 k8s」：同一台机器换个账号就有配置', () => {
+    const e = k8sErrorFromResult(
+      'The connection to the server localhost:8080 was refused - did you specify the right host or port?', 1)
+    expect(e?.hint).toContain('当前 SSH 账号')
+    expect(e?.hint).not.toContain('这台主机没有集群配置')
+  })
+  it('网络问题直说是网络问题', () => {
+    const e = k8sErrorFromResult('Unable to connect to the server: dial tcp 10.0.0.5:6443: connect: connection refused', 1)
+    expect(e?.message).toBe('连不上集群')
+    expect(e?.hint).toContain('网络')
+  })
+  it('没权限 / 资源不存在都不把 kubectl 原文透给用户', () => {
+    const forbidden = k8sErrorFromResult('Error from server (Forbidden): pods is forbidden: User "app" cannot list resource "pods"', 1)
+    expect(forbidden?.message).toBe('当前账号没有读取权限')
+    const gone = k8sErrorFromResult('Error from server (NotFound): pods "web-9" not found', 1)
+    expect(gone?.message).toBe('这个资源已经不在了')
+  })
+  it('认不出的失败保留原始首行：如实说「不知道这是什么」，不编一句像样的解释', () => {
+    const e = k8sErrorFromResult('error: unknown shorthand flag: q', 1)
+    expect(e?.code).toBe('K8S_EXEC_FAILED')
+    expect(e?.message).toContain('unknown shorthand flag')
+  })
+})
+
+describe('环境自检：为什么读不到 k8s', () => {
+  it('解析 exec 现场的 key=value；缺项留空，不拿本地猜', () => {
+    const p = parseEnvProbe('user=root\nhome=/root\nkubeconfig=\nkubectl=/usr/local/bin/kubectl\nconfig_file=missing\n')
+    expect(p).toEqual({
+      user: 'root', home: '/root', kubeconfigEnv: '', kubectl: '/usr/local/bin/kubectl', configReadable: false,
+    })
+    expect(parseEnvProbe('')).toEqual({
+      user: '', home: '', kubeconfigEnv: '', kubectl: '', configReadable: false,
+    })
+  })
+  it('说清是哪个账号、断在哪一步', () => {
+    const base = {
+      user: 'root', home: '/root', kubeconfigEnv: '', kubectl: '/usr/local/bin/kubectl', configReadable: false,
+    }
+    expect(envProbeNote(null)).toBe('')
+    expect(envProbeNote(base)).toContain('root（HOME=/root）')
+    expect(envProbeNote(base)).toContain('没有可读的 ~/.kube/config')
+    expect(envProbeNote({ ...base, kubeconfigEnv: '/tmp/k' })).toContain('KUBECONFIG 指向 /tmp/k')
+    expect(envProbeNote({ ...base, kubectl: '' })).toContain('PATH 里找不到 kubectl')
+    expect(envProbeNote({ ...base, configReadable: true })).toContain('能读到 ~/.kube/config')
+  })
+})
+
+describe('hostErrorCopy：页顶错误带最终显示的那两行', () => {
+  const err = (code: string, message: string, hint = ''): K8sError => ({ code, message, hint, retryable: false })
+  it('分类层已说「未检测到 k8s」的直接透出', () => {
+    const copy = hostErrorCopy(err('K8S_NOT_DETECTED', '未检测到 k8s', '把集群的 kubeconfig 放到 ~/.kube/config'), '')
+    expect(copy).toEqual({ title: '未检测到 k8s', hint: '把集群的 kubeconfig 放到 ~/.kube/config' })
+  })
+  it('回包是网页时看 context：说不出 context 并进「未检测到 k8s」，说得出才报地址配错', () => {
+    const e = err('K8S_API_NOT_JSON', '集群地址配置有误', '核对 kubeconfig 里的 server 地址和端口')
+    expect(hostErrorCopy(e, '')?.title).toBe('未检测到 k8s')
+    expect(hostErrorCopy(e, 'prod-master')).toEqual({ title: '集群地址配置有误', hint: '核对 kubeconfig 里的 server 地址和端口' })
+  })
+  it('其余错误原样透出分类层措辞；没有错误就没有错误带', () => {
+    expect(hostErrorCopy(err('K8S_NO_CLUSTER', '连不上集群', '网络不通'), 'prod-master'))
+      .toEqual({ title: '连不上集群', hint: '网络不通' })
+    expect(hostErrorCopy(undefined, '')).toBeNull()
+  })
+  it('hint 缺失时给空串，页面不必再判 undefined', () => {
+    expect(hostErrorCopy(err('K8S_AUTH', '集群认证失败'), 'prod')).toEqual({ title: '集群认证失败', hint: '' })
   })
 })
 
@@ -651,8 +763,7 @@ describe('isNotDetectedError：哪些失败等于「这台主机没有 k8s」', 
   })
 })
 
-describe('isNotDetectedState：页顶那句是「未检测到 k8s」还是「集群出错」', () => {
-  const err = (code: string): K8sError => ({ code, message: 'x', retryable: false })
+describe('isNotDetectedState：页顶那句是「未检测到 k8s」还是「集群出错」', () => {  const err = (code: string): K8sError => ({ code, message: 'x', retryable: false })
   it('没装 / 读不到 kubeconfig / 没 context / 连回落地址：报未检测到', () => {
     for (const code of ['KUBECTL_NOT_FOUND', 'KUBECONFIG_UNREADABLE', 'K8S_CONTEXT_MISSING', 'K8S_NOT_DETECTED']) {
       expect(isNotDetectedState(err(code), 'prod-master')).toBe(true)
@@ -680,5 +791,37 @@ describe('describeThrownK8sError / k8sErrText', () => {
     const err = { code: 'K8S_FORBIDDEN', message: '当前身份无权读取该类资源', retryable: false }
     expect(k8sErrText(err)).toBe('当前身份无权读取该类资源')
     expect(k8sErrText(new Error('boom'))).toBe('boom')
+  })
+})
+
+describe('withExecDeadline：IPC 回包丢了也不能永远转圈', () => {
+  it('过了预算就拒绝，并说清等了多少秒', async () => {
+    vi.useFakeTimers()
+    try {
+      const p = withExecDeadline(new Promise<string>(() => { /* 永不结算 */ }), 15)
+      const rejected = expect(p).rejects.toThrow('18 秒未返回')
+      await vi.advanceTimersByTimeAsync(18_000)
+      await rejected
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('正常回包原样透传，且把定时器清掉（不在后台留一颗哑弹）', async () => {
+    vi.useFakeTimers()
+    try {
+      await expect(withExecDeadline(Promise.resolve('ok'), 15)).resolves.toBe('ok')
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('原错误原样抛，不被超时吞成成功', async () => {
+    vi.useFakeTimers()
+    try {
+      await expect(withExecDeadline(Promise.reject(new Error('channel closed')), 15)).rejects.toThrow('channel closed')
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

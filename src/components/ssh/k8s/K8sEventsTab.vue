@@ -1,8 +1,11 @@
 <template>
   <!-- 事件页签：只读，但它是「为什么红了」的答案，message 给足宽度并允许换行 -->
   <div class="list">
-    <div v-if="error" class="list-empty err-hint">事件取数失败：{{ error.message }}</div>
-    <table v-else-if="rows.length" class="ptable ev-table">
+    <div v-if="error" class="list-empty err-hint">
+      <div>事件取数失败：{{ error.message }}</div>
+      <div v-if="error.hint" class="err-hint-hint">{{ error.hint }}</div>
+    </div>
+    <table v-else-if="rows.length" class="ptable">
       <colgroup>
         <col style="width:8%"><col style="width:7%"><col style="width:12%"><col style="width:14%">
         <col style="width:31%"><col style="width:6%"><col style="width:12%"><col style="width:10%">
