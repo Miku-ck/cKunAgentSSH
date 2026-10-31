@@ -83,6 +83,18 @@ def test_next_weekend_is_next_weekend_not_the_whole_next_week():
         assert end == datetime(2026, 11, 9, 0, 0, tzinfo=CST)      # 下下周一 00:00
 
 
+def test_second_next_weekend_moves_the_base_two_weeks():
+    """「下下周末」不能落到「下周末」的窗口：提前一周问就是错话。"""
+    for text in ("下下周末", "下下个周末"):
+        start, end = _window(text)
+        assert start == datetime(2026, 11, 14, 0, 0, tzinfo=CST)   # 下下周六
+        assert end == datetime(2026, 11, 16, 0, 0, tzinfo=CST)
+
+    start, end = _window("下下周")
+    assert start == datetime(2026, 11, 9, 0, 0, tzinfo=CST)
+    assert end == datetime(2026, 11, 16, 0, 0, tzinfo=CST)
+
+
 def test_tonight_at_2359_still_points_at_today():
     """23:59 说「今晚」：窗口就剩一分钟，不能滚到明天。"""
     start, end = _window("今晚", datetime(2026, 10, 28, 23, 59, tzinfo=CST))
@@ -230,6 +242,21 @@ def test_record_hooks_skips_fragment_and_negated_subjects(base_db):
     )
 
     assert written == 0, "宁可不问，不能问错"
+
+
+def test_record_hooks_keeps_ordinary_subjects(base_db):
+    """正文护栏只拦碎片与否定式：「晚上」「六点」开头的计划照建。"""
+    persona = _persona()
+    facts = [
+        mem.Fact(title="计划", content="用户的计划：晚上要加班", when="明天", subject="晚上要加班"),
+        mem.Fact(title="计划", content="用户的计划：六点要开会", when="明天", subject="六点要开会"),
+    ]
+
+    written = plan_mod.record_hooks(
+        persona["id"], None, facts, datetime(2026, 10, 28, 20, 0, tzinfo=CST)
+    )
+
+    assert written == 2, "护栏不能把正常计划当过碎片丢掉"
 
 
 def test_record_hooks_isolates_personas(base_db):

@@ -27,11 +27,11 @@ PLAN_FOLLOWUP_H = 36.0
 # 「待会 / 等会儿」的窗口长度
 PLAN_NEAR_WINDOW_H = 4.0
 
-# 计划正文的坏开头：长一点的时间词被切剩的碎片（「下周末」→「末」、
-# 「下个月底交房租」→「月底交房租」）与否定式（「周末不去了」）。
-# spec §2：宁可不问，不能问错 —— 这类正文一旦问出去就是错话。代价是「明天会下雨」这种
-# 把「会」当真动词的说法也不会建钩子，接受。
-_BAD_SUBJECT_PREFIX = ("不", "没", "别", "末", "个", "天", "周", "月", "晚", "会", "儿")
+# 计划正文的坏开头：否定式（「周末不去了」）与被时间词切剩的尾字
+# （「周末」丢了「下」→「末…」）。抽取层已用负向断言堵住这些路径，这里是
+# 最后一道兜底。不列单字时间词：它们都是正常正文的开头
+# （「明天六点要开会」「明天天天加班」），拦了只会静默丢计划。
+_BAD_SUBJECT_PREFIX = ("不", "没", "别", "末", "底", "初", "前")
 
 
 def _day_start(dt: datetime) -> datetime:
@@ -64,12 +64,15 @@ def plan_window(when_text: str, base: datetime) -> "tuple[datetime, datetime] | 
             return today, end
         saturday = today + timedelta(days=5 - weekday)
         return saturday, saturday + timedelta(days=2)
-    if text in ("下周末", "下个周末"):
-        # 与「周末」同构，基准整个挪一周：不能落到「下周」的整周窗口 —— 那样
+    if text in ("下周末", "下个周末", "下下周末", "下下个周末"):
+        # 与「周末」同构，基准整个挪一（两）周：不能落到「下周」的整周窗口 —— 那样
         # 会在用户还没去看展之前就问「后来怎么样了」。
-        monday = today - timedelta(days=base.weekday()) + timedelta(days=7)
-        saturday = monday + timedelta(days=5)
-        return saturday, monday + timedelta(days=7)
+        weeks = 1 if text in ("下周末", "下个周末") else 2
+        monday = today - timedelta(days=base.weekday()) + timedelta(days=7 * weeks)
+        return monday + timedelta(days=5), monday + timedelta(days=7)
+    if text in ("下下周", "下下个周"):
+        monday = today - timedelta(days=base.weekday()) + timedelta(days=14)
+        return monday, monday + timedelta(days=7)
     if text == "下周":
         monday = today - timedelta(days=base.weekday()) + timedelta(days=7)
         return monday, monday + timedelta(days=7)

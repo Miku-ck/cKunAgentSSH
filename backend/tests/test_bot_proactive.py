@@ -1270,6 +1270,25 @@ async def test_tick_survives_a_broken_plan_lookup(base_db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_tick_survives_a_broken_plan_cleanup(base_db, monkeypatch):
+    """过期清理炸了也得把这一轮巡检跑完：清道夫失败不能拖着投递一起躺下。"""
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    target = _qq_target(persona, conv, external_id="c2c:user-1")
+    monkeypatch.setattr(db, "list_proactive_targets", lambda: [target])
+    monkeypatch.setattr(pro, "gate", lambda *a, **kw: (False, "probe"))
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(db, "expire_plan_hooks", boom)
+
+    fired = await pro.ProactiveScheduler().tick()
+
+    assert fired == 0
+    assert _proactive_rows(persona["id"])[-1]["reason"] == "probe", "清理失败后闸照常走完"
+
+
+@pytest.mark.asyncio
 async def test_tick_asks_about_a_plan_whose_memory_was_pruned(base_db, monkeypatch):
     """计划记忆 importance 只有 0.4，维护会先淘它；钩子自带正文，记忆没了照样要问。"""
     persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")

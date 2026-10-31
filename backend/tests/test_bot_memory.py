@@ -331,3 +331,49 @@ def test_one_sentence_two_times_keeps_both_plans():
     plans = [f for f in facts if f.title == "计划"]
     assert [f.when for f in plans] == ["周末", "下周"]
     assert {f.content for f in plans} == {"用户的计划：看展"}, "记忆侧仍是同一条"
+
+
+def test_more_specific_time_words_are_not_cut_into_fragments():
+    """「下周X / 下个月X / 周末X」都不构成已支持的时间词：宁可不问，不能问错。
+
+    切碎的话，「下周六要去看展」会变成 when=下周 + 正文「六要去看展」，36h
+    后她会把这六个字当真事问出去，窗口还早了一整周。
+    """
+    for text in (
+        "下周六要去看展",
+        "下周日要开家长会",
+        "周末前要交房租",
+        "下个月底交房租",
+        "下个月初交房租",
+        "下个月中旬要出差",
+        "下下个月要交房租",
+        "上个周末要去看展",
+        "上周末要去看展",
+    ):
+        plans = [f for f in mem.extract_facts(text) if f.title == "计划"]
+        assert plans == [], f"{text} 不该被拆成计划：{[f.when for f in plans]}"
+
+
+def test_second_next_week_is_its_own_time_word():
+    """「下下周 / 下下周末」是整词：不能落到「下周」的窗口上。"""
+    for text, when in (
+        ("下下周要出差", "下下周"),
+        ("下下个周要出差", "下下个周"),
+        ("下下周末要去看展", "下下周末"),
+        ("下下个周末要去看展", "下下个周末"),
+    ):
+        fact = [f for f in mem.extract_facts(text) if f.title == "计划"][0]
+        assert fact.when == when
+        assert fact.subject == ("出差" if "出差" in text else "看展")
+
+
+def test_ordinary_words_after_a_time_word_stay_intact():
+    """整词匹配不能反向误伤正常正文：「晚上」「个税」「六点」都照旧。"""
+    for text, subject in (
+        ("明天晚上要加班", "晚上要加班"),
+        ("下个月个税申报", "个税申报"),
+        ("明天六点要开会", "六点要开会"),
+        ("这个周末要去看展", "看展"),
+    ):
+        fact = [f for f in mem.extract_facts(text) if f.title == "计划"][0]
+        assert fact.subject == subject, f"{text} 的正文被削了"
