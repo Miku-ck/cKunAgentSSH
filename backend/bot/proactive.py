@@ -357,6 +357,8 @@ def plan_due_topic(persona_id: str, now: datetime) -> "Topic | None":
 
     文案不出现时间词、不出现具体日期：相对时间在几天后才说出口是错乱的。
     """
+    # 落库比较用 UTC 字符串：传进来的若是本地 aware datetime，不换就会错 8 小时
+    now = now.astimezone(timezone.utc)
     row = db.due_plan_hook(
         persona_id,
         _fmt_ts(now),
@@ -497,7 +499,12 @@ class ProactiveScheduler:
             state, gap_hours, pending_topic, cooldown_raw, stage = await asyncio.to_thread(
                 _state_snapshot, persona_id, speed
             )
-            due = await asyncio.to_thread(plan_due_topic, persona_id, now)
+            # 钩子查询炸了不能拖垮整轮巡检（spec §10）：当作没有到期计划继续走
+            try:
+                due = await asyncio.to_thread(plan_due_topic, persona_id, now)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("计划到期查询失败: %s", exc)
+                due = None
             d = desire(
                 state, speed=speed, pending_topic=pending_topic,
                 gap_hours=gap_hours, plan_due=due is not None,
@@ -566,7 +573,11 @@ class ProactiveScheduler:
             _state_snapshot, persona_id, speed
         )
         now = datetime.now(timezone.utc)
-        due = await asyncio.to_thread(plan_due_topic, persona_id, now)
+        try:
+            due = await asyncio.to_thread(plan_due_topic, persona_id, now)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("计划到期查询失败: %s", exc)
+            due = None
         d = desire(
             state, speed=speed, pending_topic=pending_topic,
             gap_hours=gap_hours, plan_due=due is not None,

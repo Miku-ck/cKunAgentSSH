@@ -9,6 +9,7 @@ import pytest
 import database as db
 from bot import memory as mem
 from bot import proactive as pro
+from bot.state import INITIAL_STATE
 
 
 # ── ① desire ──
@@ -1097,7 +1098,7 @@ def test_pick_topic_uses_a_due_plan(base_db):
     assert topic.source == "plan_due"
     assert topic.plan_id == hook_id
     assert "看展" in topic.describe
-    assert topic[0] == topic.describe, "下标访问必须继续可用"
+    assert topic[0] == "他之前提过：看展，问问后来怎么样了", "下标访问必须继续可用"
 
 
 def test_fatigue_care_outranks_a_due_plan(base_db):
@@ -1109,14 +1110,18 @@ def test_fatigue_care_outranks_a_due_plan(base_db):
     assert topic.source == "fatigue_care"
 
 
-def test_plan_due_outranks_fresh_fact(base_db):
+def test_plan_due_outranks_fresh_fact(base_db, monkeypatch):
+    """新鲜事实固定成候选：靠真实 updated_at 的话，跑完 3 天这条就退化成空测。"""
     persona, _conv = _persona_conv()
     _add_due_hook(persona["id"])
-    mem.add_manual(persona["id"], "用户喜欢喝美式")
+    monkeypatch.setattr(
+        pro, "_fresh_fact_topic",
+        lambda _rows, _now: {"content": "用户喜欢喝美式", "updated_at": ""},
+    )
 
     topic = pro.pick_topic(persona["id"], {}, now=NOW_PLAN)
 
-    assert topic.source == "plan_due"
+    assert topic.source == "plan_due", "到期计划比「刚记下的事」更该先问"
 
 
 # ── 决策层：计划回溯放行、问过即标记、超窗清理（spec 2026-10-31-plan-followup）──
@@ -1136,6 +1141,18 @@ def test_desire_still_respects_tension_and_low_energy_with_a_due_plan():
     """放行的是「有具体依据时能开口」，不是「无视状态乱开口」。"""
     state = {"intimacy": 15, "novelty": 0, "tension": 50, "valence": 0, "energy": 0.5}
     assert pro.desire(state, pending_topic=False, gap_hours=0.0, plan_due=True) < pro.FIRE_THRESHOLD
+
+
+def test_desire_with_a_due_plan_passes_on_a_brand_new_persona():
+    """建表默认 state（intimacy=5）也要能开口 —— 新的第一次计划回溯不能哑火。
+
+    这笔账：0.0668(intimacy 项) + 0.12(novelty) + 0.40(plan_due) = 0.5868，
+    过 0.55 只剩 0.037 余量，tension 涨到 10 就过不去了。权重一旦被调薄，
+    这条断言就是第一道报警。
+    """
+    d = pro.desire(dict(INITIAL_STATE), pending_topic=False, gap_hours=0.0, plan_due=True)
+
+    assert d >= pro.FIRE_THRESHOLD
 
 
 def test_desire_without_plan_due_keeps_the_old_floor():
@@ -1212,5 +1229,29 @@ async def test_tick_expires_plan_hooks_past_the_followup_window(base_db, monkeyp
     finally:
         conn.close()
     assert row["state"] == "expired"
+
+
+@pytest.mark.asyncio
+async def test_tick_survives_a_broken_plan_lookup(base_db, monkeypatch):
+    """钩子查询炸了只当没有到期计划：不能把整轮巡检带走（spec §10）。"""
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    target = _qq_target(persona, conv, external_id="c2c:user-1")
+    monkeypatch.setattr(db, "list_proactive_targets", lambda: [target])
+    monkeypatch.setattr(
+        pro, "_state_snapshot",
+        lambda *_a: ({"intimacy": 90, "novelty": 50, "tension": 0,
+                      "valence": 1.0, "energy": 1.0}, 1.0, False, None, "朋友"),
+    )
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(pro, "plan_due_topic", boom)
+    monkeypatch.setattr(pro, "gate", lambda *a, **kw: (False, "probe"))
+
+    fired = await pro.ProactiveScheduler().tick()
+
+    assert fired == 0
+    assert _proactive_rows(persona["id"])[-1]["reason"] == "probe", "后面的闸照常走完"
 
 

@@ -3109,6 +3109,9 @@ def set_bot_memory_injection(conversation_id: str, memory_ids: list, at: str) ->
 #
 # 状态四态：pending → asked（问出去了）/ superseded（同一件事改了时间）/ expired
 # （超窗没来得及问）。时间戳一律 UTC 字符串，可按字典序比较。
+#
+# due_start 与 memory_id 目前只写不读：前者留给「没说准哪天」的宽窗判断，
+# 后者留给「记忆行被维护淘汰后仍能回指」；两列都在表里，不等到改表再加。
 
 
 def add_plan_hook(
@@ -3125,6 +3128,8 @@ def add_plan_hook(
 
     作废与插入放在同一个事务里：两次 commit 之间断掉会丢一条已经改期的计划。
     """
+    # supersede 按文本匹配（spec §6）：不 strip 的话「看展」「看展 」会各活一条
+    plan_text = (plan_text or "").strip()
     hook_id = _new_id()
     conn = _get_conn()
     try:

@@ -168,6 +168,7 @@ def test_remember_async_creates_a_hook_even_when_the_memory_was_deduped(base_db)
     states = [dict(row)["state"] for row in rows]
     assert states == ["superseded", "pending"], "旧时间失效，新时间生效"
     assert dict(rows[-1])["when_text"] == "下周"
+    assert len(mem.list_memories(persona["id"])) == 1, "记忆还是去重的，钩子独立更新"
 
 
 def test_record_hooks_skips_unknown_when_without_raising(base_db):
