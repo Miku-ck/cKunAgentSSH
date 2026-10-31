@@ -30,6 +30,16 @@ import {
 } from '../shared/update-core'
 import { resolveTarExecutable } from './utils/tar-exe'
 
+/**
+ * 删除 staging 目录的统一口径。
+ *
+ * maxRetries/retryDelay 是 Node 专给 Windows 准备的：刚被 `tar -xzf` 或下载流写过的
+ * 目录，句柄可能还在释放中，rmSync 会抛 ENOTEMPTY/EBUSY/EPERM —— 实测本仓的
+ * gh-download 并发用例就在 afterEach 的同一写法上随机 ENOTEMPTY 红过一次。
+ * `force` 只吞 ENOENT，吞不掉这种竞态。
+ */
+const RM_OPTS = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const
+
 export interface UpdaterOptions {
   /** 应用所在目录（打包后 = win-unpacked，开发时 = 仓库根之外的其他目录，不做更新） */
   appDir: string
@@ -171,7 +181,7 @@ export class Updater {
         throw new Error(`sha256 不匹配（期望 ${picked.release.sha256.slice(0, 12)}…，实得 ${sha.slice(0, 12)}…）`)
       }
       const { stagingDir } = stagingPaths(this.opts.appDir, picked.version)
-      if (existsSync(stagingDir)) rmSync(stagingDir, { recursive: true, force: true })
+      if (existsSync(stagingDir)) rmSync(stagingDir, RM_OPTS)
       mkdirSync(stagingDir, { recursive: true })
       const extractTar = this.opts.extractTar ?? this.defaultExtractTar.bind(this)
       await extractTar(archive, stagingDir)
@@ -179,9 +189,15 @@ export class Updater {
       this.setState({ phase: 'ready', percent: 100, error: null })
       this.log('info', `新版本 ${picked.version} 已就绪：${stagingDir}`)
     } catch (e) {
-      // staging 半成品必须清掉：下次重试时"目录已存在"会让解压行为不确定
-      const p = stagingPaths(this.opts.appDir, picked.version)
-      rmSync(p.stagingDir, { recursive: true, force: true })
+      // staging 半成品必须清掉：下次重试时"目录已存在"会让解压行为不确定。
+      // 清不动也不能再抛 —— 这里抛会顶掉下面的 setState，用户看不到错误态而停在
+      // downloading，原始失败原因也一起丢了。
+      try {
+        const p = stagingPaths(this.opts.appDir, picked.version)
+        rmSync(p.stagingDir, RM_OPTS)
+      } catch (cleanupErr) {
+        this.log('warn', `清理 staging 失败（不掩盖原始错误）：${(cleanupErr as Error).message}`)
+      }
       this.setState({ phase: 'error', error: (e as Error).message })
       this.log('error', `下载/解压失败：${(e as Error).message}`)
     }
@@ -302,7 +318,13 @@ export class Updater {
       this.cleanupStale()
       return { applied: true, version: pending.version }
     }
-    rmSync(pending.stagingDir, { recursive: true, force: true })
+    try {
+      rmSync(pending.stagingDir, RM_OPTS)
+    } catch (cleanupErr) {
+      // 本方法在 app.whenReady() 的链上被调用（main.ts），这里抛出去会让整条就绪链
+      // 断开、createWindow 永不执行 —— 换包残留不值一个白屏。
+      this.log('warn', `清理上次换包的 staging 失败：${(cleanupErr as Error).message}`)
+    }
     this.log('warn', `上次换包未完成（标记 ${pending.version} / 实际 ${this.opts.currentVersion}），已清理 staging`)
     return { applied: false, version: pending.version }
   }

@@ -42,7 +42,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  rmSync(DownloadsRoot, { recursive: true, force: true })
+  rmSync(DownloadsRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   vi.restoreAllMocks()
 })
 

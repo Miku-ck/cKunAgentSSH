@@ -115,7 +115,12 @@ export async function exportDiagnostics(opts: DiagnosticsOptions): Promise<Diagn
     const tarCreate = opts.tarCreate ?? defaultTarCreate
     await tarCreate(archive, staging)
     const bytes = statSync(archive).size
-    rmSync(staging, { recursive: true, force: true })
+    // 包已经落盘，这一步只是收尾：清不动也不能把成功的导出翻成 ok:false
+    try {
+      rmSync(staging, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    } catch (cleanupErr) {
+      opts.log?.('warn', `诊断包已生成，但 staging 清理失败：${(cleanupErr as Error).message}`)
+    }
     // 成功之后顺手清掉历史失败残留：现场已经进了本次的包，旧 staging 没有价值
     cleanupStaleStaging(outDir)
     opts.log?.('info', `诊断包已导出：${archive}（${bytes} 字节，${logs.length} 份日志，${crashes} 份转储）`)

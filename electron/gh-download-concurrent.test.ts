@@ -57,7 +57,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  rmSync(DownloadsRoot, { recursive: true, force: true })
+  // maxRetries 是给 Windows 准备的：这一组的用例刚写完分片文件，句柄可能还在释放，
+  // 裸 rmSync 会随机抛 ENOTEMPTY（实测在 CI 上红过一次），把产品逻辑判成失败。
+  rmSync(DownloadsRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   vi.restoreAllMocks()
 })
 
