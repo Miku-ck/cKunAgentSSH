@@ -66,6 +66,7 @@
 | 今晚 | `[当日 18:00, 次日 00:00)` |
 | 明天 / 后天 | 对应整日 `[00:00, 次日 00:00)` |
 | 周末 | 本周 `[周六 00:00, 下周一 00:00)`；若 base 已是周日，取当日整日 |
+| 下周末 / 下个周末 | 下周的 `[周六 00:00, 下下周一 00:00)` |
 | 下周 | `[下周一 00:00, 再下周一 00:00)` |
 | 下个月 | `[下月 1 日 00:00, 下下月 1 日 00:00)` |
 
@@ -75,6 +76,8 @@
 三条硬规则：
 
 - **解析不出窗口就不建钩子**，静默放弃。宁可不问，不能问错。
+- **长词排短词前**：「下周末」必须整词匹配。若被切成「下周」+「末去看展」，
+  窗口错一整周（用户还没去看展就先问「后来怎么样了」），正文还会变成一句错话。
 - **不需要额外的窗口上限常量**：时间词表最长的是「下个月」（最多 62 天），
   窗口天然封顶。
 - **时间词只参与窗口计算，绝不进入文案**。「下个月」这类相对时间在 30 天后
@@ -96,7 +99,7 @@ PLAN_NEAR_WINDOW_H = 4    # 「待会 / 等会儿」的窗口长度
 (
     "计划",
     re.compile(
-        r"(?:我)?(?P<when>明天|后天|下周|周末|下个月|今晚|待会|等会儿)\s*"
+        r"(?:我)?(?P<when>下个周末|下周末|下个月|明天|后天|下周|周末|今晚|待会|等会儿)\s*"
         r"(?:要|想|准备|打算|得去)?\s*(?P<x>[\u4e00-\u9fa5A-Za-z0-9]{2,25})"
     ),
     "用户的计划：{x}",
@@ -146,7 +149,8 @@ return _write_facts(persona_id, conversation_id, facts, vectors)   # 原有逻�
 两者相差在秒级，对「今晚 / 明天 / 周末」这类粗粒度窗口不构成影响）。
 
 `record_hooks` 只处理 `when` 非空的 Fact，内部 `try/except` 兜底，异常只记
-warning，不影响记忆写入与聊天主链路。
+warning，不影响记忆写入与聊天主链路。另有一道护栏：计划正文以时间词碎片或
+否定式开头（「末去看展」「不去了」）时不建钩子 —— 同样遵循「宁可不问」。
 
 ### 5. 钩子表
 
@@ -332,40 +336,48 @@ tension=50`）时 `0.096+0.40-0.30-0.25 < 0`，仍被闸拦住——放行的是
 
 ## 测试
 
-- `plan_window` 纯函数：7 个时间词 × 跨月 / 跨年 / 周日说「周末」/ 23:59 说
+- `plan_window` 纯函数：9 个时间词 × 跨月 / 跨年 / 周日说「周末」/ 23:59 说
   「今晚」/ 脏文本返回 `None`；固定 `base` 断言可重放。
-- `extract_facts`：「周末要去看展」→ `when="周末", plan="看展"`；`content` 仍不含
-  时间词；无时间词的计划不产生 `when`。
+- 抽取层：`_build` 的时间词命名组 `when`；同一句话里的两条计划靠 `when` 区分
+  （去重键是 `(content, when)`），否则「周末…下周」只能活下前一条；
+  `content` 仍不含时间词。
 - `record_hooks`：同文本不同时间 → 旧钩子 `superseded`；不同 persona 互不干扰；
   解析失败不落行；记忆被去重跳过时钩子照常写入。
 - `due_hook`：`due_end == now` 边界、`now-36h` 边界、状态过滤。
 - `pick_topic`：`fatigue_care` 压过 `plan_due`；`plan_due` 压过 `fresh_fact`；
   返回 `Topic` 且 `plan_id` 非空。
 - `_deliver`：成功标记 `asked`；`skip` 不标记；`probe` 也标记。
-- `tick`：过期清理生效；记忆行被淘汰后钩子仍能触发。
-- 启动指纹测试：`bot_plan_hooks` 纳入表结构断言。
+- `tick`：过期清理生效；记忆行被淘汰后钩子仍能触发；钩子查询抛错不中断整轮。
+- 启动指纹测试：结构指纹覆盖新增 DDL（含 `bot_plan_hooks`）。
 
 ## 实施回填（2026-10-31）
 
 落地提交：`660388f` 窗口纯函数 → `ef4af4b` 抽取层 → `1e00171` 钩子表与
 数据访问 → `aefd51c` 钩子写入接记忆链路 → `749225f` 选题器 → `571413d`
-决策层 → 本回填带一轮评审修复。
+决策层 → `26080c4` 区段评审修复 → `cec8ac9` 首次回填 → `c75b12d` 终审修复。
 
 ### 用例
 
 | 文件 | 新增 | 覆盖 |
 | --- | --- | --- |
-| `tests/test_bot_plan.py`（新建） | 17 | `plan_window` 10 例（8 个时间词 + 跨月跨年 + 脏文本）；DB 四函数 4 例；`record_hooks` 3 例 |
-| `tests/test_bot_memory.py` | 3 | 时间词进 `when`、正文进 `subject`、`content` 仍不含时间词 |
-| `tests/test_bot_proactive.py` | 11 | 选题优先级 3 例；`desire` 4 例（含 `INITIAL_STATE` 真实默认）；`_deliver` 标记 2 例；`tick` 过期清理与钩子查询容错 2 例 |
+| `tests/test_bot_plan.py`（新建） | 21 | `plan_window` 12 例（9 个时间词 + 跨月跨年 + 23:59 今晚 + 脏文本）；DB 四函数 4 例；`record_hooks` 5 例（含 persona 隔离与碎片/否定护栏） |
+| `tests/test_bot_memory.py` | 5 | 时间词进 `when`、正文进 `subject`、`content` 不含时间词；复合时间词不切碎；一句话两个时间两条都留 |
+| `tests/test_bot_proactive.py` | 13 | 选题优先级 3 例；`desire` 4 例（含 `INITIAL_STATE` 真实默认）；`_deliver` 标记 2 例；`tick` 过期清理 / 查询容错 / 记忆被淘汰 3 例；`probe` 标记 1 例 |
 | `tests/test_startup_critical_path.py` | 0（改 1 行） | 结构指纹 `7ae05ebc67db3f4b` → `78a959dd0e14e3b1` |
 
 ### 验证
 
 ```
-python -m pytest tests/ -q                 # 3902 passed in 284.99s
+python -m pytest tests/ -q                 # 3909 passed, 1 failed
 python -m ruff check --select E4,E7,E9,F <改动文件>   # 仅 database.py:1397 一条既有 E402
 ```
+
+唯一 failed 是 `test_startup_timing.py::test_db_read_steps_run_in_one_round`
+（0.153s vs 阈值 0.15s）—— **既有负载敏感计时用例，与本计划无关**：该用例把
+lifespan 八步全换成 0.04s 的桩，不经过本次改动的任何代码；单独跑 6/6 通过，
+同一用例在基线 `48d1c51` 与本分支低负载下均为 77–110ms。它只在全库 3900 用例
+同跑、线程池被压满时才临界失败。随手把阈值抬高不属本计划范围，保留原值以便
+下次真的有人把启动步骤改回串行时它还能叫。
 
 全库 `ruff check .` 有 1177 条既有告警（C408 / UP / PIE 等），CI 也不跑 ruff，
 所以本计划的门禁只取 pyflakes 类；不动与本功能无关的存量告警。
@@ -379,9 +391,18 @@ python -m ruff check --select E4,E7,E9,F <改动文件>   # 仅 database.py:1397
 | §4 钩子接入 | `remember_async` 内一行 `record_hooks` | 同，但同步版 `remember()` 不接 | 同步版只给无事件循环的旧调用方，不走钩子 |
 | §10 选题容错 | 「复用 `topic=None` 回退」 | `pick_topic` 外原有 try/except **不够**：`tick`/`probe` 在 `gate` 之前就要用 `plan_due` 算意愿 | 两处各自包了 try/except → warning + `due=None`，并补了容错用例 |
 | 代码落位表 | `plan.py` 含 `due_hook` 查询封装 | 查询封装在 `database.py`（`due_plan_hook`） | 纯函数归 `plan.py`、IO 归 `database.py`，与既有分层一致 |
+| §3 时间词表 | 7 个词 | 9 个词（补「下周末 / 下个周末」） | 终审发现「下周末」被切成「下周」+「末去看展」：窗口错一周且正文是错话，属用户可见缺陷 |
+| §4 抽取去重 | 按 `content` 每规则一次 | 计划规则改按 `(content, when)` | 一句话里改期（「周末…下周」）否则只活下前一条，§6 的 supersede 永远是空转 |
+| §2 正文护栏 | 无 | 计划正文以时间词碎片/否定式开头时不建钩子 | 抽取层修正后的兜底：宁可不问 |
+| §10 过期清理 | 直接 await | 包了 try/except | 与「钩子失败不能拖垮整轮巡检」同一规则 |
 
 ### 遗留
 
-`due_start` 与 `memory_id` 目前只写不读（前者留给「没说准哪天」的宽窗判断，
-后者留给记忆行被淘汰后的回指），两列已在表里，不等到改表再加。
+`due_start` 目前只写不读（留给「没说准哪天」的宽窗判断）；`memory_id` 目前**恒写
+NULL** —— `record_hooks` 在 `_write_facts` 之前跑，那时记忆行还不存在。这一列
+留给「记忆行被维护淘汰后仍能回指」，真要溯源时再把 `_write_facts` 提前并回传 id。
+
+`bot_plan_hooks` 没进 `_SCHEMA_CORE_TABLES`：那个元组是「建表脚本是否跑过」的
+最小集合（`bot_proactive_log` 也不在里面），只放最初的核心五表。版本号被外部
+清零时会重跑整段 DDL，新表自然补上；单独把这张表加进去会造出新的不对称。
 
