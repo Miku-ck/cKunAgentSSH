@@ -1,5 +1,10 @@
 # ruff 配置 — 与既有代码风格对齐的最小约束
 # （后端为渐进式整改：E402 的模块级惰性导入等既有范式暂不强制）
+#
+# CI 门禁（npm run lint:backend）刻意只跑 `--select F,E9` 这一小撮：未用导入、
+# 未定义名、语法错 —— 全是「死代码 + 必炸」，当前全库 0 命中，所以能当硬闸门。
+# 命令行 --select 会覆盖下面的规则集，因此宽规则集的存量告警不会把 CI 刷红；
+# 想复现全量现状：`python -m ruff check .`（不加 --select）。
 
 [lint.per-file-ignores]
 # reins/__init__.py 刻意保持与原单文件 reins.py 一致的导入面（再导出给

@@ -14,7 +14,7 @@ import pytest
 
 import database as db
 from bot.provider import ChannelConfig, ChannelConnectError
-from bot.wechat_channel import WeChatPayloadError, parse_inbound
+from bot.wechat_channel import parse_inbound
 from bot.wechat_crypto import WeChatCrypto
 from bot.wechat_manager import WeChatConnection, WeChatProvider
 

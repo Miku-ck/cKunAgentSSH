@@ -6,10 +6,11 @@
 #
 # 检查项（与 scripts/ci-check.sh 一致）：
 #   1. 后端 pytest（backend/tests/，含跨端白名单契约测试）
-#   2. 前端 vue-tsc 类型检查
-#   3. 前端 vitest 单测
-#   4. electron-vite 构建（验证 main/preload/renderer 三方编译）
-#   5. 网关 mux 字节漂移自检（hillgw.mjs 与 shared/gateway-mux.ts 双实现金样对拍）
+#   2. 后端 lint 闸门（ruff --select F,E9：未用导入/未定义名/语法错，全库 0 命中）
+#   3. 前端 vue-tsc 类型检查
+#   4. 前端 vitest 单测
+#   5. electron-vite 构建（验证 main/preload/renderer 三方编译）
+#   6. 网关 mux 字节漂移自检（hillgw.mjs 与 shared/gateway-mux.ts 双实现金样对拍）
 #
 # 本文件的形状由 backend/tests/test_ci_matrix_contract.py 钉住：改这里必须同步改那里。
 # 拆两条单 OS job 而不是 runs-on 矩阵：矩阵逼着每个 step 挂 if: matrix.os，
@@ -58,6 +59,15 @@ jobs:
       - name: Backend tests
         # 与本地 scripts/ci-check.sh 同一条命令，收集范围只有一个来源（npm run test:backend）
         run: npm run test:backend
+
+      # 只钉「死代码 + 必炸错误」两类（F=未用导入/未定义名，E9=语法错），全库 0 命中。
+      # 宽规则集那 1100+ 条存量告警是 ruff.toml 首行与 docs/superpowers 记录的
+      # 「渐进式整改、非本次范围」，在这里扩规则集只会把永久红灯变成惯例。
+      # Windows job 没有 setup-python（那条 job 的 Python 是 runtime/ 内嵌的），
+      # 所以 lint 只在 ubuntu 上跑一次，与后端 pytest 同一位置。
+      - name: Backend lint (ruff F,E9)
+        # 与 npm run lint:backend / scripts/ci-check.sh 同一条命令，口径只有一个来源
+        run: npm run lint:backend
 
       - name: Gateway mux selftest
         # hillgw.mjs 与 shared/gateway-mux.ts 两套实现的帧格式金样；不跑就等于没有守卫

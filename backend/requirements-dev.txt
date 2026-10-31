@@ -2,3 +2,7 @@
 # README 的「跑后端测试」与 .github/workflows/ci.yml 都指向这份，别再各自 pip install。
 pytest>=8.0
 pytest-asyncio>=0.24
+# lint 闸门：scripts/ci-check.sh 与 ci.yml 跑 `ruff check --select F,E9`。
+# 只钉这一小撮（未用导入/未定义名/语法错），宽规则集的存量告警是有意保留的
+# 渐进式整改项（见 ruff.toml 首行注释），别在这里顺手扩规则集把全库刷红。
+ruff>=0.16,<1.0

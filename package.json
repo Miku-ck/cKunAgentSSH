@@ -17,6 +17,7 @@
     "typecheck": "vue-tsc -p tsconfig.web.json --noEmit && vue-tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "test:backend": "cd backend && python -m pytest tests/ -q",
+    "lint:backend": "cd backend && python -m ruff check --select F,E9 .",
     "ci": "bash scripts/ci-check.sh",
     "preview": "node scripts/dev.cjs preview",
     "dev:backend": "cd backend && python main.py --host 0.0.0.0",

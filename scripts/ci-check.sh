@@ -25,6 +25,13 @@ run() { # run <描述> <命令...>
 # 1. 后端测试（含跨端白名单契约测试）—— 口径与 npm run test:backend / CI 同一来源
 run "后端 pytest" npm run --silent test:backend
 
+# 1b. 后端 lint 闸门。刻意只跑 F（未用导入/未定义名）+ E9（语法错）：
+#     这三类是「死代码与必炸错误」，全库当前 0 命中，所以能当硬闸门用。
+#     宽规则集（UP/I/BLE/S 等）有 1100+ 条存量告警，是 ruff.toml 首行与
+#     docs/superpowers 里明确记录的「渐进式整改、非本次范围」，
+#     把它塞进 CI 等于把既有决策变成永久红灯。
+run "后端 lint (ruff F,E9)" npm run --silent lint:backend
+
 # 2. 前端类型检查
 run "前端 typecheck (vue-tsc)" npm run --silent typecheck
 
