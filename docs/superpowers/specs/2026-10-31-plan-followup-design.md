@@ -55,8 +55,10 @@
 
 ### 2. 时间窗口模型
 
-以**用户那句话的时刻**（本地时区）为基准 `base` 计算窗口。全项目时区口径统一
-取 `astimezone()`，与静音窗判断同源，不引入 UTC/本地混算。
+以**用户那句话的时刻**（本地时区）为基准 `base` 计算窗口：窗口在本地时区上算，
+「明天 00:00」就是本地 00:00。落库前统一 `astimezone(timezone.utc)` 再转字符串，
+与 `bot_messages.created_at` 的 UTC 口径对齐；查询侧同样先把 `now` 换成 UTC
+再比较，否则本地 aware datetime 直接转字符串会错一个时区。
 
 | 时间词 | 窗口 |
 | --- | --- |
@@ -162,9 +164,12 @@ CREATE TABLE IF NOT EXISTS bot_plan_hooks (
     asked_at        TEXT,
     created_at      TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_plan_due ON bot_plan_hooks(state, due_end);
-CREATE INDEX IF NOT EXISTS idx_plan_persona ON bot_plan_hooks(persona_id, state);
+CREATE INDEX IF NOT EXISTS ix_bot_plan_due ON bot_plan_hooks(state, due_end);
+CREATE INDEX IF NOT EXISTS ix_bot_plan_persona ON bot_plan_hooks(persona_id, state, plan_text);
 ```
+
+第二个索引带上 `plan_text`：supersede 按 `persona_id + plan_text + state` 匹配，
+让这条 UPDATE 也走索引而不是扫表。
 
 落位在 `init_db` 的 `CREATE TABLE IF NOT EXISTS` 区。**这是真正的结构变更，必须
 `_SCHEMA_VERSION` 5 → 6**：`init_db` 在 user_version 命中时整段跳过 DDL
@@ -186,7 +191,9 @@ CREATE INDEX IF NOT EXISTS idx_plan_persona ON bot_plan_hooks(persona_id, state)
   插入新钩子（新时间才是对的）；
 - 按人格而非会话去重——她记得的是「你这个人」，单聊与群聊说的同一件事是同一件；
 - `plan_text` 已由 `_strip_leading_verbs` 归一（「要去看展」→「看展」）；
-- 一条消息里多个计划 → 各建一条；下次开口只取最早到期的那条。
+  入库前再 `strip` 一次，否则「看展」「看展 」会各活一条；
+- 一条消息里多个计划 → 各建一条；下次开口只取最早到期的那条。同一件事说了
+  两个时间（「周末……不，下周去」）不算多个计划：后者把前者 supersede，只留一条。
 
 ### 7. 选题器扩展（`bot/proactive.py`）
 
@@ -205,7 +212,7 @@ class Topic(NamedTuple):
 理由：疲劳是用户当下状态，最硬；计划有 36h 时效窗，比泛泛的新事实更具体；
 旧事钩子仍在最后。
 
-查询（一条索引查询，走 `idx_plan_due`）：
+查询（一条索引查询，走 `ix_bot_plan_due`）：
 `state='pending' AND due_end <= now AND due_end >= now - PLAN_FOLLOWUP_H`，
 `ORDER BY due_end ASC LIMIT 1`——最早到期的那件事先问。
 
@@ -256,6 +263,13 @@ desire(state, *, speed, pending_topic, gap_hours, plan_due: bool = False) -> flo
 tension=50`）时 `0.096+0.40-0.30-0.25 < 0`，仍被闸拦住——放行的是「有具体
 依据时能开口」，不是「无视状态乱开口」。
 
+**真实建表默认更薄**：`INITIAL_STATE` 是 `intimacy=5, novelty=60, energy=0.6`，
+代入得 `0.30×sigmoid(-1.25)=0.067` + `0.12` + `0.40` = **0.5868**，过 0.55 只剩
+0.037 余量；`tension` 只要涨到 10（`-0.60×0.1=-0.06`）就过不去。这个边界是
+刻意的：新人格靠计划能开口一次，但一有疙瘩就让位。0.037 一旦被后续调权吃
+掉，`test_bot_proactive.py::test_desire_with_a_due_plan_passes_on_a_brand_new_persona`
+会先报警。
+
 四重抑制闸（12h 间隔 / 静音窗 / 冷场冷却 / 日配额）全程不变。
 
 ### 10. 错误处理
@@ -293,7 +307,7 @@ tension=50`）时 `0.096+0.40-0.30-0.25 < 0`，仍被闸拦住——放行的是
 
 | 文件 | 改动 |
 | --- | --- |
-| `backend/bot/plan.py` | **新增**：`plan_window(when_text, base)` 纯函数 + `record_hooks` + `due_hook` 查询封装；`PLAN_FOLLOWUP_H` |
+| `backend/bot/plan.py` | **新增**：`plan_window(when_text, base)` 纯函数 + `record_hooks`；两个时间常量 |
 | `backend/bot/memory.py` | 「计划」规则加 `when` 命名组；`Fact.when` / `Fact.subject`；`_build` 取值；`remember_async` 调 `record_hooks` |
 | `backend/bot/proactive.py` | `Topic` NamedTuple；`pick_topic` 加 `plan_due` 分支与优先级；`desire` 加 `plan_due` 参数；`_deliver` 标记 `asked`；`tick` 过期清理 |
 | `backend/database.py` | `bot_plan_hooks` DDL + 索引；`_SCHEMA_VERSION` 5 → 6；`add_plan_hook`（内部 supersede 同文本 pending）/ `due_plan_hook` / `mark_plan_asked` / `expire_plan_hooks` |
@@ -330,3 +344,44 @@ tension=50`）时 `0.096+0.40-0.30-0.25 < 0`，仍被闸拦住——放行的是
 - `_deliver`：成功标记 `asked`；`skip` 不标记；`probe` 也标记。
 - `tick`：过期清理生效；记忆行被淘汰后钩子仍能触发。
 - 启动指纹测试：`bot_plan_hooks` 纳入表结构断言。
+
+## 实施回填（2026-10-31）
+
+落地提交：`660388f` 窗口纯函数 → `ef4af4b` 抽取层 → `1e00171` 钩子表与
+数据访问 → `aefd51c` 钩子写入接记忆链路 → `749225f` 选题器 → `571413d`
+决策层 → 本回填带一轮评审修复。
+
+### 用例
+
+| 文件 | 新增 | 覆盖 |
+| --- | --- | --- |
+| `tests/test_bot_plan.py`（新建） | 17 | `plan_window` 10 例（8 个时间词 + 跨月跨年 + 脏文本）；DB 四函数 4 例；`record_hooks` 3 例 |
+| `tests/test_bot_memory.py` | 3 | 时间词进 `when`、正文进 `subject`、`content` 仍不含时间词 |
+| `tests/test_bot_proactive.py` | 11 | 选题优先级 3 例；`desire` 4 例（含 `INITIAL_STATE` 真实默认）；`_deliver` 标记 2 例；`tick` 过期清理与钩子查询容错 2 例 |
+| `tests/test_startup_critical_path.py` | 0（改 1 行） | 结构指纹 `7ae05ebc67db3f4b` → `78a959dd0e14e3b1` |
+
+### 验证
+
+```
+python -m pytest tests/ -q                 # 3902 passed in 284.99s
+python -m ruff check --select E4,E7,E9,F <改动文件>   # 仅 database.py:1397 一条既有 E402
+```
+
+全库 `ruff check .` 有 1177 条既有告警（C408 / UP / PIE 等），CI 也不跑 ruff，
+所以本计划的门禁只取 pyflakes 类；不动与本功能无关的存量告警。
+
+### 与设计的偏差
+
+| 处 | 原设计 | 实际 | 原因 |
+| --- | --- | --- | --- |
+| §5 索引名 | `idx_plan_due` / `idx_plan_persona(persona_id, state)` | `ix_bot_plan_due` / `ix_bot_plan_persona(persona_id, state, plan_text)` | 与库内既有 `ix_*` 命名一致；带上 `plan_text` 让 supersede 的 UPDATE 也走索引 |
+| §9 数值校验 | 按 `intimacy=15` 得 0.616 | 真实 `INITIAL_STATE`（`intimacy=5`）得 **0.5868** | 标定参数选得太乐观；权重未动，补了以 `INITIAL_STATE` 为输入的回归用例与上文的边界说明 |
+| §4 钩子接入 | `remember_async` 内一行 `record_hooks` | 同，但同步版 `remember()` 不接 | 同步版只给无事件循环的旧调用方，不走钩子 |
+| §10 选题容错 | 「复用 `topic=None` 回退」 | `pick_topic` 外原有 try/except **不够**：`tick`/`probe` 在 `gate` 之前就要用 `plan_due` 算意愿 | 两处各自包了 try/except → warning + `due=None`，并补了容错用例 |
+| 代码落位表 | `plan.py` 含 `due_hook` 查询封装 | 查询封装在 `database.py`（`due_plan_hook`） | 纯函数归 `plan.py`、IO 归 `database.py`，与既有分层一致 |
+
+### 遗留
+
+`due_start` 与 `memory_id` 目前只写不读（前者留给「没说准哪天」的宽窗判断，
+后者留给记忆行被淘汰后的回指），两列已在表里，不等到改表再加。
+
