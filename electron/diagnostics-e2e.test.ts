@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { exportDiagnostics } from './diagnostics'
+import { resolveTarExecutable } from './utils/tar-exe'
 
 const isWindows = process.platform === 'win32'
 
@@ -58,7 +59,7 @@ describe.skipIf(!isWindows)('exportDiagnostics（真实 tar.exe）', () => {
     expect(res.path).toBeTruthy()
 
     // 1) 归档里真的有三个部分（目录前缀可能是 ./，按后缀判）
-    const listing = execFileSync('tar.exe', ['-tzf', res.path!], { encoding: 'utf8' })
+    const listing = execFileSync(resolveTarExecutable(), ['-tzf', res.path!], { encoding: 'utf8' })
     const entries = listing.split(/\r?\n/).map((l) => l.replace(/^\.\//, '')).filter(Boolean)
     expect(entries).toContain('system.json')
     expect(entries).toContain('logs/main.log')
@@ -67,7 +68,7 @@ describe.skipIf(!isWindows)('exportDiagnostics（真实 tar.exe）', () => {
     // 2) 解出来的内容与盘上一致：日志脱敏、system.json 可解析
     const unpacked = join(root, 'unpacked')
     mkdirSync(unpacked, { recursive: true })
-    execFileSync('tar.exe', ['-xzf', res.path!, '-C', unpacked])
+    execFileSync(resolveTarExecutable(), ['-xzf', res.path!, '-C', unpacked])
     const log = readFileSync(join(unpacked, 'logs', 'main.log'), 'utf8')
     expect(log).toContain('后端启动完成')
     expect(log).not.toContain('abcdef123456')

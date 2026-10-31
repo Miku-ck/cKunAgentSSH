@@ -28,6 +28,7 @@ import {
   type UpdateManifest,
   type UpdateState,
 } from '../shared/update-core'
+import { resolveTarExecutable } from './utils/tar-exe'
 
 export interface UpdaterOptions {
   /** 应用所在目录（打包后 = win-unpacked，开发时 = 仓库根之外的其他目录，不做更新） */
@@ -458,7 +459,7 @@ export class Updater {
   private defaultExtractTar(archive: string, destDir: string): Promise<void> {
     // 复用打包链路的 bsdtar 假设（Windows 10+ 自带 C:\Windows\System32\tar.exe）
     return new Promise((resolve, reject) => {
-      const child = spawn(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xzf', archive, '-C', destDir], {
+      const child = spawn(resolveTarExecutable(), ['-xzf', archive, '-C', destDir], {
         stdio: 'ignore',
         windowsHide: true,
       })

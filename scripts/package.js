@@ -213,7 +213,14 @@ child.on('exit', (code) => {
   }
   // tar-only 出件：解包目录直发。Windows 10+ 自带 tar.exe（bsdtar），
   // POSIX 用系统 tar；找不到即失败退出——绝不出"没有发布物"的绿色流水线。
-  const tarBin = process.platform === 'win32' ? 'tar.exe' : 'tar'
+  // 与 electron/utils/tar-exe.ts 同一个取舍（那份是 TS，本脚本跑裸 node 引不动）：
+  // Windows 必须命中 System32 的 bsdtar。裸 'tar.exe' 会被 Git for Windows 的
+  // usr/bin 抢走，GNU tar 把输出路径里的 "C:" 当远端主机解析，出件直接失败。
+  const candidates = process.platform === 'win32'
+    ? [process.env.SystemRoot ? path.join(process.env.SystemRoot, 'System32', 'tar.exe') : null, 'tar.exe']
+      .filter(Boolean)
+    : ['tar']
+  const tarBin = candidates.find((p) => !path.isAbsolute(p) || fs.existsSync(p))
   const unpacked = path.join(root, 'dist', platformBuildDirName())
   const artifact = path.join(root, 'dist', `ckunagentssh-${version}-${process.platform}-x64.tar.gz`)
   if (!fs.existsSync(unpacked)) {

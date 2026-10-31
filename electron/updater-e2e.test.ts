@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { Updater } from './updater'
+import { resolveTarExecutable } from './utils/tar-exe'
 
 const isWindows = process.platform === 'win32'
 
@@ -38,7 +39,7 @@ describe.skipIf(!isWindows)('自更新真实 IO（check → download → apply �
     mkdirSync(srcDir, { recursive: true })
     writeFileSync(join(srcDir, 'new.txt'), 'new')
     const archive = join(root, 'v020.tar.gz')
-    const tar = spawnSync('tar.exe', ['-czf', archive, '-C', srcDir, '.'], { encoding: 'utf8' })
+    const tar = spawnSync(resolveTarExecutable(), ['-czf', archive, '-C', srcDir, '.'], { encoding: 'utf8' })
     expect(tar.status, tar.stderr).toBe(0)
     const body = readFileSync(archive)
     const sha256 = createHash('sha256').update(body).digest('hex')

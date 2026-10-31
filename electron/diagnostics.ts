@@ -27,6 +27,7 @@ import {
   type DiagnosticsResult,
   type LogFileStat,
 } from '../shared/diagnostics-core'
+import { resolveTarExecutable } from './utils/tar-exe'
 
 export type { DiagnosticsResult }
 
@@ -236,10 +237,10 @@ function bundleReadme(now: Date, logCount: number, crashCount: number): string {
   ].join('\n')
 }
 
-/** 系统自带 bsdtar（Windows 10+ 的 System32\\tar.exe），与打包/更新链路同一个假设 */
+/** 系统自带 bsdtar（Windows 10+ 的 System32\tar.exe），与打包/更新链路同一个假设 */
 function defaultTarCreate(archive: string, cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-czf', archive, '-C', cwd, '.'], {
+    const child = spawn(resolveTarExecutable(), ['-czf', archive, '-C', cwd, '.'], {
       stdio: 'ignore',
       windowsHide: true,
     })
