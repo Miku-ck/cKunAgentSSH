@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 import database as db
 from agent.memory import mstore, retriever
+from . import plan as plan_mod
 from .character import has_sensitive, persona_text_risk
 from .timeutil import days_since as _days_since_impl, fmt_ts as _fmt_ts, parse_ts as _parse_ts
 
@@ -368,6 +369,11 @@ async def remember_async(
     if keyword:
         forget(persona_id, keyword)
     facts = extract_facts(user_text)
+    # 钩子与记忆去重解耦：同一件事换个时间说，记忆会被 content 去重跳过，
+    # 但到期窗口必须更新（spec 2026-10-31-plan-followup §4）。
+    plan_mod.record_hooks(
+        persona_id, conversation_id, facts, datetime.now().astimezone()
+    )
     if not facts:
         return 0
     vectors: "list[list[float]] | None" = None

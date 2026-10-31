@@ -4,7 +4,10 @@
 """
 from datetime import datetime, timedelta, timezone
 
+import asyncio
+
 import database as db
+from bot import memory as mem
 from bot import plan as plan_mod
 
 # 本地时区用固定 +08:00 模拟，避免测试机时区差异
@@ -139,4 +142,62 @@ def test_expire_plan_hooks_only_touches_overdue_pending(base_db):
     assert db.expire_plan_hooks("2026-10-30 00:00:00") == 1
     assert db.due_plan_hook(persona["id"], "2026-10-30 01:00:00", "2026-10-29 00:00:00") is None
     assert db.due_plan_hook(persona["id"], "2026-12-02 00:00:00", "2026-11-30 00:00:00")["id"] == fresh
+
+
+# ── 钩子写入与记忆链路（spec 2026-10-31-plan-followup）──
+
+
+def test_remember_async_creates_a_hook_even_when_the_memory_was_deduped(base_db):
+    """同一件事换个时间说：记忆被 content 去重跳过，钩子必须更新。"""
+    persona = _persona()
+
+    async def _run():
+        await mem.remember_async(persona["id"], None, "周末要去看展")
+        await mem.remember_async(persona["id"], None, "下周要去看展")
+
+    asyncio.run(_run())
+
+    conn = db._get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM bot_plan_hooks WHERE persona_id = ? ORDER BY rowid",
+            (persona["id"],),
+        ).fetchall()
+    finally:
+        conn.close()
+    states = [dict(row)["state"] for row in rows]
+    assert states == ["superseded", "pending"], "旧时间失效，新时间生效"
+    assert dict(rows[-1])["when_text"] == "下周"
+
+
+def test_record_hooks_skips_unknown_when_without_raising(base_db):
+    persona = _persona()
+    fact = mem.Fact(
+        title="计划", content="用户的计划：看展", when="明年", subject="看展"
+    )
+    assert plan_mod.record_hooks(
+        persona["id"], None, [fact], datetime(2026, 10, 28, 20, 0, tzinfo=CST)
+    ) == 0
+
+
+def test_record_hooks_stores_utc_timestamps(base_db):
+    """落库一律 UTC：本地 20:00 (+08:00) 就是 12:00Z。"""
+    persona = _persona()
+    fact = mem.Fact(
+        title="计划", content="用户的计划：看展", when="明天", subject="看展"
+    )
+    plan_mod.record_hooks(
+        persona["id"], None, [fact], datetime(2026, 10, 28, 20, 0, tzinfo=CST)
+    )
+    conn = db._get_conn()
+    try:
+        row = conn.execute(
+            "SELECT due_start, due_end FROM bot_plan_hooks WHERE persona_id = ?",
+            (persona["id"],),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row["due_start"] == "2026-10-28 16:00:00"  # 本地 10-29 00:00
+    assert row["due_end"] == "2026-10-29 16:00:00"
+
 

@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import calendar
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+import database as db
+
+from .timeutil import fmt_ts as _fmt_ts
 
 logger = logging.getLogger(__name__)
 
@@ -64,3 +68,43 @@ def plan_window(when_text: str, base: datetime) -> "tuple[datetime, datetime] | 
         start = datetime(year, month, 1, tzinfo=base.tzinfo)
         return start, start + timedelta(days=calendar.monthrange(year, month)[1])
     return None
+
+
+def record_hooks(
+    persona_id: str,
+    conversation_id: "str | None",
+    facts,
+    base: datetime,
+) -> int:
+    """把抽取到的计划落成钩子。返回新建条数。
+
+    只认 `title == "计划"` 且时间词、主题都在的 Fact。任何异常只记 warning：
+    钩子是增强项，不能拖垮记忆写入与聊天主链路。
+    """
+    if not persona_id or not facts:
+        return 0
+    created_at = _fmt_ts(base.astimezone(timezone.utc))
+    written = 0
+    for fact in facts:
+        if fact.title != "计划" or not fact.when or not fact.subject:
+            continue
+        try:
+            window = plan_window(fact.when, base)
+            if window is None:
+                logger.debug("计划时间词无法解析，不建钩子: %r", fact.when)
+                continue
+            start, end = window
+            db.add_plan_hook(
+                persona_id,
+                conversation_id,
+                None,
+                fact.subject,
+                fact.when,
+                _fmt_ts(start.astimezone(timezone.utc)),
+                _fmt_ts(end.astimezone(timezone.utc)),
+                created_at,
+            )
+            written += 1
+        except Exception as exc:  # noqa: BLE001 —— 钩子失败不阻断记忆写入
+            logger.warning("计划钩子写入失败: %s", exc)
+    return written
