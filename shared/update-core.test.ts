@@ -13,6 +13,7 @@ import {
   formatBytes,
   initialState,
   isNewerVersion,
+  isTrustedUpdateUrl,
   normalizeSha256,
   progressPercent,
   selectUpdate,
@@ -83,18 +84,66 @@ describe('selectUpdate', () => {
     expect(normalizeSha256('A'.repeat(64))).toBe('a'.repeat(64))
   })
 
-  it('非 http(s) 的 URL 拒绝（file://、裸路径都不认）', () => {
-    const bad = {
-      version: '0.2.0',
-      releases: [{ platform: 'win32', arch: 'x64', url: 'C:\\tmp\\a.tar.gz', sha256: SHA }],
+  it('产物 URL 不可信就拒：明文公网/内网、file://、裸路径都不认', () => {
+    for (const url of [
+      'C:\\tmp\\a.tar.gz',
+      'file:///C:/tmp/a.tar.gz',
+      'http://mirror.example/a.tar.gz',
+      'http://192.168.1.10/a.tar.gz',
+    ]) {
+      const bad = {
+        version: '0.2.0',
+        releases: [{ platform: 'win32', arch: 'x64', url, sha256: SHA }],
+      }
+      expect(selectUpdate(bad, '0.1.0', target), url).toBeNull()
     }
-    expect(selectUpdate(bad, '0.1.0', target)).toBeNull()
+    // 本地假清单验收（python -m http.server）走的回环明文必须放行，
+    // 否则这条设计里写死的无网络依赖验收路径就断了
+    const local = {
+      version: '0.2.0',
+      releases: [{ platform: 'win32', arch: 'x64', url: 'http://127.0.0.1:8000/a.tar.gz', sha256: SHA }],
+    }
+    expect(selectUpdate(local, '0.1.0', target)?.release.url).toBe('http://127.0.0.1:8000/a.tar.gz')
   })
 
   it('清单畸形（null / 缺字段 / releases 不是数组）不抛异常', () => {
     expect(selectUpdate(null, '0.1.0', target)).toBeNull()
     expect(selectUpdate({ version: '0.2.0' }, '0.1.0', target)).toBeNull()
     expect(selectUpdate({ version: 'x', releases: [] }, '0.1.0', target)).toBeNull()
+  })
+})
+
+describe('isTrustedUpdateUrl', () => {
+  it('https 一律可信；明文只认本机回环', () => {
+    expect(isTrustedUpdateUrl('https://feed.example/latest.json')).toBe(true)
+    for (const ok of [
+      'http://127.0.0.1:8000/latest.json',
+      'http://localhost:8000/latest.json',
+      'http://[::1]:8000/latest.json',
+      // 127.0.0.0/8 整段都是回环，不只有 127.0.0.1
+      'http://127.5.6.7/latest.json',
+    ]) {
+      expect(isTrustedUpdateUrl(ok), ok).toBe(true)
+    }
+  })
+
+  it('明文公网/内网一律不可信 —— 清单没有签名，期望哈希也写在同一份清单里', () => {
+    for (const bad of [
+      'http://feed.example/latest.json',
+      'http://192.168.1.10:8000/latest.json',
+      'http://10.0.0.6/latest.json',
+      // 形似回环但不是回环的写法：不能靠字符串前缀判
+      'http://127001/latest.json',
+      'http://not127.0.0.1.example.com/latest.json',
+    ]) {
+      expect(isTrustedUpdateUrl(bad), bad).toBe(false)
+    }
+  })
+
+  it('空值、非链接、别的协议都判为不可信且不抛', () => {
+    for (const bad of ['', '   ', 'ftp://x/y', 'javascript:alert(1)', undefined, null, 12]) {
+      expect(isTrustedUpdateUrl(bad)).toBe(false)
+    }
   })
 })
 

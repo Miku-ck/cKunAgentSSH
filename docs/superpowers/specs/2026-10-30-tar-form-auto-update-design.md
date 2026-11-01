@@ -48,7 +48,7 @@
 - `spawnApplier(plan)` — 写 `applier.ps1`（内容由 `buildApplierScript` 生成 + 等 pid 消失 + `Start-Process` 新 exe + 删备份），`spawn(..., {detached: true, stdio: 'ignore'}).unref()`。
   - ⚠️ 2026-10-30 实测推翻：Windows 的 `detached` 是 `DETACHED_PROCESS`（无控制台），`powershell.exe`/`cmd.exe` 拿不到控制台会**立即 exit 0 且什么都不做**（node 子进程不受影响）。生产必须走 `cmd /c start "" /min powershell.exe …` 由 `start` 另开控制台托管，cmd 随即退出、PowerShell 被孤儿化。这条缺陷只在 `electron/updater-e2e.test.ts`（真实 spawn）里可见。
 - `cleanupStale()` — 启动时清理失败的 staging 残留与 `*.tar.gz`。
-- `setFeed()` / `loadConfig()` — 设置页覆盖的清单地址（只收 http(s)）落 `userData/update/config.json`，优先于 `CKUN_UPDATE_FEED`。
+- `setFeed()` / `loadConfig()` — 设置页覆盖的清单地址（**只收 https，明文仅本机回环**，见 §6.3）落 `userData/update/config.json`，优先于 `CKUN_UPDATE_FEED`。
 - `download()` 前先做 appDir 写探针：装到 Program Files 之类的副本在下 171MB 之前就提示"需要管理员权限手动解压"。
 
 状态机（推给渲染层）：`idle → checking → available → downloading(percent) → ready → applying`；任何一步失败进 `error`，但**不阻塞启动、不阻塞使用**。
@@ -97,12 +97,15 @@
 - `shared/update-core.test.ts`：版本比较（含 prerelease）、平台/架构筛选、`buildApplierScript` 的三步顺序与回滚分支、staging 路径同卷断言、状态机迁移。
 - `electron/updater.test.ts`：IO 编排（check/download/apply/consumePending/cleanupStale/setFeed/loadConfig），网络与进程全部注入。
 - `electron/updater-e2e.test.ts`（Windows）：本地 HTTP 服务 + 真 tar.gz + 真 PowerShell 助手走完 check→download→apply→换包，是**唯一能发现那类"spawn 静默不执行"缺陷**的用例。
+- `electron/updater-transport-policy.test.ts`：真开 socket 的传输策略守卫（回环 http 正例 + `https→明文公网` 跳转降级反例）。前两份把网络整个注入了，"明文"这件事从来没有用例真的碰过。
 - 手动验收（无网络依赖）：本地起 `python -m http.server` 托管一个假 `latest.json` + 小 tar.gz，设 `CKUN_UPDATE_FEED` 指向它走全流程。
 
 ## 6. 已确认的决策
 
 1. **更新落地方式**：原地覆盖 + 退出后助手（用户 2026-10-30 确认）。并发新目录会让"用户启动的是哪个版本"变不确定，只检查不安装则等于没做自更新。
 2. **清单来源**：`CKUN_UPDATE_FEED` 环境变量为部署默认，设置页可覆盖（落 `userData/update/config.json`，覆盖值优先）；仓库不写死任何域名。
+3. **传输必须 https（2026-11-01 补，明文只留本机回环）**：清单没有签名，`sha256` 的期望值就写在同一份清单里 —— 走明文时，链路上的任何人等于同时决定了「版本号、产物地址、期望哈希」，下载端那记校验挡不住它。所以 `isTrustedUpdateUrl()` 是唯一的地址口径，用在四处：设置页输入、落盘值、`check()` 发请求前（`CKUN_UPDATE_FEED` 不经 `setFeed`，这里是唯一闸口）、以及**每一跳**重定向的落地地址（只在入口判 = 给 `https→http` 降级留口子）。回环例外是因为本文件的验收路径就是本地 `python -m http.server`；局域网段不算回环，同链路任何人都能改包。
+   - **仍未闭合的部分**：清单本身依旧没有发布者签名。发布侧一旦可控（自建发布脚本 + 一把离线私钥），应改为对清单做 Ed25519 签名、应用内置公钥验签 —— 那才是「主机被攻陷」也成立的防线；https 只挡链路位置的对手。
 
 ## 7. 明确不做
 

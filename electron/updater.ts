@@ -20,7 +20,7 @@ import {
   buildApplierScript,
   canTransition,
   initialState,
-  isHttpUrl,
+  isTrustedUpdateUrl,
   progressPercent,
   selectUpdate,
   stagingPaths,
@@ -60,6 +60,13 @@ export interface UpdaterOptions {
 }
 
 const LIST_TIMEOUT_MS = 10_000
+
+/**
+ * 地址不合规时的用户可见口径。单独抽出来是因为三个入口（设置页输入、落盘的
+ * config.json、env 里的 CKUN_UPDATE_FEED）都得说同一句话，口径漂移会让用户以为
+ * 换个入口就能绕过 —— 明文走更新链路要的正是这种「再试一次别的入口」的心态。
+ */
+const INSECURE_URL_HINT = '更新地址必须走 https（明文只允许本机回环，用于本地假清单验收）'
 
 export class Updater {
   private state: UpdateState
@@ -123,6 +130,13 @@ export class Updater {
   async check(): Promise<UpdateState> {
     if (!this.opts.feedUrl || !this.opts.appDir) {
       this.setState({ phase: 'idle', error: null, targetVersion: null })
+      return this.getState()
+    }
+    if (!isTrustedUpdateUrl(this.opts.feedUrl)) {
+      // config.json 与 env 都能绕过 setFeed 进来（loadConfig 只挡非法值），所以
+      // 真正发请求之前再判一次：清单没有签名，sha256 的期望值也来自它本身 ——
+      // 明文一跳，整套校验就是同一个人既发包又发标准答案。
+      this.setState({ phase: 'error', error: INSECURE_URL_HINT })
       return this.getState()
     }
     this.setState({ phase: 'checking', error: null })
@@ -207,13 +221,14 @@ export class Updater {
   /**
    * 设置页覆盖清单地址。空串 = 清空（回到"不检查"）。
    *
-   * 只收 http(s)：file:// 与裸路径会把"更新"变成读本地目录，那是另一条链路，
-   * 也让清单来源失去可审计性。落盘失败不影响本次生效，只记一条 warn。
+   * 只收 https（本机回环例外，见 INSECURE_URL_HINT）：file:// 与裸路径会把"更新"
+   * 变成读本地目录，明文外网等于把清单交给链路任何人 —— 两种都在这一步拒掉，
+   * 不等到点"检查"才失败。落盘失败不影响本次生效，只记一条 warn。
    */
   setFeed(raw: string): UpdateState {
     const url = String(raw ?? '').trim()
-    if (url && !isHttpUrl(url)) {
-      this.setState({ phase: 'error', error: '清单地址必须是 http(s) 链接' })
+    if (url && !isTrustedUpdateUrl(url)) {
+      this.setState({ phase: 'error', error: INSECURE_URL_HINT })
       return this.getState()
     }
     this.opts.feedUrl = url
@@ -238,8 +253,8 @@ export class Updater {
       const raw = JSON.parse(readFileSync(this.configFile, 'utf8')) as { feedUrl?: unknown }
       if (typeof raw.feedUrl !== 'string') return
       const url = raw.feedUrl.trim()
-      if (url && !isHttpUrl(url)) {
-        this.log('warn', 'update/config.json 里的清单地址非法，忽略')
+      if (url && !isTrustedUpdateUrl(url)) {
+        this.log('warn', `update/config.json 里的清单地址不安全，忽略：${INSECURE_URL_HINT}`)
         return
       }
       this.opts.feedUrl = url
@@ -390,6 +405,12 @@ export class Updater {
 
   private defaultFetchJson(url: string): Promise<unknown> {
     return new Promise((resolve, reject) => {
+      // 每一跳都重判（入口判过一次不够）：静态托管后面的 302/307 完全可以从
+      // https 跳回明文，只在入口判等于给跳转留一个降级口子
+      if (!isTrustedUpdateUrl(url)) {
+        reject(new Error(`${INSECURE_URL_HINT}：${url}`))
+        return
+      }
       const getter = url.startsWith('https:') ? httpsGet : httpGet
       const req = getter(url, { timeout: LIST_TIMEOUT_MS, headers: { 'User-Agent': 'cKunAgentSSH-updater' } }, (res) => {
         // 重定向：清单常挂在静态托管后面（307/302）
@@ -433,6 +454,11 @@ export class Updater {
     onProgress: (done: number, total: number) => void,
   ): Promise<string> {
     return new Promise((resolve, reject) => {
+      // 同 defaultFetchJson：产物地址的跳转跳数比清单还多（CDN 常见），每一跳都得判
+      if (!isTrustedUpdateUrl(url)) {
+        reject(new Error(`${INSECURE_URL_HINT}：${url}`))
+        return
+      }
       const hash = createHash('sha256')
       const out = createWriteStream(dest)
       let done = 0

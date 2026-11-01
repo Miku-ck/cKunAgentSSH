@@ -130,21 +130,39 @@ export function normalizeSha256(raw: unknown): string | null {
   return /^[0-9a-f]{64}$/.test(s) ? s : null
 }
 
-export function isHttpUrl(raw: unknown): raw is string {
+/** 回环判定：localhost / 127.0.0.0/8 / ::1。IPv6 在 URL.hostname 里带方括号，先剥。 */
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (h === 'localhost' || h === '::1') return true
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)
+}
+
+/**
+ * 更新链路的地址是否可信：只认 https，明文 http 仅在本机回环放行。
+ *
+ * 为什么这条必须比「是 http(s)」严：清单本身没有签名，走明文等于把「版本号 +
+ * 产物地址 + 期望 sha256」三件事一起交给链路上的任何人改 —— 下载端那记
+ * sha256 校验挡不住它，因为期望值和包是同一个人给的。回环放行的理由很具体：
+ * 设计里写死的无网络依赖验收路径就是本地 `python -m http.server` 托管一份假清单。
+ * 局域网段不算回环 —— 同一条链路上的任何人都能改包，那正是这条路要挡的。
+ */
+export function isTrustedUpdateUrl(raw: unknown): raw is string {
   if (typeof raw !== 'string' || !raw) return false
+  let u: URL
   try {
-    const u = new URL(raw)
-    return u.protocol === 'https:' || u.protocol === 'http:'
+    u = new URL(raw)
   } catch {
     return false
   }
+  if (u.protocol === 'https:') return true
+  return u.protocol === 'http:' && isLoopbackHost(u.hostname)
 }
 
 /**
  * 从清单里挑出本次可用的更新。
  *
  * 返回 null 的六种情况都必须"看起来一样"（都是不更新），但成因不同：
- * 清单畸形、版本不更新、没有本平台产物、产物 URL 非法、缺 sha256、平台同名但架构不符。
+ * 清单畸形、版本不更新、没有本平台产物、产物 URL 不可信、缺 sha256、平台同名但架构不符。
  * 只有"真的可以更新"才返回 release，调用方不需要再二次校验。
  */
 export function selectUpdate(
@@ -163,7 +181,7 @@ export function selectUpdate(
     const r = raw as Partial<UpdateRelease>
     if (r.platform !== target.platform || r.arch !== target.arch) continue
     const sha256 = normalizeSha256(r.sha256)
-    if (!sha256 || !isHttpUrl(r.url)) continue
+    if (!sha256 || !isTrustedUpdateUrl(r.url)) continue
     return {
       version: m.version.trim().replace(/^v/, ''),
       notes: typeof m.notes === 'string' ? m.notes : null,

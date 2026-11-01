@@ -55,6 +55,17 @@ describe('check()', () => {
     expect(s.phase).toBe('idle')
   })
 
+  it('env（CKUN_UPDATE_FEED）给的明文地址在发请求之前就被拦下', async () => {
+    // main.ts 把 env 值原样当 feedUrl 传进来，不经过 setFeed —— check() 是这条
+    // 旁路上唯一还会判协议的地方，所以它必须自己判，而不是"反正前面挡过了"。
+    const fetchJson = vi.fn()
+    const u = makeUpdater({ feedUrl: 'http://mirror.example/latest.json', fetchJson })
+    const s = await u.check()
+    expect(fetchJson).not.toHaveBeenCalled()
+    expect(s.phase).toBe('error')
+    expect(s.error).toContain('https')
+  })
+
   it('有更新时进 available，并带出目标版本与说明', async () => {
     const u = makeUpdater()
     const s = await u.check()
@@ -253,12 +264,17 @@ describe('cleanupStale()', () => {
 })
 
 describe('setFeed() / loadConfig()', () => {
-  it('非 http(s) 地址直接拒绝，不覆盖已有通道', () => {
+  it('非 https 地址直接拒绝，不覆盖已有通道', () => {
     const u = makeUpdater()
     const s = u.setFeed('file:///C:/x/latest.json')
     expect(s.phase).toBe('error')
-    expect(s.error).toContain('http(s)')
+    expect(s.error).toContain('https')
     expect(s.feedUrl).toBe('https://feed.example/latest.json')
+    // 明文公网在旧口径里算"合法 http(s)"，现在不是：清单没签名，期望哈希也来自它
+    expect(u.setFeed('http://mirror.example/latest.json').error).toContain('https')
+    expect(u.setFeed('http://mirror.example/latest.json').feedUrl).toBe('https://feed.example/latest.json')
+    // 本地假清单验收走回环明文，这条不能一起挡掉（设计里写死的无网络验收路径）
+    expect(u.setFeed('http://127.0.0.1:8000/latest.json').feedUrl).toBe('http://127.0.0.1:8000/latest.json')
   })
 
   it('保存合法地址会落盘 config.json；空串 = 回到「不检查」', () => {
