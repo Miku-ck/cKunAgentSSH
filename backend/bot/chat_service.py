@@ -303,6 +303,7 @@ class BotChatService:
             situation=situation,
             novelty=float(new_state.get("novelty") or 40.0) if new_state else None,
             conversation_id=conversation_id,
+            group=audience == "group",
             embed_client=embed_client,
         )
         if memory_note:
@@ -412,6 +413,7 @@ class BotChatService:
         situation: str | None = None,
         novelty: float | None = None,
         conversation_id: str | None = None,
+        group: bool = False,
         embed_client=None,
     ) -> str:
         """这个人格记住的事 → 一条独立 system 消息。
@@ -419,6 +421,7 @@ class BotChatService:
         召回失败一律当作没有记忆：记忆是加分项，不能因为它拖垮陪聊。
         P2：融合召回 + 三重门控（G1 硬命中 / G2 情境 / G3 旧事钩子），
         embed 不可用时 retriever 自动只走 FTS 路，行为不劣化于旧版。
+        group=True 时只召回这个群里说过的话（群里坐着好几个「人」）。
         """
         if not persona_id:
             return ""
@@ -429,6 +432,7 @@ class BotChatService:
                 situation=situation,
                 novelty=novelty if novelty is not None else 40.0,
                 conversation_id=conversation_id,
+                group=group,
             )
         except Exception as exc:  # noqa: BLE001 —— 记忆层任何异常都不该影响回复
             logger.warning("陪聊记忆召回失败: %s", exc)

@@ -186,6 +186,39 @@ def test_recall_finds_the_name_when_asked_by_question(base_db):
     assert asyncio.run(mem.recall(persona["id"], "小林")) == ["用户叫小林"]
 
 
+def test_group_recall_only_draws_from_that_group(base_db):
+    """群会话只召回这个群里落下过的记忆。
+
+    私聊里说的生日，被 G1 硬命中之后就能直接从她的群里冒出来 —— 群里坐着好几个
+    「人」，而记忆的作用域是按人格切的（个人场景下这是特性，不是漏洞）。
+    """
+    persona = _persona()
+    mem.remember(persona["id"], "conv-private", "我生日是3月5号")
+    mem.remember(persona["id"], "conv-group", "我叫小林")
+
+    assert asyncio.run(mem.recall(persona["id"], "生日")) == ["用户的生日是3月5号"]
+    # 群里问「生日」：兜底的「回退最近几条」只能在筛后的候选池里翻，
+    # 所以冒出来的最多是群内那条，绝不可能是私聊那条生日。
+    fenced = asyncio.run(
+        mem.recall(persona["id"], "生日", conversation_id="conv-group", group=True)
+    )
+    assert all("生日" not in line for line in fenced), "私聊那条生日没进群"
+    assert asyncio.run(
+        mem.recall(persona["id"], "小林", conversation_id="conv-group", group=True)
+    ) == ["用户叫小林"], "群内说过的，群里当然能提"
+
+
+def test_group_recall_skips_memories_recorded_before_the_fence(base_db):
+    """隔离上线前落下的旧记忆没有 source_conv_id：一律不进群，宁可少说一句。"""
+    persona = _persona()
+    mem.remember(persona["id"], None, "我住在杭州")
+
+    assert asyncio.run(mem.recall(persona["id"], "杭州")) == ["用户住在杭州"]
+    assert asyncio.run(
+        mem.recall(persona["id"], "杭州", conversation_id="conv-group", group=True)
+    ) == []
+
+
 def test_agent_scope_never_sees_persona_memories(base_db):
     persona = _persona()
     mem.remember(persona["id"], "conv-1", "我喜欢辣")

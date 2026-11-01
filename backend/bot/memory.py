@@ -749,6 +749,7 @@ async def recall(
     situation: str | None = None,
     novelty: float = 40.0,
     conversation_id: str | None = None,
+    group: bool = False,
     now: datetime | None = None,
 ) -> "list[str]":
     """取出这个人格该注入的事实（人话，不带记忆 id）。
@@ -760,11 +761,20 @@ async def recall(
       关系类事实（称呼/家人优先）；
     - G3 旧事钩子：p = 0.08 + novelty/100·0.10 − 距上次注入天数·0.03，
       确定性 RNG 触发 → 「忽然想起」低频、受新鲜感调节、可重放。
+
+    group=True 时先按来源会话筛一遍（见函数体内注释），三重门控只在筛后的
+    候选池里工作。
     """
     if not persona_id:
         return []
     now = now or datetime.now(timezone.utc)
     rows = _scope_rows(persona_id)
+    if group:
+        # 记忆的作用域是「人格」而不是「人」，而群里坐着的是好几个别的「人」。
+        # 私聊里说的体检、住址、前女友，一旦被 G1 硬命中就能从她的群里冒出来 ——
+        # 所以群会话只认这个群里落下过的记忆。
+        # 隔离上线前的旧行没有 source_conv_id，一律不进群：宁可少说一句。
+        rows = [row for row in rows if row.get("source_conv_id") == conversation_id]
     if not rows:
         return []
     rows_by_id = {row["id"]: row for row in rows}

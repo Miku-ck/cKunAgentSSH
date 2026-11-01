@@ -3180,17 +3180,28 @@ def add_plan_hook(
     return hook_id
 
 
-def due_plan_hook(persona_id: str, now_iso: str, earliest_iso: str) -> Optional[dict]:
-    """可回溯的钩子：窗口已结束（due_end <= now）且没超过回溯期，最早到期优先。"""
+def due_plan_hook(
+    persona_id: str, now_iso: str, earliest_iso: str,
+    conversation_id: Optional[str] = None,
+) -> Optional[dict]:
+    """可回溯的钩子：窗口已结束（due_end <= now）且没超过回溯期，最早到期优先。
+
+    conversation_id 给了就只认这个会话里说过的计划 —— 群里问「你不是说周末要去看展吗」
+    而那件事是他私聊里说的，等于把他的行程广播给一整个群。
+    """
     conn = _get_conn()
+    sql = (
+        "SELECT * FROM bot_plan_hooks "
+        "WHERE persona_id = ? AND state = 'pending' "
+        "AND due_end <= ? AND due_end >= ?"
+    )
+    params: list = [persona_id, now_iso, earliest_iso]
+    if conversation_id is not None:
+        sql += " AND conversation_id = ?"
+        params.append(conversation_id)
+    sql += " ORDER BY due_end ASC LIMIT 1"
     try:
-        row = conn.execute(
-            "SELECT * FROM bot_plan_hooks "
-            "WHERE persona_id = ? AND state = 'pending' "
-            "AND due_end <= ? AND due_end >= ? "
-            "ORDER BY due_end ASC LIMIT 1",
-            (persona_id, now_iso, earliest_iso),
-        ).fetchone()
+        row = conn.execute(sql, tuple(params)).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()

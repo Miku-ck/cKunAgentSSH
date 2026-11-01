@@ -352,10 +352,13 @@ class Topic(NamedTuple):
     plan_id: str = ""
 
 
-def plan_due_topic(persona_id: str, now: datetime) -> "Topic | None":
+def plan_due_topic(
+    persona_id: str, now: datetime, conversation_id: "str | None" = None
+) -> "Topic | None":
     """到期可回溯的计划选题：窗口结束后 36h 内，最早到期的那件事先问。
 
     文案不出现时间词、不出现具体日期：相对时间在几天后才说出口是错乱的。
+    conversation_id 用于群会话的隔离（见 pick_topic）。
     """
     # 落库比较用 UTC 字符串：传进来的若是本地 aware datetime，不换就会错 8 小时
     now = now.astimezone(timezone.utc)
@@ -363,6 +366,7 @@ def plan_due_topic(persona_id: str, now: datetime) -> "Topic | None":
         persona_id,
         _fmt_ts(now),
         _fmt_ts(now - timedelta(hours=PLAN_FOLLOWUP_H)),
+        conversation_id,
     )
     if not row:
         return None
@@ -393,7 +397,12 @@ def _older_rows(rows: "list[dict]", now: datetime) -> "list[dict]":
 
 
 def pick_topic(
-    persona_id: str, state: dict, *, now: "datetime | None" = None
+    persona_id: str,
+    state: dict,
+    *,
+    now: "datetime | None" = None,
+    conversation_id: "str | None" = None,
+    group: bool = False,
 ) -> "Topic | None":
     """主动消息的选题器：同一输入永远同一选题，可重放可单测。
 
@@ -403,15 +412,23 @@ def pick_topic(
     3. fresh_fact —— 近 3 天新记的事实；
     4. old_memory —— 旧事钩子，确定性 RNG 低频翻一件，演出「忽然想起」。
 
+    group=True 时候选池只留「这个群里落下过的东西」：记忆按 source_conv_id 筛，
+    计划钩子按 conversation_id 筛。fatigue_care 在群里直接跳过 —— 那条读的是人格级
+    状态轴（last_event_kind），根本不知道那句「累」是在哪条会话里说的，在群里问
+    「你缓过来没有」既可能张冠李戴，也当着其余的人越界了。群里没得说就返回 None，
+    由 _compose 走「单纯想他了」那条不含具体事实的泛化开口。
+
     返回 Topic（与二元组下标/解包兼容）；今天没得说返回 None。
     """
     now = now or datetime.now(timezone.utc)
-    if (state.get("last_event_kind") or "") == "fatigue":
+    if (state.get("last_event_kind") or "") == "fatigue" and not group:
         return Topic("他上次聊到很累，问问他现在缓过来没有", "fatigue_care")
-    due = plan_due_topic(persona_id, now)
+    due = plan_due_topic(persona_id, now, conversation_id if group else None)
     if due is not None:
         return due
     rows = memory_mod.list_memories(persona_id)
+    if group:
+        rows = [row for row in rows if row.get("source_conv_id") == conversation_id]
     fresh = _fresh_fact_topic(rows, now)
     if fresh:
         return Topic(fresh["content"], "fresh_fact")
@@ -482,6 +499,9 @@ class ProactiveScheduler:
             conversation_id = target["conversation_id"]
             channel = target.get("channel") or "local"
             speed = target.get("relationship_speed") or "normal"
+            # 群里说话只能引用这个群里落下过的东西；单聊与本地沿用「她记得你」的
+            # 人格级共享（个人使用场景下那是特性而不是泄露）。
+            group = _is_group(target)
 
             # 已经憋着一句没等到人：先让她把那一句说出去，别再生成第二句。
             # 不落 skip 日志：这一步每 60s 会命中一次，写库会把账本淹了。
@@ -504,7 +524,9 @@ class ProactiveScheduler:
             )
             # 钩子查询炸了不能拖垮整轮巡检（spec §10）：当作没有到期计划继续走
             try:
-                due = await asyncio.to_thread(plan_due_topic, persona_id, now)
+                due = await asyncio.to_thread(
+                    plan_due_topic, persona_id, now, conversation_id if group else None
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("计划到期查询失败: %s", exc)
                 due = None
@@ -534,7 +556,10 @@ class ProactiveScheduler:
                 continue
             # 选题失败（记忆层炸了等）不阻断主动性：回退到无选题的自由发挥
             try:
-                topic = await asyncio.to_thread(pick_topic, persona_id, state, now=now)
+                topic = await asyncio.to_thread(
+                    pick_topic, persona_id, state, now=now,
+                    conversation_id=conversation_id, group=group,
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("主动消息选题失败: %s", exc)
                 topic = None
@@ -562,6 +587,9 @@ class ProactiveScheduler:
         conversation_id = target["conversation_id"]
         channel = target.get("channel") or "local"
         speed = target.get("relationship_speed") or "normal"
+        # 手动探口必须与自动轮同一套选材口径：试出来的那句要就是她本来会说的那句，
+        # 否则「试一句」是在对着一个不存在的行为做演示。
+        group = _is_group(target)
 
         persona = await asyncio.to_thread(db.get_bot_persona, persona_id)
         if not persona:
@@ -577,7 +605,9 @@ class ProactiveScheduler:
         )
         now = datetime.now(timezone.utc)
         try:
-            due = await asyncio.to_thread(plan_due_topic, persona_id, now)
+            due = await asyncio.to_thread(
+                plan_due_topic, persona_id, now, conversation_id if group else None
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("计划到期查询失败: %s", exc)
             due = None
@@ -599,7 +629,10 @@ class ProactiveScheduler:
 
         state_desc = state_mod.describe_state(state, local_hour, speed, stage=stage)
         try:
-            topic = await asyncio.to_thread(pick_topic, persona_id, state, now=now)
+            topic = await asyncio.to_thread(
+                pick_topic, persona_id, state, now=now,
+                conversation_id=conversation_id, group=group,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("主动消息选题失败: %s", exc)
             topic = None

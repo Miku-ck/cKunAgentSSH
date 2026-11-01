@@ -872,6 +872,89 @@ def test_pick_topic_nothing_to_say(base_db):
     assert pro.pick_topic(persona["id"], {}) is None
 
 
+# ── 群会话选材隔离：他私聊里说的事，不能由她在群里说出来 ──
+
+
+def test_group_topic_cannot_draw_from_a_private_chat(base_db):
+    """记忆作用域按人格切而不按人切，而群里坐着好几个「人」。
+
+    隔离落在读侧的 source_conv_id 上：写侧早就记了每条事实来自哪条会话，
+    此前没有任何一处用它筛过。
+    """
+    persona = db.create_bot_persona(name="晚风")
+    mem.remember(persona["id"], "conv-private", "我生日是3月5号")
+
+    private_topic = pro.pick_topic(persona["id"], {})
+    assert private_topic and "生日" in private_topic.describe
+    assert pro.pick_topic(
+        persona["id"], {}, conversation_id="conv-group", group=True
+    ) is None
+
+
+def test_group_topic_accepts_what_the_group_heard(base_db):
+    """闸拦的是「别处的话」，不是「在群里说话」。"""
+    persona = db.create_bot_persona(name="晚风")
+    mem.remember(persona["id"], "conv-group", "周末要去看展")
+
+    topic = pro.pick_topic(persona["id"], {}, conversation_id="conv-group", group=True)
+
+    assert topic and topic.source == "fresh_fact" and "看展" in topic.describe
+
+
+def test_group_topic_does_not_borrow_a_private_plan(base_db):
+    """计划钩子按会话筛：私聊里说的行程，不该在群里被追问进展。"""
+    persona = db.create_bot_persona(name="晚风")
+    now = datetime.now(timezone.utc)
+    db.add_plan_hook(
+        persona["id"], "conv-private", None, "去看医生", "昨天",
+        pro._fmt_ts(now - timedelta(hours=10)),
+        pro._fmt_ts(now - timedelta(hours=1)),
+        pro._fmt_ts(now - timedelta(hours=10)),
+    )
+
+    assert pro.pick_topic(persona["id"], {}).source == "plan_due"
+    assert pro.pick_topic(
+        persona["id"], {}, conversation_id="conv-group", group=True
+    ) is None
+
+
+def test_fatigue_care_is_not_asked_in_front_of_a_group(base_db):
+    """fatigue 读的是人格级状态轴，不知道那句「累」是在哪条会话里说的。
+
+    当着十个人问某人「缓过来没有」既可能张冠李戴，本身也越界 —— 所以群会话
+    跳过这一档，宁可用群内的事开口。
+    """
+    persona = db.create_bot_persona(name="晚风")
+    mem.remember(persona["id"], "conv-group", "周末要去看展")
+    state = {"last_event_kind": "fatigue"}
+
+    assert pro.pick_topic(persona["id"], state).source == "fatigue_care"
+    topic = pro.pick_topic(persona["id"], state, conversation_id="conv-group", group=True)
+    assert topic and topic.source == "fresh_fact"
+
+
+@pytest.mark.asyncio
+async def test_probe_for_a_group_never_takes_a_private_fact_as_topic(
+    base_db, monkeypatch
+):
+    """探口与自动轮同一套选材口径：试出来的那句得是她本来会说的那句。"""
+    persona, group = _persona_conv(channel="qq", external_id="group:group-1")
+    mem.remember(persona["id"], "conv-private", "我生日是3月5号")
+    monkeypatch.setattr(
+        pro, "_state_snapshot",
+        lambda *_a: ({"intimacy": 60, "novelty": 50}, 1.0, False, None, "朋友"),
+    )
+    composed = _stub_compose(monkeypatch)
+    _stub_sender(monkeypatch, [("ok", "")])
+
+    await pro.ProactiveScheduler().probe(
+        _qq_target(persona, group, external_id="group:group-1")
+    )
+
+    assert composed, "探口确实生成了一次"
+    assert composed[0][2] is None, "群会话的选题池里没有私聊那条体检"
+
+
 # ── ⑦ 手动探口：想看效果时不必先聊熟、也不必等窗口 ──
 
 

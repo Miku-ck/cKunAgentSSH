@@ -13,7 +13,7 @@ cKunBot 是标题栏「Bot」入口（`Ctrl+Shift+9`）的虚拟陪伴角色：�
 | 记忆 | `bot/memory.py` | 事实抽取（11 类正则）、召回（FTS+单字+向量融合、三重门控）、保守衰减与容量边界 |
 | 主动 | `bot/proactive.py` | desire、四重抑制闸（统一 12h 口径）、确定性选题器、分渠道投递（召回 → 主动 → 寄存）、调度器（60s 轮询，兼记忆维护心跳）；群聊按**会话级** 12h / 日 2 条配额；`probe()` 是同一套闸的手动探口（算而不拦） |
 | 群可参与期 | `bot/group_ambient.py` | @ 之后 5 分钟窗口、60s 接话节流、近期群消息临时上下文（不落库）；群友发言只作现场，不进记忆/关系/状态；`GROUP_MODES` / `ambient_allowed()` 是群参与档的唯一事实源 |
-| 渠道 | `bot/provider.py` + `channel_runtime.py` + `qq_*.py` | 5 成员 provider 协议；每机器人独立线程/长连接；入站管线平台无关；群回复有两条发送通道（带 `msg_id` 的被动 @ / 不带的主动不 @） |
+| 渠道 | `bot/provider.py` + `channel_runtime.py` + `qq_*.py` | 5 成员 provider 协议；每机器人独立线程/长连接；入站管线平台无关；人格在每条入站消息时才解析（连接不持有身份，在线可换）；群回复有两条发送通道（带 `msg_id` 的被动 @ / 不带的主动不 @） |
 | 会话 | `bot/chat_service.py` + `inbound_pipeline.py` | 分节 prompt 组装、流式回复、幂等/超时兜底/分段投递 |
 
 ## 不变量（改代码前先读）
@@ -28,6 +28,8 @@ cKunBot 是标题栏「Bot」入口（`Ctrl+Shift+9`）的虚拟陪伴角色：�
 8. **想看主动效果不必先聊熟**：`POST /bot/proactive/probe`（只读侧会话栏的「试一句」，只挂在 QQ）把意愿分、12h 间隔、静音窗、日配额、冷场冷却**照算一遍但不拦**，真发一句并把账本上那一行念回来——回显与落库同源。落账、间隔、配额全部照占，不拿「只是试一下」骗自己；唯一豁免是冷场冷却（账本 `reason` 带 `manual:` 前缀）：试发不是「她自己想说话」，没人接不该把人设冻 48h。微信没主动通道，当场 409 比默默寄存一句永远发不出去好。
 9. **群里 @ 不 @ 人是通道选择，不是文案**：平台没有「不要 @」参数，「回复某人」是它给带 `msg_id` 的被动回复自己加的样式。人格的 `mention_sender`（默认开 = 照旧 @，升级不改观感）关掉后这句改走不带 `msg_id` 的群主动消息；只有平台明确拒收（`permission` / `invalid`）才回落被动回复（宁可带 @ 也不让这句消失），`network` 不回落——发没发出去不确定，回落就是群里同样的两句。开关只给群会话生效，通道判定读会话快照（@ 回复是热路径，不为一个开关再查一次表；旧快照缺字段按默认照旧 @）。出站一律 `strip_at_markup` 抹掉模型照抄的 `<@…>` / `<at id=…></at>`：QQ 纯文本里那串不是 @，是给人看的源码。
 10. **人格自由文本分区自带用法口径**：光把「是什么」写进 prompt（`你的喜好与雷区：X`）等于递给它一份待播报的话题清单——接不上话时最省力的走法就是拐回自己的喜好（真机反馈：没人问也老自报喜好）。所以标题里就得说清「什么时候才拿出来」，且口径排在正文之前（内容后面再补规矩，模型已经把那一节当清单读完了）。喜好不能被整节删掉：被问到、或话正好接到那儿时，它还是这个人的一部分。见 `chat_service._system_prompt`。
+11. **人格属于每条入站消息，不属于连接**：`channel_runtime._on_inbound` 在消息到达时才读 `bot_channels.persona_id`（走 `get_bot_channel_persona_id`，不碰 `_BOT_CHANNEL_SELECT` 的会话计数子查询），所以在线换人格不重连、`PUT /bot/channels/{id}` 不再要求先断开；`ChannelConfig` 刻意没有 `persona_id` —— 谁把它加回来，谁就把「必须离线才能切」请回来了。切换前已在生成的那一句仍按它自己会话上的人格回答（会话身份含 persona_id，换完在各群自然另起一条）。渠道行读不到时回落到连接时那个人格：消息已收到，咽在手里比说错人更糟。换完之后老人格名下的旧会话不再进主动巡检清单（`database.list_proactive_targets` 只认渠道当前人格）——旧行是留着可读的，不删，否则两张嘴共用一个账号。
+12. **群里只说这个群里的事**：记忆作用域按人格切而不按人切，而群里坐着好几个「人」。`memory.recall(group=True)` 与 `proactive.pick_topic(group=True)` 先把候选池按 `source_conv_id`（计划钩子按 `conversation_id`）筛一遍，三重门控只在筛后的池里工作；隔离上线前的旧行没有 `source_conv_id`，一律不进群。判定处只有一个：`chat_service` 的 `audience == "group"`。`fatigue_care` 在群里跳过——它读的是人格级状态轴，根本不知道那句「累」是在哪条会话里说的。本地与单聊不筛：个人场景下「她记得你」是特性而不是漏洞。
 
 ## 记忆治理（2026-10-29 决策）
 
@@ -45,6 +47,7 @@ cKunBot 是标题栏「Bot」入口（`Ctrl+Shift+9`）的虚拟陪伴角色：�
 | 人格字段注入（「忽略以上设定」） | 保存时拒绝（可读错误）+ prompt 分区声明 + 宪章压尾 | `routes/bot.py` 校验器、`chat_service._system_prompt`、`character.persona_text_risk` |
 | 记忆投毒（话术借抽取规则成为事实） | 事实内容过注入检测，命中即丢弃 | `bot/memory.extract_facts` |
 | 输出泄露（复读口令/证件号） | 落库前按句删除命中敏感口径的句子；全文塌掉给占位句不给空串 | `character.strip_sensitive_lines`，接在 `strip_ai_smell` 之后 |
+| 串场合泄露（私聊里说的事从群里冒出） | 群会话的召回与主动选题先按来源会话筛候选池；无来源的旧记忆一律不进群 | `memory.recall(group=)`、`proactive.pick_topic(group=)`、判定处 `chat_service` 的 `audience` |
 | 渠道凭据泄露 | SQL 读出口把 `app_secret` 折叠成 `has_secret` 布尔，密文不进 Python 对象；明文只在拨号时解密 | `database._BOT_CHANNEL_SELECT`、`get_bot_channel_secret` |
 | 失效保护 | 选题/衰减/安全清洗全部 try-except 降级（清洗失败放行原文并 warning），与「记忆失败不影响回复」同一哲学 | 各模块调用点 |
 

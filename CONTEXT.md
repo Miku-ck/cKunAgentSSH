@@ -24,11 +24,13 @@
 | **剧本**（Runbook，`runbooks` 表） | 结构化的可执行运维剧本：步骤 = 命令 + 说明（≤20 步），经逐步无头 run 执行、标记行确定性判读 | 与 `runbook_save/search` 沉淀在 `memories` 里的「Runbook 经验文本」是两回事——一个可执行、一个可检索；混用会找错存储 |
 | **cKunBot**（`bot/` 包，Bot 页） | 虚拟陪伴角色子系统：人格 / 表达 DNA / 关系 / 状态轴 / 记忆 / 主动性 / 多渠道。与运维 Agent 零打通（不调工具、不执行命令），只共用模型配置与 `memories` 表 | 它和首页任务台是两个东西：任务台是运维 Agent 的唯一对话面，cKunBot 是独立人格的陪聊；混用会把「帮我运维」的话术喂给陪聊人格 |
 | **人格记忆**（`scope=persona:{id}`） | cKunBot 落在 `memories` 表里的事实，`kind=persona_fact`；Agent 侧只读 global / host:*，两者互不可见 | 共表不同 scope：衰减 / 淘汰 / 遗忘的 SQL 必须限定 scope+kind，碰宽了会删到 Agent 的记忆 |
+| **群会话记忆隔离** | 群里的召回与主动选题只认 `source_conv_id` 是这条群会话的记忆；私聊与别的群的事实在群里不出口（本地与单聊不设此闸） | 作用域按人格切而不按人切，而群里坐着好几个「人」——不筛就会当着十个人的面说出某人私聊里说的生日 |
 | **关系阶段**（唯一口径 = score） | 陌生/熟悉/亲近/默契，由 relation 的 score（只增 + 读时衰减）按升温档缩放阈值推导；UI 进度条与 prompt 同源 | 曾有第二套 intimacy+trust 双门口径与它打架（同一份 prompt 两个阶段）；已删，阶段只认 relation |
 | **状态轴**（`bot/state.py`） | trust/intimacy/tension/novelty/valence/energy/patience 七轴，「事件→增量」确定性推导，只喂档位词不喂裸数字 | 0 次额外模型调用是它的根基：可重放、可单测；改成让模型自报状态就全丢了 |
 | **pacing**（在场感节奏） | 后端 `state.pacing_hint` 给的 SSE 提示：hesitate / relief / eager（空 = 正常） | 前端只认这三个值演动画，不自己猜状态；新增节奏要后端先给 |
 | **表情包标记**（`[表情:开心]`） | 模型独占一条输出的文本标记；`bot/stickers.py` 校验键并收口为「一轮最多一张」，落库仍是标记 | 本地渲染内置 PNG、QQ 上传富媒体、微信按公网地址发图（失败回落颜文字）；行内出现的标记一律删除，绝不当作图 |
 | **渠道 provider**（`bot/provider.py`） | 一个平台一个实现，5 成员协议（start / outbound_parts / fallback / name / reply_window_s） | 入站管线永远拿不到平台原始对象；接入新平台 = 写 provider + 进注册表，不改管线 |
+| **人格归属**（连接不持有身份） | 一行 `bot_channels` 同一时间绑一个人格，但人格在每条入站消息到达时才解析（`channel_runtime._on_inbound`），在线换人格不重连 | 把 persona_id 冻在连接上就必然要求「先断开才能换」；`ChannelConfig` 刻意没有 persona_id，谁加回来谁把那个约束请回来 |
 | **寄存**（proactive queued） | QQ 被动回复窗口发不出的主动「心里话」，写 `bot_proactive_log(action=queued)` 存 48h，等对方来消息以「对了，」捎上 | 协议上 QQ 无法主动发消息；任何「直接发」的实现都会被平台拒绝 |
 | **README 双语**（`README.md` / `README.en.md`） | 中英两份 README 是同一份事实的两个语言投影：章节、表格、代码块、架构图逐节对应，任一侧改动功能 / 命令 / 架构都要同步另一侧 | 只更中文等于让英文版谎报功能与命令，「只有中文版」过期比没有英文版更误导 |
 | **示例脱敏**（README / 代码注释 / UI 占位符 / 示例配置） | 公开面一律只写占位符：`your-llm-host`、`example.com`；真实内网地址、主机名与凭据只允许存在于本地 `backend/.env`（已被 `.gitignore` 忽略） | 文档与界面是公开面，真实内网 IP 写进示例等于给攻击者画拓扑图，还会被复制粘贴扩散 |

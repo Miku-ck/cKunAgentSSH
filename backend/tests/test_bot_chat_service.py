@@ -67,6 +67,51 @@ async def test_complete_reply_only_content(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_memory_recall_is_fenced_for_group_conversations(base_db, monkeypatch):
+    """群会话的记忆召回必须带 group=True。
+
+    `audience` 是这条链上唯一的「此刻有没有旁人在听」判定，也是最容易接错的一根线：
+    接错之后召回本身照样返回得像没事发生。这里只钉接线，筛得对不对由
+    test_bot_memory 里的召回用例覆盖。
+    """
+    import database as db
+
+    persona = db.create_bot_persona(name="晚风")
+    group = db.create_bot_conversation(
+        persona_id=persona["id"], channel="qq", external_id="group:g-1"
+    )
+    private = db.create_bot_conversation(
+        persona_id=persona["id"], channel="qq", external_id="c2c:user-1"
+    )
+    local = db.create_bot_conversation(persona_id=persona["id"], channel="local")
+
+    seen: list = []
+
+    async def spy_recall(persona_id, query="", **kw):
+        seen.append(bool(kw.get("group")))
+        return []
+
+    async def fake_stream(**kw):
+        yield _Chunk(content="好")
+
+    monkeypatch.setattr(cs_mod.memory_mod, "recall", spy_recall)
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    monkeypatch.setattr(
+        BotChatService, "_model_for_persona",
+        lambda self, p: {"base_url": "u", "api_key": "k", "model_id": "m",
+                         "max_tokens": 8192, "max_output_tokens": 4096,
+                         "reasoning_tokens": 1024, "temperature": 0.7, "top_p": 0.9},
+    )
+
+    svc = BotChatService()
+    await svc.complete_reply(group["id"], "在吗", channel="qq")
+    await svc.complete_reply(private["id"], "在吗", channel="qq")
+    await svc.complete_reply(local["id"], "在吗", channel="local")
+
+    assert seen == [True, False, False], "只有群会话进隔离档：私聊与本地照旧是「她记得你」"
+
+
+@pytest.mark.asyncio
 async def test_thinking_off_drops_reasoning_and_asks_upstream_to_stop(monkeypatch):
     """人格没勾思考：思考链不显示、不落库，且要明确让上游别思考。
 
