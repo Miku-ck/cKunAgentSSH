@@ -355,7 +355,16 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        # 关停必须留痕，且打在收尾之前：日志里没有这行就分不清「优雅关闭 / 崩溃 /
+        # 被 kill」，而收尾卡死（后处理 10s 超时、渠道 stop_all 挂住）时事后行根本
+        # 不会输出，恰是最需要现场的那一刻。级别沿用 _log_startup_summary 的理由：
+        # 此刻 root 已被 logconfig 回填成用户配置（默认 warning），info 落不了地。
+        logger.warning(
+            "[cKunAgentic] 后端关停：已运行 %.0fs，开始收尾后台任务与渠道",
+            time.perf_counter() - _MODULE_T0,
+        )
         await _stop_background_tasks(background)
+        _perf_mark("shutdown done")
 
 
 app = FastAPI(

@@ -232,3 +232,40 @@ def test_lifespan_teardown_runs_on_body_exception(monkeypatch):
 
     asyncio.run(_run())
     assert stopped == [1], "应用体异常时后台任务没有被关停"
+
+
+def test_shutdown_is_logged_before_teardown(monkeypatch, caplog):
+    """关停必须留一行 WARNING，且打在收尾之前。
+
+    日志里没有关停行，就无法区分优雅关闭、崩溃与被 kill —— 排查「后端为什么没
+    了」时只能靠下一个进程的启动行倒推。打在收尾之前是因为收尾会卡死（渠道
+    stop_all 挂住、后处理 10s 超时），那种时刻事后行永远输不出来。
+    级别必须是 WARNING：此刻 root 已被 logconfig 回填成用户配置（默认 warning）。
+    """
+    rec = _Recorder()
+    order: list[str] = []
+
+    async def _record_stop(_bg):
+        order.append("stop")
+
+    for boom in (False, True):
+        order.clear()
+        _install_stubs(monkeypatch, rec, {})
+        monkeypatch.setattr(main, "_stop_background_tasks", _record_stop)
+        caplog.clear()
+
+        async def _run():
+            try:
+                async with main.lifespan(None):
+                    if boom:
+                        raise RuntimeError("body boom")
+            except RuntimeError:
+                if not boom:
+                    raise
+
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(_run())
+
+        lines = [r.getMessage() for r in caplog.records if "后端关停" in r.getMessage()]
+        assert len(lines) == 1, f"关停留痕缺失或重复（boom={boom}）：{lines}"
+        assert order == ["stop"], "留痕必须打在收尾之前，否则卡死时它不会落地"
