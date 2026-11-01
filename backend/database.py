@@ -95,7 +95,7 @@ _CONN_IDLE_PROBE_SECONDS = 30.0
 # 核心表齐全就跳过那 360 行 DDL。迁移与一次性数据修复不在此短路段内（见 init_db）。
 # 铁律：改动下方 init_db 的 DDL 或 _migrate_db 的任何迁移，必须 _SCHEMA_VERSION += 1，
 # 否则老库永远不会执行新结构（backend/tests/test_startup_critical_path.py 有守卫）。
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 # 短路前提的核心表。版本号可能被外部工具清零、或迁移脚本自己写错，仅凭
 # user_version 就认定「结构已就绪」，会把缺表的库永久锁在坏状态 —— 再核一遍实表。
@@ -417,6 +417,14 @@ def init_db(db_path: str) -> None:
             );
             CREATE INDEX IF NOT EXISTS ix_bot_proactive_pending
                 ON bot_proactive_log(conversation_id, action, expires_at);
+            -- 按人格读日志的两条路径都只能靠它：设置页的「她什么时候想找你」
+            -- （routes/bot.py WHERE persona_id=? ORDER BY created_at DESC LIMIT ?）
+            -- 与冷场计数（bot/proactive.py WHERE persona_id=? AND reason LIKE 'cold:%'，
+            -- 每轮主动性评估都跑一次）。本表每次评估都可能落一行，是 bot 侧增长
+            -- 最快的表；persona_id 又是 FK，而 SQLite 不会自动给外键列建索引。
+            -- created_at 进索引第二列，让列表查询免排序。
+            CREATE INDEX IF NOT EXISTS ix_bot_proactive_persona
+                ON bot_proactive_log(persona_id, created_at DESC);
 
             -- 计划钩子：用户说过的「周末要去看展」，到期后主动问一句。
             -- 独立于记忆行存活：计划记忆 importance 只有 0.4，是维护首批淘汰对象。
