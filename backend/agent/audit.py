@@ -205,7 +205,7 @@ def command_hash(command: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 表结构（database.init_db 建表时有同源副本；本常量供测试建表引用）
+# 表结构（database.init_db 有同源副本；列与索引名由 tests/test_audit_schema_parity.py 对账）
 # ──────────────────────────────────────────────────────────────────────────────
 
 _AUDIT_SCHEMA = f"""
@@ -227,10 +227,10 @@ CREATE TABLE IF NOT EXISTS {AUDIT_TABLE} (
     hash         TEXT NOT NULL UNIQUE,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_audit_ts     ON {AUDIT_TABLE}(ts);
-CREATE INDEX IF NOT EXISTS idx_audit_run    ON {AUDIT_TABLE}(run_id);
-CREATE INDEX IF NOT EXISTS idx_audit_target ON {AUDIT_TABLE}(target_id);
-CREATE INDEX IF NOT EXISTS idx_audit_env    ON {AUDIT_TABLE}(environment);
+CREATE INDEX IF NOT EXISTS ix_audit_ts     ON {AUDIT_TABLE}(ts);
+CREATE INDEX IF NOT EXISTS ix_audit_run    ON {AUDIT_TABLE}(run_id);
+CREATE INDEX IF NOT EXISTS ix_audit_target ON {AUDIT_TABLE}(target_id);
+CREATE INDEX IF NOT EXISTS ix_audit_env    ON {AUDIT_TABLE}(environment);
 """
 
 
@@ -573,9 +573,26 @@ def archive_and_clear(archive_dir: Optional[str] = None) -> dict[str, Any]:
         writer.writeheader()
         for r in rows:
             writer.writerow(r)
-        # utf-8-sig BOM：与 /audit/export 一致，Excel 直开不乱码
-        with open(archive_path, "w", encoding="utf-8-sig", newline="") as f:
-            f.write(buf.getvalue())
+        payload = buf.getvalue()
+        # 原子写（tmp + os.replace，CONTEXT.md「半写损坏」口径）：直接写最终名时，
+        # 进程被杀或磁盘写满会在归档目录里留下半截 CSV —— 它的文件名看着就是一份
+        # 完整归档，而轮转的语义是「这里有存档，live 表可以清」。证据面不能靠
+        # 「下次轮转会另写一个新文件」兜底，那半截会一直躺在目录里冒充证据。
+        # tmp 名带 pid 且保留 audit_archive_ 前缀（与 gate._atomic_replace_in_dir、
+        # builtin_skills._persist_managed_slugs 同源写法）。
+        tmp_path = os.path.join(base, f"{fname}.{os.getpid()}.tmp")
+        try:
+            # utf-8-sig BOM 与 newline=""：与 /audit/export 一致，Excel 直开不乱码；
+            # newline="" 同时保住 CSV 的 \r\n（默认换行翻译会在 Windows 上写成 \r\r\n）
+            with open(tmp_path, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(payload)
+            os.replace(tmp_path, archive_path)
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except OSError:
+                pass
 
         conn.execute(f"DELETE FROM {AUDIT_TABLE}")
 

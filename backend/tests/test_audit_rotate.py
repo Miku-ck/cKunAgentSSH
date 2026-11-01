@@ -103,6 +103,53 @@ def test_rotate_archive_write_failure_keeps_chain(audit_env, monkeypatch):
     assert v["intact"] is True and v["total"] == 2
 
 
+def test_rotate_midwrite_failure_leaves_no_fake_archive(audit_env, monkeypatch):
+    """写中途失败不得在归档目录留下顶着正式文件名的半截 CSV。
+
+    上一条管的是「数据没丢」，这条管的是「证据面不撒谎」：目录里一个
+    audit_archive_*.csv 就是一份可被引用的存档，而半截文件与完整文件在文件名上
+    无法区分。轮转失败后下次轮转会另写一个新文件，那半截会一直躺在归档目录里
+    冒充完整归档 —— CONTEXT.md「半写损坏」要求落盘走 tmp+os.replace 正是为此。
+    """
+    import os
+
+    conn, ws = audit_env
+    _append_n(conn, 2)
+
+    real_open = builtins.open
+
+    class _HalfWriter:
+        """写到一半就炸，模拟进程被杀在 f.write() 中间。"""
+
+        def __init__(self, fh):
+            self._fh = fh
+
+        def write(self, data):
+            self._fh.write(data[: len(data) // 2])
+            self._fh.flush()
+            raise OSError("torn (simulated kill mid-write)")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._fh.close()
+            return False
+
+    def half_then_boom(path, *a, **k):
+        fh = real_open(path, *a, **k)
+        return _HalfWriter(fh) if "audit_archive_" in str(path) else fh
+
+    monkeypatch.setattr(builtins, "open", half_then_boom)
+    with pytest.raises(OSError):
+        audit.archive_and_clear(archive_dir=ws)
+
+    leftovers = [n for n in os.listdir(ws) if "audit_archive_" in n]
+    assert leftovers == [], f"归档目录残留半成品，冒充完整归档: {leftovers}"
+    # 数据侧同样不能受影响
+    assert conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0] == 2
+
+
 def test_seal_environment_follows_cleared_evidence(audit_env):
     """S11-04：对 prod 主机做过轮转，prod 过滤视图必须看得到「谁清的库」。"""
     conn, ws = audit_env
