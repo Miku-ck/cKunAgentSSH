@@ -85,7 +85,6 @@ def _cfg(key, *, app_id="wx-app", token="token-123", channel_id="channel-1"):
         channel_id=channel_id,
         app_id=app_id,
         app_secret=token,
-        persona_id="persona-1",
         extra_secret=key,
     )
 

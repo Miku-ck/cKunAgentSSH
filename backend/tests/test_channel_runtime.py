@@ -164,6 +164,44 @@ async def test_inbound_is_attributed_to_its_own_channel_and_persona(rig):
 
 
 @pytest.mark.asyncio
+async def test_persona_switch_takes_effect_without_reconnecting(rig):
+    """在线换人格：连接不动，下一条消息就是新人格。
+
+    会话唯一索引含 persona_id，所以同一个群自动另起一条；旧那条留作可读历史。
+    """
+    runtime, provider, service = rig
+    channel, old = _channel("小暖", "机器人A", "100001")
+    _, new = _channel("阿冷", "备用人格", "100002")
+    await runtime.start(channel)
+
+    await provider.push(channel["id"], "group:openid-1", "event-1", "你好")
+    before = db.get_bot_conversation(service.calls[0][0])
+    assert before["persona_id"] == old["id"]
+
+    db.update_bot_channel(channel["id"], persona_id=new["id"])
+    await provider.push(channel["id"], "group:openid-1", "event-2", "还在吗")
+
+    after = db.get_bot_conversation(service.calls[1][0])
+    assert after["persona_id"] == new["id"]
+    assert after["id"] != before["id"]
+    # 同一条连接：切人格既没重连也没停过句柄
+    assert provider.connections[channel["id"]].stop_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_inbound_falls_back_to_the_connected_persona_when_channel_unreadable(rig, monkeypatch):
+    """渠道行读不到时照连接时那个人格说话 —— 消息已收到，咽在手里更糟。"""
+    runtime, provider, service = rig
+    channel, persona = _channel("小暖", "机器人A", "100001")
+    await runtime.start(channel)
+    monkeypatch.setattr(db, "get_bot_channel_persona_id", lambda _id: "")
+
+    await provider.push(channel["id"], "group:openid-1", "event-1", "你好")
+
+    assert db.get_bot_conversation(service.calls[0][0])["persona_id"] == persona["id"]
+
+
+@pytest.mark.asyncio
 async def test_same_group_on_two_channels_is_two_conversations(rig):
     runtime, provider, service = rig
     first, _ = _channel("小暖", "机器人A", "100001")

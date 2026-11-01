@@ -227,21 +227,24 @@ def test_edit_keeps_the_secret_when_none_is_sent_and_rotates_when_one_is(client)
     assert db.get_bot_channel_secret(channel["id"]) == "轮换后的密钥"
 
 
-def test_persona_can_be_edited_but_not_while_connected(client):
+def test_persona_can_be_switched_while_connected(client):
+    """在线换人格不再要求先断开：入站每条消息才解析人格，连接不持有身份。"""
     channel = create(client)
+    client.post(f"/api/bot/channels/{channel['id']}/connect")
 
     changed = client.put(
         f"/api/bot/channels/{channel['id']}", json={"persona_id": "persona-2"}
-    ).json()
-    assert changed["persona_id"] == "persona-2"
-
-    client.post(f"/api/bot/channels/{channel['id']}/connect")
-    response = client.put(
-        f"/api/bot/channels/{channel['id']}", json={"persona_id": "persona-1"}
     )
 
-    assert response.status_code == 409
-    assert "断开" in response.json()["detail"]
+    assert changed.status_code == 200
+    assert changed.json()["persona_id"] == "persona-2"
+    # 换人格不该惊动连接
+    assert client.runtime.stopped == []
+    # 存在性校验留在原处：人格不存在仍是 404，不会因为「在线」就放过
+    missing = client.put(
+        f"/api/bot/channels/{channel['id']}", json={"persona_id": "persona-none"}
+    )
+    assert missing.status_code == 404
 
 
 def test_delete_stops_the_connection_and_reports_the_history_it_removed(client):

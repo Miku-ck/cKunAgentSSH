@@ -45,7 +45,6 @@ def cfg(channel_id="channel-1"):
         channel_id=channel_id,
         app_id="app-id",
         app_secret="app-secret",
-        persona_id="persona-1",
     )
 
 

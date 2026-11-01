@@ -5,6 +5,7 @@ chat_service 全进程共用一份。这里不再有任何「按全局单例判�
 逻辑 —— 一个机器人坏了不影响另一个，状态各报各的。
 """
 
+import asyncio
 import logging
 import threading
 
@@ -91,7 +92,6 @@ class ChannelRuntime:
             channel_id=channel_id,
             app_id=channel["app_id"],
             app_secret=db.get_bot_channel_secret(channel_id),
-            persona_id=channel["persona_id"],
             extra_secret=db.get_bot_channel_extra_secret(channel_id),
         )
         try:
@@ -150,9 +150,18 @@ class ChannelRuntime:
 
     def _on_inbound(self, channel: dict):
         provider = self._providers[channel["provider"]]
-        persona_id = channel["persona_id"]
+        channel_id = channel["id"]
+        # 渠道行读不到（刚被删 / 脏数据）时照连接时那个人格说话 —— 消息已经收到
+        # 了，宁可说错人也不要把那句咽在手里。
+        frozen = channel["persona_id"]
 
         async def handle(inbound) -> None:
+            # 人格在每条消息到达时才解析，所以在线换人格不用断开重连。
+            # 切换前那一句仍按旧人格回答：它的会话行早就定了 persona_id，而会话
+            # 身份含 persona_id，切换后新到的消息在各群自然另起一条。
+            persona_id = await asyncio.to_thread(
+                db.get_bot_channel_persona_id, channel_id
+            ) or frozen
             await self._pipeline.handle(inbound, provider, persona_id)
 
         return handle

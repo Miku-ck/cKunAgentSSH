@@ -133,15 +133,14 @@ def create_channel(req: ChannelCreateRequest):
 
 @router.put("/bot/channels/{channel_id}")
 def update_channel(channel_id: str, req: ChannelUpdateRequest):
-    """更新渠道（改名、换人格、补凭据）：在线切人格返回 409，避免正在生成的回复用错人格；人格不存在 404。"""
+    """更新渠道（改名、换人格、补凭据）：在线换人格即时生效，人格不存在 404。
+
+    不等离线是因为入站每条消息才解析人格（channel_runtime._on_inbound）：
+    连接不持有身份，换完下一句就是新人格，切换前那一句仍按它自己的会话回答。
+    """
     channel = _require(channel_id)
     if req.persona_id is not None and not db.get_bot_persona(req.persona_id):
         raise HTTPException(status_code=404, detail="人格不存在")
-
-    switches_persona = req.persona_id is not None and req.persona_id != channel["persona_id"]
-    if switches_persona and _runtime().status(channel_id)["state"] != "offline":
-        # 在线换人格会让正在生成的回复用错人格；先断开再换。
-        raise HTTPException(status_code=409, detail="请先断开这个机器人，再切换人格")
 
     fields = {}
     if req.display_name is not None:

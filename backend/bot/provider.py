@@ -39,10 +39,15 @@ class UnsupportedProviderError(RuntimeError):
 
 @dataclass(frozen=True)
 class ChannelConfig:
+    """拨号需要的东西：凭据与渠道身份。
+
+    这里刻意没有 persona_id —— 人格不属于连接，属于每条入站消息（在线换人格
+    不重连）。谁把它加回来，谁就把「必须离线才能切」那个约束请回来了。
+    """
+
     channel_id: str
     app_id: str
     app_secret: str
-    persona_id: str
     # 部分平台需要第三个凭据（微信的 EncodingAESKey）；QQ 为空串。
     extra_secret: str = ""
 

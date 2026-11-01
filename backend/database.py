@@ -2802,6 +2802,22 @@ def get_bot_channel(channel_id: str) -> Optional[dict]:
         conn.close()
 
 
+def get_bot_channel_persona_id(channel_id: str) -> str:
+    """入站热路径只问「这个机器人现在是谁」：渠道被改人格后不必重连就能读到新值。
+
+    不走 _BOT_CHANNEL_SELECT —— 那条 SELECT 每条渠道都带一个会话计数子查询，
+    而这里每条消息都要问一次。渠道不存在返回空串，由调用侧决定回落。
+    """
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT persona_id FROM bot_channels WHERE id = ?", (channel_id,)
+        ).fetchone()
+        return row["persona_id"] if row else ""
+    finally:
+        conn.close()
+
+
 def get_bot_channel_secret(channel_id: str) -> str:
     """读凭据明文，只给运行时拨号用；接口层请一律走 get_bot_channel 的 has_secret。"""
     conn = _get_conn()
@@ -3310,7 +3326,8 @@ def expire_stale_proactive(now: str) -> int:
 
 
 def list_proactive_targets() -> "list[dict]":
-    """开启主动性的巡检清单：local 会话（可直投）+ 30 天内活跃的 QQ 会话。
+    """开启主动性的巡检清单：local 会话（可直投）+ 30 天内活跃的 QQ 会话，
+    且会话上的人格仍是该机器人当前绑定的那个人格。
 
     窗口按官方召回口径取 30 天：7 天会把「7-30 天」那一档整段砍掉；更久没动静的
     会话寄存心里话也没意义，还白撑队列。
@@ -3330,6 +3347,11 @@ def list_proactive_targets() -> "list[dict]":
             "WHERE p.proactive_enabled = 1 AND ("
             "  c.channel = 'local'"
             "  OR (c.channel = 'qq' AND c.updated_at >= datetime('now', '-30 days'))) "
+            # 会话上的人格必须还是那个机器人当前的人格。换人格后旧会话行留着
+            # 当可读历史，但它们不再有权用同一个账号主动开口 —— 否则老人格和
+            # 新人格共用一张嘴。渠道行没了（子查询返回 NULL）同样不投：没句可发。
+            "AND (c.channel_id IS NULL OR c.persona_id = ("
+            "  SELECT b.persona_id FROM bot_channels b WHERE b.id = c.channel_id)) "
             "AND NOT (IFNULL(c.external_id, '') LIKE 'group:%' "
             "     AND IFNULL(p.group_mode, 'mention_only') <> 'proactive')"
         ).fetchall()

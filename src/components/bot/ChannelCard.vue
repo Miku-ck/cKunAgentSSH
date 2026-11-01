@@ -108,12 +108,12 @@
       </div>
       <label class="field">
         <span>当前人格</span>
-        <select v-model="form.persona_id" :disabled="state !== 'offline'">
+        <select v-model="form.persona_id">
           <option value="" disabled>请选择人格</option>
           <option v-for="p in personas" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
       </label>
-      <p class="form-note">一个机器人绑一个人格，在任何群和私聊里都是它。切换人格后，这个机器人在各群会另起一条会话，旧会话保留可读。</p>
+      <p class="form-note">一个机器人同一时间只绑一个人格，在任何群和私聊里都是她。切换即时生效，不用断开重连；切换后这个机器人在各群会另起一条会话，旧会话保留可读。</p>
       <p class="form-note">凭据 {{ hasSecret ? '已加密保存' : '尚未配置' }}<template v-if="channel"> · 会话 {{ channel.conversation_count }} 条</template></p>
       <div v-if="error" class="form-error">{{ error }}</div>
       <div class="channel-form-actions">

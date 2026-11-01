@@ -49,8 +49,11 @@ describe('渠道卡配置', () => {
     expect(src).toContain('if (form.app_secret) savedSecret.value = true')
   })
 
-  it('人格在线时不可改，避免正在生成的回复用错人格', () => {
-    expect(src).toContain(":disabled=\"state !== 'offline'\"")
+  it('人格下拉不看连接状态：换人格即时生效，不要求先断开', () => {
+    // 后端在每条入站消息时才解析人格，界面再按 state 禁用这个 select 就是在
+    // 替用户转述一个已经不存在的前提。
+    expect(src).not.toContain(":disabled=\"state !== 'offline'\"")
+    expect(src).toContain('切换即时生效，不用断开重连')
   })
 })
 

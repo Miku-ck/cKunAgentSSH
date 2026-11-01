@@ -219,6 +219,37 @@ def test_local_conversations_ignore_the_group_mode(base_db):
     assert local["id"] in {t["conversation_id"] for t in db.list_proactive_targets()}
 
 
+def test_switching_persona_silences_the_previous_one(base_db):
+    """换人格后，老人格名下的旧会话不再有权用这个账号主动开口。
+
+    在线切完之后旧会话行是刻意留着的可读历史（不删），所以闸只能落在巡检清单上：
+    不然老人格和新人格共用一张嘴，同一个群里两套性格轮流说话。
+    """
+    old = db.create_bot_persona(name="晚风")
+    new = db.create_bot_persona(name="早春")
+    for persona in (old, new):
+        db.update_bot_persona(persona["id"], proactive_enabled=True)
+    channel = db.create_bot_channel(
+        provider="qq", display_name="机器人A", persona_id=old["id"],
+        app_id="app-1", app_secret="s",
+    )
+    stale = db.create_bot_conversation(
+        persona_id=old["id"], channel="qq", channel_id=channel["id"],
+        external_id="c2c:user-1",
+    )
+    assert stale["id"] in {t["conversation_id"] for t in db.list_proactive_targets()}
+
+    db.update_bot_channel(channel["id"], persona_id=new["id"])
+    fresh = db.create_bot_conversation(
+        persona_id=new["id"], channel="qq", channel_id=channel["id"],
+        external_id="c2c:user-1",
+    )
+
+    targets = {t["conversation_id"] for t in db.list_proactive_targets()}
+    assert stale["id"] not in targets, "老人格不该还能主动往这个账号上发话"
+    assert fresh["id"] in targets, "换了人格不等于这个机器人失去主动性"
+
+
 # ── ③' 记账口径：谁算「已经开过口」──
 
 
