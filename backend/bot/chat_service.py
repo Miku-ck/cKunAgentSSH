@@ -1,3 +1,11 @@
+"""cKunBot 的回复装配管线：人格 → system_prompt → 模型 → 落库。
+
+记忆召回、关系与状态轴、表情包与安全宪章（SAFETY_CHARTER / REFUSAL_STYLES）都在
+这里拼进提示词，路由层只做参数校验。三条出话路径 —— stream_reply 逐字流、
+complete_reply 一次性全文、ambient_reply 群聊顺带一句 —— 共用同一份装配口径，
+所以换渠道不改装配、改装配不动渠道。
+"""
+
 import asyncio
 import logging
 from datetime import datetime, timezone

@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS run_rollbacks (
 
 ### 2.3 API 契约
 
-**后端（全部进新文件 `backend/routes/rollbacks.py`，`APIRouter(tags=["rollbacks"])`，路径避开 `/agent/*` 前缀以免与 agent.py 混淆；鉴权由 main.py 的 X-API-Token 中间件统一覆盖 `/api/*`，`backend/main.py:219-235` 已核实，本轮零接线成本）：**
+**后端（全部进新文件 `backend/routes/rollbacks.py`，`APIRouter(tags=["rollbacks"])`，路径避开 `/agent/*` 前缀以免与 agent.py 混淆；鉴权由 main.py 的 X-API-Token 中间件统一覆盖 `/api/*`，`backend/main.py:420-421` 已核实，本轮零接线成本）：**
 
 | 端点 | 语义 |
 |---|---|
@@ -321,7 +321,7 @@ CREATE INDEX IF NOT EXISTS ix_runbook_runs_rid ON runbook_runs(runbook_id, creat
 
 `steps_json` 元素：`{ "command": str(≤2000), "assertCommand": str(≤2000, 可空=仅执行不断言), "expect": "通过标记行即可，不做期望值比对（v1）", "note": str(≤500) }`，单剧本 ≤20 步。**不存 memories**（decay 陷阱）；`runbook_search` 检索双写摘要进 memories 的方案 defer（两处一致性成本 > v1 收益，且检索路 `runbook_tools.py:190-194` 无需改动照常工作——只是检索不到新表里的剧本，v1 接受，文档明示）。
 
-审计：步骤级命令审计由 harness 内置 reins→audit 自动落链（run_id 贯通，`audit_log` 查询维度 `backend/agent/audit.py:231` `idx_audit_run`，已核实）；executor 级事件以 `append_record_async` 记录（`audit.py:337-342`），`action='runbook_step'/'runbook_run'`，**conclusion 只用白名单既有值** `executed/failed/blocked`（§0.2 第 7 条，静默改写陷阱 `audit.py:265-275`），剧本结论细节放 `result` 字段。
+审计：步骤级命令审计由 harness 内置 reins→audit 自动落链（run_id 贯通，`audit_log` 查询维度 `backend/agent/audit.py:231` `ix_audit_run`，已核实；生产形态由 `backend/database.py:626` 建，两份 DDL 的同源关系由 `backend/tests/test_audit_schema_parity.py` 钉住）；executor 级事件以 `append_record_async` 记录（`audit.py:337-342`），`action='runbook_step'/'runbook_run'`，**conclusion 只用白名单既有值** `executed/failed/blocked`（§0.2 第 7 条，静默改写陷阱 `audit.py:265-275`），剧本结论细节放 `result` 字段。
 
 ### 3.3 API 契约
 
@@ -387,7 +387,7 @@ SchedulesView 顶部分段：[定时任务 | 运维剧本]        ← C 唯一�
 ## 4. 依赖与风险摘要（跨功能）
 
 1. **A 依赖监控存活**：`useSshNavigation.ts:366-379` 的 monitoredTarget watch 是触发源的隐式前提（会话全关 → stop → 无样本）。A 外挂 watch 与其并行共存，双方零改动。
-2. **A 审批兜底是预期行为**：审批卡 600s 无人处理按拒绝放行 run（`permission.approval_fallback_s` 默认 600，`backend/main.py:112-123` 已核实；env `CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S` 可覆盖）——告警诊断 run 弹卡时用户可能不在场，run 会带「曾被拒绝」继续。A 的 system_prompt 与用户文档必须写明。
+2. **A 审批兜底是预期行为**：审批卡 600s 无人处理按拒绝放行 run（`permission.approval_fallback_s` 默认 600，`backend/main.py:191-194` 已核实；env `CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S` 可覆盖）——告警诊断 run 弹卡时用户可能不在场，run 会带「曾被拒绝」继续。A 的 system_prompt 与用户文档必须写明。
 3. **B 的 driver.py 是唯一热文件修改**：插入点单一（`_emit_done` 开头）、失败仅 warning、对 C 的无头 run 经存在性闸自动跳过——B 实现者若发现插入点漂移（如 `_emit_done` 签名变化），停下升级，不得换位置硬插。FK 强制开启（`database.py:80`）下的 prune 竞态由 undo_store 按 run 级 catch IntegrityError 兜底（§2.2）。
 4. **C 的 headless_run 副本漂移风险**（评审意见 2 处置后的残留风险）：v1 不改 `schedule_engine.py`，`headless_run.py` 是语义对齐的独立实现——两份装配会在母本演进时漂移。缓解：模块注释钉死母本行号（`schedule_engine.py:466-639`）与同步责任 + 引擎测试把可观察契约钉死（环境只收紧/桥 fail-closed/会话必关/done 终态消费，§3.5）；抽取收敛在 v2 专门一轮执行（届时 schedule 回归测试做证据）。
 5. **B 的 undo_restore 在 prod 的行为（2026-10-27 修订）**：交互会话（`await_approval=True`）里 dangerous 工具弹审批卡，由用户选「允许本次 / 始终允许」——「始终允许」写入主机限域的 allowlist；无人值守运行（定时任务 / headless / runbook）没人可点卡，dangerous 工具仍只接受预登记 allowlist（`prod_deny_no_allowlist`）。因此 prod 回滚在交互界面中可现场确认；若要把回滚放进定时任务/剧本，则需两步预登记。`existed=False` 的反向 `rm -f` 走同一矩阵。
@@ -397,7 +397,7 @@ SchedulesView 顶部分段：[定时任务 | 运维剧本]        ← C 唯一�
 
 | # | 文件 | 接线内容 | 来源功能 |
 |---|---|---|---|
-| W1 | `backend/main.py` | import `rollbacks` router 并 `app.include_router(rollbacks.router, prefix="/api")`（注册区 `main.py:261-268`） | B |
+| W1 | `backend/main.py` | import `rollbacks` router 并 `app.include_router(rollbacks.router, prefix="/api")`（注册区 `main.py:460-476`） | B |
 | W2 | `backend/main.py` | import `runbooks` router 并 `app.include_router(runbooks.router, prefix="/api")` | C |
 | W3 | `src/views/ssh/SshView.vue` | setup 内一行 `useAlertTrigger()`（挂载即生效；该文件工作树已脏，由集成者合并） | A |
 | W4 | `src/api/client.ts`（可选） | 若团队约定所有 api 模块经 client.ts 桶导出，则追加 `export * from './rollback'` 与 `export * from './runbook'`；不追加则消费方直接从各模块 import（AgentRunsTable 现状是经 client 引 `agentAdminApi`，`AgentRunsTable.vue:16-19`）——二选一，集成者定夺 | B/C |

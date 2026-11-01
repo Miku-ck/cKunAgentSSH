@@ -99,7 +99,7 @@ def test_done_error_and_run_id_collected(wired):
     assert result.state == "completed"
     assert result.error == "LLM 超时一次"
     assert result.permission_requested is True
-    # run_id 原样传给 harness（审计链按 run_id 贯通，audit_log.idx_audit_run）
+    # run_id 原样传给 harness（审计链按 run_id 贯通，audit_log.ix_audit_run）
     assert FakeHarness.last_run_kwargs["run_id"] == "run-xyz"
     assert FakeHarness.last_run_kwargs["conversation_id"] == "conv-1"
 

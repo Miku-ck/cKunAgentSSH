@@ -1,3 +1,11 @@
+"""QQ 官方 OpenAPI 渠道的运行器：botpy 客户端的连接与重连监督。
+
+QQConnection 只管「连上、活着、断了按 DEFAULT_RETRY_DELAYS 退避重试、把入站交给
+provider 管线」：凭据/权限类错误判为致命直接终止，不做无限重试；连接状态经
+_set_status 供「连接」页轮询。平台协议差异收在 bot/qq_channel.py 与 provider
+契约里，本模块不解释消息内容。
+"""
+
 import asyncio
 import logging
 import threading

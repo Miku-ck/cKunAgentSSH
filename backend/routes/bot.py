@@ -1,3 +1,10 @@
+"""/bot/* 路由：Bot 页的人格、记忆、关系、表情包与主动性记录读写。
+
+入参一律走 Pydantic 的 Field 边界（长度、枚举、上下界）后再落库；鉴权不在这里，
+由 main.py 的 X-API-Token 中间件统一覆盖 /api/*。会话回复只做转交 —— 提示词装配
+口径在 bot/chat_service.py，这里不拼 prompt，免得出现第二套装配。
+"""
+
 import logging
 import re
 from typing import Literal, Optional
