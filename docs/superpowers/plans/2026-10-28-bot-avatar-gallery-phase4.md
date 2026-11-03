@@ -1,6 +1,9 @@
 # cKunBot 头像体系与图库（Phase 4）实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **状态：已执行完毕（2026-10-28）。** T1-T13 全部完成；提交链 `685a4d2`·`d0cf57e`·`1fbc7ef`·`4fb5054`·`0b67429`·`de1cbcb`·`62811d4`·`7bccc59`·`85a442b`。门禁：pytest 3543 passed / vitest 154f·1792t / typecheck EXIT=0。台账 `.superpowers/sdd/2026-10-28-bot-avatar-gallery-phase4/progress.md`。
+>
+> **后续变更**：设置侧「Bot 管理」分类已按裁决下线（与陪聊页聊天记录设置职责重叠），见 `src/components/settings/panels/bot-avatar-panel.guards.test.ts`；头像能力本身保留在 AvatarPicker 与会话显示设置中。
 
 **Goal:** 头像去马赛克（淡色首字占位）+ 服务端头像图库 + 设置新增「Bot 管理」分类（图库管理 / 你的头像）+ QQ 会话本地自定义显示名/头像。
 
@@ -36,7 +39,7 @@
 **Interfaces:**
 - Produces: `db.create_bot_gallery_item(data_url: str, label: str = "") -> dict`（含 `id/label/data_url/created_at`）、`db.list_bot_gallery(limit: int = 200) -> list[dict]`、`db.delete_bot_gallery_item(gallery_id: str) -> bool`。Task 2 的路由消费这三个函数。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `backend/tests/test_bot_gallery.py`：
 
@@ -72,12 +75,12 @@ def test_gallery_table_migration_is_idempotent(base_db):
     assert db.list_bot_gallery() == []
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH\backend && python -m pytest tests/test_bot_gallery.py -q 2>&1 | Select-Object -Last 5`
 Expected: FAIL，`AttributeError: module 'database' has no attribute 'create_bot_gallery_item'`
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 `backend/database.py` schema executescript 块内、`ix_bot_messages_external` 索引语句之后追加：
 
@@ -131,11 +134,11 @@ def delete_bot_gallery_item(gallery_id: str) -> bool:
         conn.close()
 ```
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: 同 Step 2。Expected: 3 passed
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add backend/database.py backend/tests/test_bot_gallery.py; git commit -m "feat(bot): avatar_gallery 头像图库表与库函数 CRUD"
@@ -153,7 +156,7 @@ cd d:\workspace\cKunAgentSSH; git add backend/database.py backend/tests/test_bot
 - Consumes: Task 1 的三个 db 函数；文件内既有 `_AVATAR_DATA_URL`（L23）。
 - Produces: `GET /bot/gallery`、`POST /bot/gallery`（body `{label?, data_url}`）、`DELETE /bot/gallery/{item_id}`。Task 7 的前端 `botApi` 按此形状对接。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `backend/tests/test_bot_gallery.py` 顶部补 import 与 fixture，文件末尾追加：
 
@@ -199,12 +202,12 @@ def test_gallery_route_rejects_non_image_and_oversize(client):
     assert client.post("/api/bot/gallery", json={"label": "无图"}).status_code == 422
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH\backend && python -m pytest tests/test_bot_gallery.py -q 2>&1 | Select-Object -Last 5`
 Expected: 路由两测试 404≠200 FAIL（client fixture 需要文件已 import 的 `os/fastapi/pytest/TestClient`）
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 `backend/routes/bot.py` 末尾追加：
 
@@ -239,11 +242,11 @@ def remove_gallery_item(item_id: str):
     return {"deleted": True}
 ```
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: 同 Step 2。Expected: 5 passed
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add backend/routes/bot.py backend/tests/test_bot_gallery.py; git commit -m "feat(bot): 头像图库管理路由 GET/POST/DELETE /bot/gallery"
@@ -261,7 +264,7 @@ cd d:\workspace\cKunAgentSSH; git add backend/routes/bot.py backend/tests/test_b
 - Consumes: 既有 `db.get_app_setting(key, default)` / `db.set_app_setting(key, value)`（database.py L3247/L3265）；`_validate_avatar`（routes/bot.py L26，空串合法 = 清除）。
 - Produces: `GET /bot/user-avatar -> {"avatar": str}`、`PUT /bot/user-avatar`（body `{avatar}`，空串清除）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 def test_user_avatar_roundtrip_and_clear(client):
@@ -279,12 +282,12 @@ def test_user_avatar_rejects_emoji_and_oversize(client):
     ).status_code == 422
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH\backend && python -m pytest tests/test_bot_gallery.py -q 2>&1 | Select-Object -Last 5`
 Expected: 两新测试 404/405 FAIL
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 `backend/routes/bot.py` 末尾追加：
 
@@ -310,11 +313,11 @@ def put_user_avatar(req: BotUserAvatarRequest):
     return {"avatar": req.avatar}
 ```
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: 同 Step 2。Expected: 7 passed
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add backend/routes/bot.py backend/tests/test_bot_gallery.py; git commit -m "feat(bot): 「你的头像」读写端点（app_settings bot_user_avatar）"
@@ -333,7 +336,7 @@ cd d:\workspace\cKunAgentSSH; git add backend/routes/bot.py backend/tests/test_b
 - Consumes: `db.get_bot_conversation`（含 channel）、既有幂等迁移风格（PRAGMA 探测 → ALTER）。
 - Produces: `bot_conversations.display_name/display_avatar`（TEXT NULL）；`db.update_bot_conversation_display(conversation_id, display_name=None, display_avatar=None) -> Optional[dict]`（None=不改，空串=清除；不碰 `updated_at`）；`PATCH /bot/conversations/{id}`；`_conversation_payload` 输出自动带上两列（`dict(row)` 透传，无需改 payload 函数）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `backend/tests/test_bot_routes.py` 末尾追加（`client`/`create_persona` 已在该文件）：
 
@@ -390,12 +393,12 @@ def test_conversation_display_migration_idempotent(base_db):
     assert db.get_bot_conversation(conv["id"])["display_avatar"] is None
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH\backend && python -m pytest tests/test_bot_routes.py -q 2>&1 | Select-Object -Last 8`
 Expected: FAIL（PATCH 405 / 列不存在）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `backend/database.py`：`_migrate_bot_channels(conn)` 调用行之后追加：
 
@@ -473,11 +476,11 @@ def update_conversation(conversation_id: str, req: BotConversationUpdateRequest)
     return _conversation_payload(updated)
 ```
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: 同 Step 2。Expected: 全部 passed（含旧测试回归）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add backend/database.py backend/routes/bot.py backend/tests/test_bot_routes.py; git commit -m "feat(bot): QQ 会话显示层覆盖 display_name/display_avatar 与 PATCH 路由"
@@ -497,7 +500,7 @@ cd d:\workspace\cKunAgentSSH; git add backend/database.py backend/routes/bot.py 
 - Consumes: 文件内既有私有 `hashStr`（L10）。
 - Produces: `avatarPlaceholderStyle(seed: string): { background: string; color: string }`、`placeholderInitial(label?: string | null, seed?: string | null): string`。Task 6 的两个组件消费。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `src/utils/bot-chat-decor.test.ts` import 清单加 `avatarPlaceholderStyle, placeholderInitial`，追加：
 
@@ -530,12 +533,12 @@ describe('淡色占位头像 avatarPlaceholderStyle / placeholderInitial', () =>
 })
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH; npx vitest run src/utils/bot-chat-decor.test.ts 2>&1 | Select-Object -Last 10`
 Expected: FAIL（函数未导出 / import 报错）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `src/utils/bot-chat-decor.ts` 的 `identiconSvg` 之后追加（本任务不删 identicon，Task 6 一并移除）：
 
@@ -563,11 +566,11 @@ export function placeholderInitial(label?: string | null, seed?: string | null):
 }
 ```
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: 同 Step 2。Expected: 全部 passed
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add src/utils/bot-chat-decor.ts src/utils/bot-chat-decor.test.ts; git commit -m "feat(bot): 淡色占位头像纯函数 avatarPlaceholderStyle/placeholderInitial"
@@ -589,7 +592,7 @@ cd d:\workspace\cKunAgentSSH; git add src/utils/bot-chat-decor.ts src/utils/bot-
 - Consumes: Task 5 两个纯函数。
 - Produces: `PersonaAvatar` props 扩为 `{ avatar?, seed?, label? }`（无图渲染淡色首字圈）；`GeneratedAvatar` 变薄壳透传 `{ seed?, label? }` 到 PersonaAvatar。Task 10/11/12 直接依赖这两者。
 
-- [ ] **Step 1: 写失败测试（守卫 + 旧测试改写）**
+- [x] **Step 1: 写失败测试（守卫 + 旧测试改写）**
 
 `src/views/ssh/CkunBotView.guards.test.ts` 追加：
 
@@ -610,12 +613,12 @@ cd d:\workspace\cKunAgentSSH; git add src/utils/bot-chat-decor.ts src/utils/bot-
 
 `src/utils/bot-chat-decor.test.ts`：删除 `describe('生成式匿名头像 identiconSvg', …)` 整块（4 个 it）及 import 里的 `identiconSvg`。
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH; npx vitest run src/views/ssh/CkunBotView.guards.test.ts src/utils/bot-chat-decor.test.ts 2>&1 | Select-Object -Last 10`
 Expected: 新守卫 FAIL（decor 仍含 identiconSvg）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 3.1 `src/components/bot/PersonaAvatar.vue` 整文件替换：
 
@@ -670,12 +673,12 @@ defineProps<{ seed?: string | null; label?: string | null }>()
 - L103：`<GeneratedAvatar v-else :seed="peerSeed(store.qqActiveConversation?.external_id)" />` → 同行追加 `:label="peerLabel(store.qqActiveConversation?.external_id)"`
 - L45 与 L76/L89 的 `<PersonaAvatar :avatar="store.activePersona?.avatar" />` → 追加 `:label="store.activePersona?.name"`（三处）；L102 `<PersonaAvatar v-if="d.item.role === 'assistant'" :avatar="qqActivePersona?.avatar" />` → 追加 `:label="qqActivePersona?.name"`。
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: `cd d:\workspace\cKunAgentSSH; npx vitest run src/views/ssh/CkunBotView.guards.test.ts src/utils/bot-chat-decor.test.ts src/api/bot.test.ts 2>&1 | Select-Object -Last 8; npm run typecheck 2>&1 | Select-Object -Last 3`
 Expected: 全 passed；typecheck EXIT 0
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add src/components/bot/PersonaAvatar.vue src/components/bot/GeneratedAvatar.vue src/components/bot/CkunBotView.vue src/utils/bot-chat-decor.ts src/utils/bot-chat-decor.test.ts src/views/ssh/CkunBotView.guards.test.ts; git commit -m "refactor(bot): 头像去马赛克——identicon 移除，淡色首字占位接管"
@@ -695,7 +698,7 @@ cd d:\workspace\cKunAgentSSH; git add src/components/bot/PersonaAvatar.vue src/c
 - Consumes: Task 2/3/4 的路由形状。
 - Produces: `BotGalleryItem`、`botApi.listGallery/addGalleryItem/deleteGalleryItem/getUserAvatar/setUserAvatar/updateConversationDisplay`、`BotConversation.display_name/display_avatar`；`AvatarPicker` props `{ modelValue?, seed?, label? }` + emit `update:modelValue`。Task 8-12 消费。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `src/api/bot.test.ts` 追加（沿用文件顶部 `vi.mocked(request)` 模式）：
 
@@ -753,12 +756,12 @@ describe('头像选择器 AvatarPicker', () => {
 })
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH; npx vitest run src/api/bot.test.ts src/components/bot/AvatarPicker.test.ts 2>&1 | Select-Object -Last 10`
 Expected: FAIL（botApi 方法不存在 / 文件不存在）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `src/api/bot.ts`：`BotConversation` 接口 `preview` 字段后追加：
 
@@ -884,11 +887,11 @@ async function pickFile(event: Event) {
 </style>
 ```
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: 同 Step 2。Expected: 全 passed；随后 `npm run typecheck 2>&1 | Select-Object -Last 3` EXIT 0
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add src/api/bot.ts src/api/bot.test.ts src/components/bot/AvatarPicker.vue src/components/bot/AvatarPicker.test.ts; git commit -m "feat(bot): AvatarPicker 统一头像选择器与图库/头像/会话覆盖 API 客户端"
@@ -912,7 +915,7 @@ cd d:\workspace\cKunAgentSSH; git add src/api/bot.ts src/api/bot.test.ts src/com
 - Consumes: Task 7 的 `AvatarPicker`、`botApi.getUserAvatar/setUserAvatar`；`PANELS` 单一清单模式（SettingsDialog L81-89）。
 - Produces: `SettingCategory` 含 `'bot'`；`openSettings('bot')` 可达。Task 9 往 BotPanel 里加图库区。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `src/components/common/settings-nav-icons.test.ts`：`toHaveLength(7)` → `toHaveLength(8)`，标题文案「七个图标」→「八个图标」。
 
@@ -946,12 +949,12 @@ describe('设置 Bot 管理分类', () => {
 })
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH; npx vitest run src/components/common/settings-nav-icons.test.ts src/components/settings/panels/bot-panel.test.ts 2>&1 | Select-Object -Last 10`
 Expected: FAIL（7≠8；文件不存在）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `src/stores/settings.ts`：`| 'ops'` 后加 `| 'bot'`。
 
@@ -1031,12 +1034,12 @@ async function saveUserAvatar(value: string) {
 
 （样式类名与结构对照相邻面板既有约定；若 `settings-panel-base.css` 已提供 `.panel/.panel-header` 全局类则删除 style 块中重复项——执行时以 `MemoryPanel.vue` 实际引用方式为准，其余断言不变。）
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: 同 Step 2，再 `npm run typecheck 2>&1 | Select-Object -Last 3`
 Expected: 全 passed；typecheck EXIT 0（PANELS 的 Record 编译期强制 bot 项存在）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add src/stores/settings.ts src/components/common/settings-nav-icons.ts src/components/common/settings-nav-icons.test.ts src/components/common/SettingsDialog.vue src/components/settings/panels/BotPanel.vue src/components/settings/panels/bot-panel.test.ts; git commit -m "feat(settings): 设置新增 Bot 管理分类与你的头像区"
@@ -1054,7 +1057,7 @@ cd d:\workspace\cKunAgentSSH; git add src/stores/settings.ts src/components/comm
 - Consumes: `botApi.listGallery/addGalleryItem/deleteGalleryItem`、`readAvatarFile`。
 - Produces: BotPanel 图库网格（上传[可带 label]/删除）。无下游任务依赖。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `bot-panel.test.ts` 追加：
 
@@ -1067,12 +1070,12 @@ cd d:\workspace\cKunAgentSSH; git add src/stores/settings.ts src/components/comm
   })
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH; npx vitest run src/components/settings/panels/bot-panel.test.ts 2>&1 | Select-Object -Last 8`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `BotPanel.vue` 的 `field-group`「你的头像」之后追加区块：
 
@@ -1143,12 +1146,12 @@ async function removeFromGallery(id: string) {
 
 注意：文件里已有 `onMounted`（读 user-avatar），第二个 `onMounted` 并存合法（composition API 允许重复注册），或合并为一个函数 —— 执行时取合并写法，两个请求并行 `await Promise.all([...])`，各自 catch。`gallery-grid` 等样式在 scoped 块补充（网格用 `repeat(auto-fill, minmax(72px, 1fr))`，其余令牌同上）。
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: 同 Step 2，再 `npm run typecheck 2>&1 | Select-Object -Last 3`
 Expected: 全 passed
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add src/components/settings/panels/BotPanel.vue src/components/settings/panels/bot-panel.test.ts; git commit -m "feat(settings): Bot 管理面板头像图库管理区"
@@ -1170,7 +1173,7 @@ cd d:\workspace\cKunAgentSSH; git add src/components/settings/panels/BotPanel.vu
 - Consumes: `botApi.updateConversationDisplay`（Task 7）、`PersonaAvatar` 的 `avatar/seed/label` 三态（Task 6）、`AvatarPicker`（Task 7）。
 - Produces: `store.updateQqDisplay(id, payload)`（PATCH 后原位替换 `qqConversations` 项）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `src/stores/bot.test.ts`：顶部 `vi.mock('@/api/bot')` 工厂对象补三行 `updateConversationDisplay: vi.fn(), getUserAvatar: vi.fn(), setUserAvatar: vi.fn(),`；`beforeEach` 里补 `vi.mocked(botApi.getUserAvatar).mockResolvedValue({ avatar: '' })`。追加：
 
@@ -1200,12 +1203,12 @@ cd d:\workspace\cKunAgentSSH; git add src/components/settings/panels/BotPanel.vu
   })
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH; npx vitest run src/stores/bot.test.ts src/views/ssh/CkunBotView.guards.test.ts 2>&1 | Select-Object -Last 10`
 Expected: FAIL（updateQqDisplay 不存在 / 守卫串缺失）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `src/stores/bot.ts`：`refreshQq` 之后追加，并加入 return 导出清单（`refreshQq,` 旁）：
 
@@ -1299,12 +1302,12 @@ function resetQqDisplay() {
 
 CSS：`.qq-display-editor`（`padding: var(--spacing-12) var(--spacing-16); border-bottom: 1px solid var(--border-subtle); background: var(--bg-elevated); display: flex; flex-direction: column; gap: var(--spacing-8);`）、`.qq-display-actions`（flex gap）。全部走既有令牌。
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: 同 Step 2，再 `npm run typecheck 2>&1 | Select-Object -Last 3`
 Expected: 全 passed；typecheck EXIT 0
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add src/stores/bot.ts src/stores/bot.test.ts src/components/bot/CkunBotView.vue src/views/ssh/CkunBotView.guards.test.ts src/components/bot/PersonaAvatar.vue; git add -A src/components/bot/GeneratedAvatar.vue; git commit -m "feat(bot): QQ 会话自定义显示名/头像（记录页就地编辑，display 优先回落默认）"
@@ -1324,7 +1327,7 @@ cd d:\workspace\cKunAgentSSH; git add src/stores/bot.ts src/stores/bot.test.ts s
 - Consumes: `botApi.getUserAvatar`（Task 7，store mock 已在 Task 10 补齐）、`PersonaAvatar` 占位态（Task 6）。
 - Produces: `store.userAvatar: string`、`store.loadUserAvatar()`（init 时调用）；本地用户气泡右侧头像位。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `src/stores/bot.test.ts` 追加：
 
@@ -1352,12 +1355,12 @@ cd d:\workspace\cKunAgentSSH; git add src/stores/bot.ts src/stores/bot.test.ts s
   })
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH; npx vitest run src/stores/bot.test.ts src/views/ssh/CkunBotView.guards.test.ts 2>&1 | Select-Object -Last 10`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `src/stores/bot.ts`：`qqError` ref 声明后追加：
 
@@ -1387,12 +1390,12 @@ Expected: FAIL
 
 （`.bot-message` 是 flex，`order: 2` 把头像排到气泡右侧——与既有 `.chat-main.qq .bot-message.assistant .msg-avatar { order: 2; }` 同一手法；`.bot-message.user` 本身 `align-self: flex-end` 已右对齐。）
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: 同 Step 2，再 `npm run typecheck 2>&1 | Select-Object -Last 3`
 Expected: 全 passed
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add src/stores/bot.ts src/stores/bot.test.ts src/components/bot/CkunBotView.vue src/views/ssh/CkunBotView.guards.test.ts; git commit -m "feat(bot): 本地会话用户气泡接入「你的头像」"
@@ -1412,7 +1415,7 @@ cd d:\workspace\cKunAgentSSH; git add src/stores/bot.ts src/stores/bot.test.ts s
 - Consumes: `AvatarPicker`（Task 7）。
 - Produces: 无下游；`isImageAvatar(form.avatar)` 保存门槛保持（spec：上传后才能保存）。
 
-- [ ] **Step 1: 写失败测试（守卫先行改写）**
+- [x] **Step 1: 写失败测试（守卫先行改写）**
 
 `src/views/ssh/CkunBotView.guards.test.ts` 的「人格头像只能上传图片」用例改为：
 
@@ -1430,12 +1433,12 @@ cd d:\workspace\cKunAgentSSH; git add src/stores/bot.ts src/stores/bot.test.ts s
   })
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd d:\workspace\cKunAgentSSH; npx vitest run src/views/ssh/CkunBotView.guards.test.ts 2>&1 | Select-Object -Last 8`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `src/components/bot/PersonaEditor.vue`：
 
@@ -1451,12 +1454,12 @@ Expected: FAIL
 - `<script setup>`：删 `avatarInput/avatarBusy/avatarError` refs 与 `pickAvatar` 函数、`readAvatarFile` import（`isImageAvatar` 仍被保存按钮门槛用，保留）；import 区加 `import AvatarPicker from './AvatarPicker.vue'`。
 - scoped CSS 中与旧 `.avatar-picker*`/`.avatar-file` 相关的重复规则删除（AvatarPicker 自带样式）；`.field` 布局沿用编辑器现状。
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: `cd d:\workspace\cKunAgentSSH; npx vitest run src/views/ssh/CkunBotView.guards.test.ts src/components/bot/AvatarPicker.test.ts 2>&1 | Select-Object -Last 8; npm run typecheck 2>&1 | Select-Object -Last 3`
 Expected: 全 passed；typecheck EXIT 0
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
 cd d:\workspace\cKunAgentSSH; git add src/components/bot/PersonaEditor.vue src/views/ssh/CkunBotView.guards.test.ts; git commit -m "refactor(bot): PersonaEditor 头像接入统一 AvatarPicker"
@@ -1475,17 +1478,17 @@ cd d:\workspace\cKunAgentSSH; git add src/components/bot/PersonaEditor.vue src/v
 - Consumes: 全部前序任务。
 - Produces: 门禁全绿 → 进入整枝 CodeReview（SDD 流程负责，不在本任务内派发）。
 
-- [ ] **Step 1: 后端全量**
+- [x] **Step 1: 后端全量**
 
 Run: `cd d:\workspace\cKunAgentSSH\backend && python -m pytest -q 2>&1 | Select-Object -Last 5`
 Expected: 全绿（0 failed）。QQ 只读/去重/纯文本用例不许回归——spec §6 明令。
 
-- [ ] **Step 2: 前端全量 + 类型**
+- [x] **Step 2: 前端全量 + 类型**
 
 Run: `cd d:\workspace\cKunAgentSSH; npm run test 2>&1 | Select-Object -Last 10; npm run typecheck 2>&1 | Select-Object -Last 3`
 Expected: vitest 全绿；typecheck EXIT 0。
 
-- [ ] **Step 3: 若有失败按 systematic-debugging 定位根因修复，重跑；全绿且无新改动则本任务无提交。**
+- [x] **Step 3: 若有失败按 systematic-debugging 定位根因修复，重跑；全绿且无新改动则本任务无提交。**
 
 ---
 

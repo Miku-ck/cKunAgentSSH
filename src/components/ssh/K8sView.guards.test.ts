@@ -20,6 +20,7 @@ import eventsRaw from './k8s/K8sEventsTab.vue?raw'
 import detailRaw from './k8s/K8sResourceDetail.vue?raw'
 import scaleRaw from './k8s/K8sScaleDialog.vue?raw'
 import pageCssRaw from '../../styles/k8s-page.css?raw'
+import loadCssRaw from '../../styles/load-css.ts?raw'
 import coreRaw from '../../stores/k8s-core.ts?raw'
 import mainRaw from '../../main.ts?raw'
 import sshViewRaw from '../../views/ssh/SshView.vue?raw'
@@ -54,7 +55,11 @@ describe('注册点一处不能漏', () => {
     expect(lf(sshViewRaw)).toContain("pageMounted('k8s')")
     expect(lf(sshViewRaw)).toContain(`:active="activeNavPage === 'k8s'"`)
     expect(lf(sshViewRaw)).toContain("import('@/components/ssh/K8sView.vue')")
-    expect(lf(mainRaw)).toContain("import './styles/k8s-page.css'")
+    // k8s 页面 CSS 走首屏后的惰性加载：6.7KB 不背在关键路径上，且 main.ts 不得
+    // 再静态 import（静态登记等于把省下的体积原样加回去）
+    expect(lf(mainRaw)).not.toContain("import './styles/k8s-page.css'")
+    expect(src).toContain('loadK8sPageCss()')
+    expect(lf(loadCssRaw)).toContain("import('./k8s-page.css')")
   })
 })
 

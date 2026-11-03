@@ -91,3 +91,18 @@ UI 方案比选（用户选定方案 B：标题区切换 + 左侧色条），差
 - 差异项多选 → 用户仅选「模板集合不同」（目标主机必填性、默认周期差异被否）。
 - UI 三方案比选（浏览器并排）→ 用户选 B「标题区切换 + 左侧色条」，事件流 4 次点击均为 B。
 - 编辑态类型锁定 → 随 B 方案备注呈现给用户，确认 ok。
+
+## 实施回填
+
+按 `docs/superpowers/plans/2026-10-27-schedule-task-type.md` 五任务 TDD 落地，全部完成。
+
+| 交付物 | 提交 |
+| --- | --- |
+| `schedules` 表 `task_type` 列 + `_migrate_db` 幂等补列 + `_SCHEDULE_COLS`/`create_schedule` 透传 | `6f79644` |
+| REST `ScheduleIn`/`SchedulePatch` 与「编辑拒绝改类型」 | `9230bbc` |
+| AI 工具 `schedule_op` 的 `task_type` 形参、校验与 list 标注 | `f539db2` |
+| 前端类型、`SchedulesView` 表单分段开关与模板切换、列表分区与色条 | 同批 |
+
+### 与设计的偏差
+
+实现期发现 `database.py` 的 f-string SQL 需要标识符白名单（列名来自模块常量而非用户输入），已加 `_assert_sql_ident`/`_assert_sql_ident_list` 守卫；行为不变，属安全加固。

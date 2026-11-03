@@ -36,16 +36,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { useSettingsStore } from './stores/settings'
 import { useAppStore } from './stores/app'
 import { useAppearance } from './composables/useAppearance'
 import type { TitlebarPage } from './composables/useSshNavigation'
 import TitleBar from './layouts/TitleBar.vue'
 import ToastContainer from './components/common/ToastContainer.vue'
-import ConfirmDialogHolder from './components/common/ConfirmDialogHolder.vue'
-import SettingsDialogHolder from './components/common/SettingsDialogHolder.vue'
 import SshView from './views/ssh/SshView.vue'
+
+// 启动性能：设置与确认弹窗只在用户主动触发时才需要，拆为独立 chunk。
+// 首屏省掉 SettingsDialog（~15KB 含 9 个设置面板）+ ConfirmDialog 的实例化。
+const ConfirmDialogHolder = defineAsyncComponent(() => import('./components/common/ConfirmDialogHolder.vue'))
+const SettingsDialogHolder = defineAsyncComponent(() => import('./components/common/SettingsDialogHolder.vue'))
 
 const settingsStore = useSettingsStore()
 const appStore = useAppStore()

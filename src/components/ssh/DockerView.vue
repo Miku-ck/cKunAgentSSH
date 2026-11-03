@@ -267,7 +267,7 @@
 // 定位：依附已连接的 SSH 会话，经 sshExec 在其远程主机上真执行 docker 命令。
 // 分工：命令构造/解析/错误归类 → docker-core.ts；执行/审计/动作锁/陈旧回包守卫 → ./docker/context.ts；
 //       四个页签的列表与全部弹窗 → ./docker/*；本文件只做 sshExec 编排与页面级状态。
-import { computed, ref, watch, onUnmounted } from 'vue'
+import { computed, onMounted, ref, watch, onUnmounted } from 'vue'
 import { formatBytes } from '@/utils/format'
 import { sshSessionIo, writeAfterShellReady } from '@/utils/ssh-handshake'
 import DockerContainerDetail from './docker/DockerContainerDetail.vue'
@@ -304,6 +304,9 @@ import DockerVolumeDetailDialog from './docker/DockerVolumeDetailDialog.vue'
 import DockerNetworkDetailDialog from './docker/DockerNetworkDetailDialog.vue'
 import DockerPullDialog from './docker/DockerPullDialog.vue'
 import DockerConnectionPicker from './docker/DockerConnectionPicker.vue'
+import { loadDockerModalCss, loadDockerPageCss } from '@/styles/load-css'
+
+onMounted(() => { void Promise.all([loadDockerModalCss(), loadDockerPageCss()]) })
 
 const props = defineProps<{ active?: boolean }>()
 const sshStore = useSSHStore()

@@ -10,7 +10,7 @@ const root = process.cwd()
 // dist-final / dist-verify 这些试错残留。写死清单等于每换一次名字就漏下一个
 // 300 MB 量级的目录（每个都含完整 electron 运行时）。
 const isArtifactDir = (name) =>
-  name === 'dist' || name === 'dist-electron' || /^dist-[a-z0-9-]+$/.test(name)
+  name === 'dist' || name === 'dist-electron' || /^dist(?:-[a-z0-9-]+|\d+)?$/.test(name)
 
 const isDir = (fp) => {
   try {

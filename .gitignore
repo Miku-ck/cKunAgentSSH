@@ -44,6 +44,10 @@ dist-electron/
 # Logs
 logs/
 *.log
+# qq-botpy 自带的 TimedRotatingFileHandler 以「当天日期」切文件，命名是
+# botpy.log.2026-11-02 —— `*.log` 不匹配这个后缀，实测这些运行产物会直接出现在
+# git status 里。按「主名 + 点 + 日期」兜住；当前 botpy.log 已被 *.log 覆盖。
+*.log.[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -92,6 +96,12 @@ pytest-cache-files-*/
 
 # 安全删除的回收备份目录（勿提交）
 .trash-cleanup-*/
+# 故障隔离文件（CONTEXT.md 定义的 .corrupt-<ts>.bak，损坏文件改名留证）
+.corrupt-*
+
+# uv pip compile 生成的依赖锁：只在本地生成（编译命令里钉了本机解释器路径，
+# 换台机器就是另一份），不进版本库。制备内嵌运行时用 requirements.txt 区间版即可
+backend/requirements*.lock
 backend/tests/_tmp/
 backend/_tmp/
 

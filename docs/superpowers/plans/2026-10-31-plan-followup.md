@@ -1,6 +1,7 @@
 # 计划到期回溯 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **状态：已执行完毕（2026-10-31）。** Task 1-7 全部完成；提交链 `660388f`·`ef4af4b`·`1e00171`·`aefd51c`·`749225f`·`571413d`·`26080c4`·`cec8ac9`·`c75b12d`·`7706b50`·`73773f8`·`ea9b188`·`2a8589d`·`3085a28`。全量 `python -m pytest tests/ -q` 3916 passed, 0 failed。实施回填见 spec §「实施回填（2026-10-31）」。
 
 **Goal:** 让陪聊人格在用户说过的计划到期后，主动问一句「后来怎么样了」，依据全部来自用户亲口说过的话。
 
@@ -35,7 +36,7 @@
   - `PLAN_NEAR_WINDOW_H: float = 4.0`
   - `plan_window(when_text: str, base: datetime) -> tuple[datetime, datetime] | None` —— 返回左闭右开的本地时区窗口，未知时间词返回 `None`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `backend/tests/test_bot_plan.py`：
 
@@ -119,12 +120,12 @@ def test_unknown_or_empty_when_returns_none():
     assert _window("明年") is None
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd backend && python -m pytest tests/test_bot_plan.py -v`
 Expected: FAIL —— `ModuleNotFoundError: No module named 'bot.plan'`
 
-- [ ] **Step 3: 写最小实现**
+- [x] **Step 3: 写最小实现**
 
 新建 `backend/bot/plan.py`：
 
@@ -199,12 +200,12 @@ def plan_window(when_text: str, base: datetime) -> "tuple[datetime, datetime] | 
 
 > 本步**不 import `timezone`**：`plan_window` 只做日历运算，Task 4 的 `record_hooks` 落库时才用到它（届时再补导入，否则 F401）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd backend && python -m pytest tests/test_bot_plan.py -v`
 Expected: 10 passed
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd d:/workspace/cKunAgentSSH
@@ -225,7 +226,7 @@ git commit -m "feat(bot): 计划时间词解析成到期窗口（spec 2026-10-31
 **Interfaces:**
 - Produces: `Fact.when: str`、`Fact.subject: str`（其余规则为空串）；`extract_facts("周末要去看展")` 返回 `Fact(title="计划", content="用户的计划：看展", when="周末", subject="看展")`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `backend/tests/test_bot_memory.py` 末尾追加：
 
@@ -256,12 +257,12 @@ def test_non_plan_facts_have_no_when_or_subject():
 
 > 若 `test_bot_memory.py` 顶部未导入 `from bot import memory as mem`，先补这一行（检查现有 import 别名后再写，保持与文件内既有别名一致）。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd backend && python -m pytest tests/test_bot_memory.py -k "plan_fact_keeps or plan_subject or non_plan_facts" -v`
 Expected: FAIL —— `AttributeError: 'Fact' object has no attribute 'when'`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `Fact` 增加两个字段：
 
@@ -313,12 +314,12 @@ class Fact:
     )
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd backend && python -m pytest tests/test_bot_memory.py -v`
 Expected: 全部 passed（含原有用例，确认没有回归）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd d:/workspace/cKunAgentSSH
@@ -345,7 +346,7 @@ git commit -m "feat(bot): 计划抽取保留时间词与主题（spec 2026-10-31
   - `db.mark_plan_asked(hook_id, asked_at) -> bool`
   - `db.expire_plan_hooks(cutoff_iso) -> int`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `backend/tests/test_bot_plan.py` 追加：
 
@@ -413,12 +414,12 @@ def test_expire_plan_hooks_only_touches_overdue_pending(base_db):
     assert db.due_plan_hook(persona["id"], "2026-12-02 00:00:00", "2026-11-30 00:00:00")["id"] == fresh
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd backend && python -m pytest tests/test_bot_plan.py -k "plan_hook or expire" -v`
 Expected: FAIL —— `AttributeError: module 'database' has no attribute 'add_plan_hook'`
 
-- [ ] **Step 3: 改 DDL 与结构版本**
+- [x] **Step 3: 改 DDL 与结构版本**
 
 `database.py` 第 98 行：
 
@@ -450,7 +451,7 @@ _SCHEMA_VERSION = 6
                 ON bot_plan_hooks(persona_id, state, plan_text);
 ```
 
-- [ ] **Step 4: 加数据访问函数**
+- [x] **Step 4: 加数据访问函数**
 
 在 `database.py` 的 `add_bot_proactive_log` 之前插入：
 
@@ -544,17 +545,17 @@ def expire_plan_hooks(cutoff_iso: str) -> int:
         conn.close()
 ```
 
-- [ ] **Step 5: 更新结构指纹**
+- [x] **Step 5: 更新结构指纹**
 
 Run: `cd backend && python -m pytest tests/test_startup_critical_path.py::test_schema_version_bumped_with_ddl_changes -v`
 Expected: FAIL，断言消息里给出实测指纹，形如 `_SCHEMA_SOURCE_FINGERPRINT = 'xxxxxxxxxxxxxxxx'`。把该 16 位值填进 `tests/test_startup_critical_path.py` 第 33 行。
 
-- [ ] **Step 6: 跑测试确认通过**
+- [x] **Step 6: 跑测试确认通过**
 
 Run: `cd backend && python -m pytest tests/test_bot_plan.py tests/test_startup_critical_path.py -v`
 Expected: 全部 passed
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 cd d:/workspace/cKunAgentSSH
@@ -575,7 +576,7 @@ git commit -m "feat(bot): 计划钩子表与结构版本 6（spec 2026-10-31-pla
 - Consumes: `mem.Fact.when` / `Fact.subject`（Task 2）、`db.add_plan_hook`（Task 3）
 - Produces: `plan.record_hooks(persona_id, conversation_id, facts, base) -> int`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `backend/tests/test_bot_plan.py` 追加：
 
@@ -631,12 +632,12 @@ def test_record_hooks_stores_utc_timestamps(base_db):
 
 > 文件顶部需要 `import asyncio`。`remember_async` 内部用真实 `datetime.now().astimezone()`，所以断言只看状态与 `when_text`，不看具体时刻；查询用 `ORDER BY rowid`（同一秒内两次写入，`created_at` 排序不稳定）。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd backend && python -m pytest tests/test_bot_plan.py -k "record_hooks or deduped" -v`
 Expected: FAIL —— `AttributeError: module 'bot.plan' has no attribute 'record_hooks'`
 
-- [ ] **Step 3: 实现 `record_hooks`**
+- [x] **Step 3: 实现 `record_hooks`**
 
 `backend/bot/plan.py` 顶部补 `from datetime import timezone`，文件末尾追加：
 
@@ -703,7 +704,7 @@ from .timeutil import fmt_ts as _fmt_ts
 logger = logging.getLogger(__name__)
 ```
 
-- [ ] **Step 4: 接入 `remember_async`**
+- [x] **Step 4: 接入 `remember_async`**
 
 `backend/bot/memory.py` 顶部导入区加：
 
@@ -725,12 +726,12 @@ from . import plan as plan_mod
 
 > `remember()`（同步版）不接钩子：它只给无事件循环的旧调用方用，主链路走 `remember_async`。
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `cd backend && python -m pytest tests/test_bot_plan.py tests/test_bot_memory.py -v`
 Expected: 全部 passed
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 cd d:/workspace/cKunAgentSSH
@@ -753,7 +754,7 @@ git commit -m "feat(bot): 计划钩子随记忆抽取落库（spec 2026-10-31-pl
   - `plan_due_topic(persona_id: str, now: datetime) -> Topic | None`
   - `pick_topic(...) -> Topic | None`（返回值由 `tuple` 变 `Topic`，下标访问与解包保持兼容）
 
-- [ ] **Step 1: 先修既有断言，再写新测试**
+- [x] **Step 1: 先修既有断言，再写新测试**
 
 `pick_topic` 的返回值从二元组升级成 `Topic(NamedTuple)`，而 NamedTuple 按值比较带长度：
 `Topic("a", "b", "") == ("a", "b")` 是 **False**。所以先改这一条既有用例
@@ -818,12 +819,12 @@ def test_plan_due_outranks_fresh_fact(base_db):
     assert topic.source == "plan_due"
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd backend && python -m pytest tests/test_bot_proactive.py -k "due_plan or plan_due or fatigue_care_outranks" -v`
 Expected: FAIL —— `AssertionError` 或 `'str' object has no attribute 'source'`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `backend/bot/proactive.py` 顶部导入区加：
 
@@ -897,12 +898,12 @@ def pick_topic(
 
 删除原 `pick_topic` 里的 `return "..." , "..."` 元组写法（整段替换）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd backend && python -m pytest tests/test_bot_proactive.py -v`
 Expected: 全部 passed（原有 40+ 用例必须零回归；`topic[1]` 在 `_deliver` 里仍可用）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd d:/workspace/cKunAgentSSH
@@ -925,7 +926,7 @@ git commit -m "feat(bot): 主动消息新增计划回溯选题（spec 2026-10-31
 - Consumes: `plan_due_topic`（Task 5）、`db.mark_plan_asked` / `db.expire_plan_hooks`（Task 3）
 - Produces: `desire(..., plan_due: bool = False)`；`_deliver` 成功后钩子进入 `asked`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `backend/tests/test_bot_proactive.py` 追加：
 
@@ -1014,12 +1015,12 @@ async def test_tick_expires_plan_hooks_past_the_followup_window(base_db, monkeyp
     assert row["state"] == "expired"
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd backend && python -m pytest tests/test_bot_proactive.py -k "due_plan or plan_as_asked or platform_rejects or expires_plan" -v`
 Expected: FAIL —— `TypeError: desire() got an unexpected keyword argument 'plan_due'`
 
-- [ ] **Step 3: 给 `desire` 加放行参数**
+- [x] **Step 3: 给 `desire` 加放行参数**
 
 ```python
 def desire(
@@ -1070,7 +1071,7 @@ def desire(
 
 > 整个函数体照上块落地（包含底部硬底线），不必分两次改。
 
-- [ ] **Step 4: `tick` 与 `probe` 传入 `plan_due`**
+- [x] **Step 4: `tick` 与 `probe` 传入 `plan_due`**
 
 `tick` 里把这一段：
 
@@ -1106,7 +1107,7 @@ def desire(
 
 `probe` 里同样加 `due = await asyncio.to_thread(plan_due_topic, persona_id, now)`，并把 `desire(...)` 调用补上 `plan_due=due is not None`；`probe` 的 `now` 用 `datetime.now(timezone.utc)` 局部变量，避免多处各自取时。
 
-- [ ] **Step 5: `_deliver` 三处成功分支标记 `asked`**
+- [x] **Step 5: `_deliver` 三处成功分支标记 `asked`**
 
 在 `_deliver` 内定义局部 helper（放在方法开头、`pfx` 之后）：
 
@@ -1126,12 +1127,12 @@ def desire(
 - `push` 分支：写完 `add_bot_proactive_log(...)` 之后、`return True` 之前；
 - `queued` 分支：写完 `add_bot_proactive_log(...)` 之后、`return True` 之前（寄存也算说出口）。
 
-- [ ] **Step 6: 跑测试确认通过**
+- [x] **Step 6: 跑测试确认通过**
 
 Run: `cd backend && python -m pytest tests/test_bot_proactive.py -v`
 Expected: 全部 passed
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 cd d:/workspace/cKunAgentSSH
@@ -1150,17 +1151,17 @@ git commit -m "feat(bot): 计划回溯放行陌生人闸、问过即标记、超
 - Consumes: Task 1-6 全部产出
 - Produces: 无代码产出
 
-- [ ] **Step 1: 跑后端全量测试**
+- [x] **Step 1: 跑后端全量测试**
 
 Run: `cd backend && python -m pytest tests/ -q`
 Expected: 全部 passed。若有与本设计无关的既有失败，先记录失败用例名，再单独跑一次确认它在改动前就失败（`git stash` 不推荐，直接看失败栈是否触及本次改动文件）。
 
-- [ ] **Step 2: 跑 lint**
+- [x] **Step 2: 跑 lint**
 
 Run: `cd backend && python -m ruff check --select F,E9,E7 bot/plan.py bot/memory.py bot/proactive.py database.py tests/test_bot_plan.py tests/test_bot_proactive.py tests/test_bot_memory.py`
 Expected: All checks passed
 
-- [ ] **Step 3: 真机冒烟（无法自动化，记录结果）**
+- [x] **Step 3: 真机冒烟（无法自动化，记录结果）**
 
 1. 启动后端 + 本地陪聊，对某人格说「周末要去看展」。
 2. 查库确认钩子：
@@ -1175,11 +1176,11 @@ python -c "import database as db; print([dict(r) for r in db._get_conn().execute
 3. 把 `due_end` 手工改成过去 2 小时，等一轮 tick（≤75s），对该会话点「试一句」，确认回显 `action=push/send`、`reason` 含 `ok:plan_due`，且 `state` 变为 `asked`。
 4. 再点一次「试一句」，确认回显 `reason` 里 **不再** 出现 `plan_due`（只问一次）。
 
-- [ ] **Step 4: 回填 spec**
+- [x] **Step 4: 回填 spec**
 
 在 `docs/superpowers/specs/2026-10-31-plan-followup-design.md` 末尾追加实测结果（用例数、命令、与设计的偏差）。若 Step 3 发现偏差，先改代码或改设计，二者只留一份口径。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd d:/workspace/cKunAgentSSH

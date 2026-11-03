@@ -299,6 +299,44 @@ describe('setFeed() / loadConfig()', () => {
     c.loadConfig()
     expect(c.getState().feedUrl).toBe('https://feed.example/latest.json')
   })
+
+  it('loadConfig 不读盘：覆盖值推迟到首次 getState 才生效（启动路径零同步 IO）', () => {
+    // 启动性能：loadConfig 落在 whenReady 链上，那里还有 createWindow。
+    // 读盘放在 getState 是因为设置页挂载必调它 —— 用户可见状态不会缺配置，
+    // 而 8s 后的 check() 也早已 drain 过这个 flag。这条断言防的是「顺手改回
+    // 同步读盘」，那种改动 typecheck 与行为测试都照不出慢。
+    const u = makeUpdater()
+    mkdirSync(u.updateDir, { recursive: true })
+    writeFileSync(u.configFile, JSON.stringify({ feedUrl: 'https://mirror.example/latest.json' }))
+    u.loadConfig()
+    expect(u.getState().feedUrl).toBe('https://mirror.example/latest.json')
+    // 只读一次：第二次 getState 不再触发（flag 已清），改盘也不会回灌内存
+    writeFileSync(u.configFile, JSON.stringify({ feedUrl: 'https://changed.example/latest.json' }))
+    expect(u.getState().feedUrl).toBe('https://mirror.example/latest.json')
+  })
+
+  it('启动后没人取过状态时，check() 自己补读覆盖值（否则会拿 env 默认值去联网）', async () => {
+    const userDataDir = join(root, 'userData-pending-config')
+    mkdirSync(join(userDataDir, 'update'), { recursive: true })
+    writeFileSync(
+      join(userDataDir, 'update', 'config.json'),
+      JSON.stringify({ feedUrl: 'https://mirror.example/latest.json' }),
+    )
+    const fetchJson = vi.fn(async () => ({ version: '0.2.0', releases: [] }))
+    const withFetch = new Updater({
+      appDir,
+      userDataDir,
+      currentVersion: '0.1.0',
+      exeName: 'cKunAgentSSH.exe',
+      platform: 'win32',
+      arch: 'x64',
+      feedUrl: 'https://feed.example/latest.json',
+      fetchJson,
+    })
+    withFetch.loadConfig()
+    await withFetch.check()
+    expect(fetchJson).toHaveBeenCalledWith('https://mirror.example/latest.json')
+  })
 })
 
 describe('supported / 目录可写预检', () => {

@@ -36,6 +36,8 @@ from secret_redact import redact_secrets
 logger = logging.getLogger(__name__)
 
 AUDIT_TABLE = "audit_log"
+# 标识符守卫：表名是模块级常量，启动时校验一次，防止字面量被改坏带进 f-string SQL
+database._assert_sql_ident(AUDIT_TABLE)
 # SQL 注入面声明（CWE-89 加固）：本模块全部 f-string SQL（_last_hash 的 SELECT、
 # query/count/verify/export、archive_and_clear 的 SELECT/DELETE、INSERT）拼进的
 # 标识符只有 AUDIT_TABLE 与 _INSERT_COLUMNS 两份模块常量，**数据值一律经 ?

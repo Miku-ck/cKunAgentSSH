@@ -136,3 +136,21 @@ async def stream_reply(self, conversation_id, content, external_msg_id=None, *, 
 - `long` 风格顶到上下文上限 → 已由 `safe_max_tokens` 兜底，风险可控。
 - thinking 关闭时 `reasoning` 列多存 NULL，无副作用。
 - `supports_thinking` 是无人维护的历史值，故不作门控（已在第 3/4.2/5 节处理）；若未来要精确禁用非思考模型，需先给模型面板重新加回能力勾选，属额外范围。
+
+## 实施回填（2026-10-28）
+
+按 `docs/superpowers/plans/2026-10-28-bot-chat-experience-phase1.md` 十一任务 TDD 落地，全部完成。
+
+- 提交链：`89b8a2b`（数据层两列+reasoning 列+幂等迁移）→ `68fe2c6`（人格 CRUD 写新字段）→ `bf332f9`（路由模型与风格校验）→ `00f711c`（本地会话开场白）→ `32d34a6`（渠道化 system prompt）→ `1c037c6`（`stream_reply` 产 `(kind,text)` + thinking 透传 + reasoning 落库）→ `f221385`（本地 SSE 分发 reasoning）→ `2a1869c`（QQ `channel=qq` + 首回合前置 greeting）→ `9e1615d`（前端 API 类型/payload/reasoning 流）→ `46d4971`（store `streamReasoning`）→ `9d30baf`（视图两控件 + MarkdownStream 气泡 + 折叠思考）。
+- 另含基线补提 `30a4d5d`（`bot-channel.ts`/`ConnectionPage.vue`/`QqChannelCard.vue` 等曾漏提交）与评审修复 `24591c0`（long 风格输出预算对齐 §4.2）。
+
+### 验证
+
+- 前端：`npm run test` 1742 passed；`npm run typecheck` clean。
+- 后端全量：3454 passed，1 failed = `test_http_log_diagnostics.py::test_log_level_apply_installs_single_handler_and_sets_root` —— **既有 flaky，与本计划无关**（单独跑/小组合跑均通过；忽略本计划新增的四个 bot 测试文件后全量仍失败，机理是 `logconfig._handler` 全局单飞被更早的测试置位）。
+
+### 与设计的偏差
+
+1. `complete_reply`（QQ）保持原签名不变、不接 `images`；本阶段仅 `stream_reply` 产 `(kind, text)` 元组。
+2. 落库顺序仍是「先 `add_bot_message(user)` 再 `get_recent_bot_messages(40)`」，与计划 Task 6 Step 4 一度写过的「先读历史再 append」相反 —— 后者会在 QQ 重投时把同一条喂两遍，破坏既有去重不变量（`test_retry_after_failure_feeds_user_message_once`）。已在台账留 Ruling，保留基线顺序。
+3. `first_turn` 判定置于 `complete_reply` 之前，否则写库后历史永非空；greeting 仅非兜底成功路径前置。

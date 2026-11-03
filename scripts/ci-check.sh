@@ -36,7 +36,7 @@ run "后端 lint (ruff F,E9)" npm run --silent lint:backend
 run "前端 typecheck (vue-tsc)" npm run --silent typecheck
 
 # 3. 前端单测
-run "前端单测 (vitest)" bash -c "npx vitest run"
+run "前端单测 (vitest)" npm run --silent test
 
 # 4. 构建
 run "electron-vite build" npm run --silent build

@@ -350,6 +350,7 @@ GitHub 直连不稳（典型报错 `curl: (56) schannel: server closed abruptly`
 | `electron-bridge.log` | Bridge 通道与远程命令执行错误 | ISO 时间戳；单文件 1 MB，超限轮转为 `.old` |
 
 - Python 后端日志格式为 `%(asctime)s %(levelname)-7s %(name)s: %(message)s`，时间格式 `%H:%M:%S`，默认级别 `warning`；uvicorn 访问日志已关闭，避免健康检查刷屏。
+- 开发期直接跑后端（`cd backend && python main.py`）时，`qq-botpy` 会按自己的配置在 `backend/` 下写 `botpy.log`，并按天轮转成 `botpy.log.<YYYY-MM-DD>`。这些是本地运行产物，已由 `.gitignore` 的 `*.log` 与 `*.log.[0-9-]*` 规则覆盖，不会进版本库。
 - Python 后端日志出口会脱敏口令等敏感字段。`userData` 不可写时，主进程落盘静默停用，不影响应用运行。
 
 ## 接入网关

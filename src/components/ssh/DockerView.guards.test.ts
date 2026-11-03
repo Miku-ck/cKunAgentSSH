@@ -21,6 +21,7 @@ import volumeDetailRaw from './docker/DockerVolumeDetailDialog.vue?raw'
 import networkDetailRaw from './docker/DockerNetworkDetailDialog.vue?raw'
 import pickerRaw from './docker/DockerConnectionPicker.vue?raw'
 import pageCssRaw from '../../styles/docker-page.css?raw'
+import loadCssRaw from '../../styles/load-css.ts?raw'
 import mainRaw from '../../main.ts?raw'
 import sshViewRaw from '../../views/ssh/SshView.vue?raw'
 import titleBarRaw from '../../layouts/TitleBar.vue?raw'
@@ -422,8 +423,18 @@ describe('磁盘占用与 compose 分组', () => {
 })
 
 describe('样式归属', () => {
-  it('docker-page.css 已登记进 main.ts', () => {
-    expect(mainSrc).toContain("import './styles/docker-page.css'")
+  it('docker 页面 CSS 走首屏后的惰性加载，且不再静态登记进 main.ts', () => {
+    // 首屏关键路径不背 13.5KB(docker-modal) + 3.8KB(docker-page)：两者由
+    // load-css.ts 动态 import，页面挂载后才拉。main.ts 若再静态 import 就是
+    // 把省下来的首屏体积原样加回去（这条断言就是防它悄悄回来）。
+    expect(mainSrc).not.toContain("import './styles/docker-page.css'")
+    expect(mainSrc).not.toContain("import './styles/docker-modal.css'")
+    expect(src).toContain('loadDockerModalCss()')
+    expect(src).toContain('loadDockerPageCss()')
+    // 字面量路径是硬要求：Vite 靠它静态分析出独立 CSS chunk，写成变量就退化成
+    // 运行期请求、样式不再拆包（这条断言防的就是有人"顺手"改成变量形式）
+    expect(lf(loadCssRaw)).toContain("import('./docker-modal.css')")
+    expect(lf(loadCssRaw)).toContain("import('./docker-page.css')")
   })
   it('页签共享原子全部收在 .docker-view 之下，不裸写通用类名', () => {
     // 裸写 .icon-btn / .mono / .list 会串到全仓其它视图（各视图另有自己的同名 scoped 版本）

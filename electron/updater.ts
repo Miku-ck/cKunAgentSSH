@@ -68,6 +68,9 @@ const LIST_TIMEOUT_MS = 10_000
  */
 const INSECURE_URL_HINT = '更新地址必须走 https（明文只允许本机回环，用于本地假清单验收）'
 
+/** loadConfig() 只置位、不读盘：真正落盘读覆盖值发生在首次 getState()（见其注释）。 */
+let pendingConfigLoad = false
+
 export class Updater {
   private state: UpdateState
   private readonly listeners = new Set<(s: UpdateState) => void>()
@@ -95,6 +98,13 @@ export class Updater {
   }
 
   getState(): UpdateState {
+    // 首次取状态时才落盘读覆盖值：启动路径上不进同步 IO。AboutPanel 挂载即调
+    // update:getState，所以用户可见的状态不会缺这一份配置；而 check() 在 8s 后
+    // 才跑，那时 getState 早已发生，feedUrl 已就位。
+    if (pendingConfigLoad) {
+      pendingConfigLoad = false
+      this.readConfigSync()
+    }
     return { ...this.state }
   }
 
@@ -128,6 +138,12 @@ export class Updater {
 
   /** 拉清单 → 挑产物。失败静默回 idle（离线不该在界面上留一条红字）。 */
   async check(): Promise<UpdateState> {
+    // 若启动后没人取过状态（设置页从未打开），这里补读一次，否则 check() 会拿
+    // env 默认值而不是用户落盘的覆盖值去联网。
+    if (pendingConfigLoad) {
+      pendingConfigLoad = false
+      this.readConfigSync()
+    }
     if (!this.opts.feedUrl || !this.opts.appDir) {
       this.setState({ phase: 'idle', error: null, targetVersion: null })
       return this.getState()
@@ -226,6 +242,10 @@ export class Updater {
    * 不等到点"检查"才失败。落盘失败不影响本次生效，只记一条 warn。
    */
   setFeed(raw: string): UpdateState {
+    // 设置页是在 getState() 之后才被打开的，所以这里顺手把待读的覆盖值收掉：
+    // 否则先 getState 再 setFeed 的顺序下，flag 会在下次 getState 时用旧文件值
+    // 把刚设的地址又覆盖回去。
+    pendingConfigLoad = false
     const url = String(raw ?? '').trim()
     if (url && !isTrustedUpdateUrl(url)) {
       this.setState({ phase: 'error', error: INSECURE_URL_HINT })
@@ -246,8 +266,19 @@ export class Updater {
   /**
    * 启动时读设置页覆盖值。**必须早于 onState 订阅**：这里直接改内部状态，
    * 不推通知 —— 那时还没有监听者，推了也只是空转。
+   *
+   * 非阻塞：existsSync + readFileSync 是同步系统调用，落在 whenReady 的关键路径上
+   * （与 createWindow 争主线程）。设置页的 AboutPanel 挂载时会调 update:getState，
+   * 因此把这一步交给 require() 推迟到「首次 getState」——订阅仍在此之前完成，
+   * 只是读取本身不进启动路径。返回 this 便于链式调用点保持一行。
    */
-  loadConfig(): void {
+  loadConfig(): this {
+    pendingConfigLoad = true
+    return this
+  }
+
+  /** 落盘读覆盖值的同步实现。只在 getState() 首次被调用时执行一次。 */
+  private readConfigSync(): void {
     if (!existsSync(this.configFile)) return
     try {
       const raw = JSON.parse(readFileSync(this.configFile, 'utf8')) as { feedUrl?: unknown }

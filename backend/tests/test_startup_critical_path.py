@@ -44,7 +44,7 @@ _FORBIDDEN_AT_IMPORT_THIRDPARTY = (
 
 # init_db / 迁移函数体的指纹。改动这些函数的任何一行，都要在
 # 「升级 _SCHEMA_VERSION」与「更新本常量」之间做一次显式决定。
-_SCHEMA_SOURCE_FINGERPRINT = "002bfaa756aedf1b"
+_SCHEMA_SOURCE_FINGERPRINT = "ef9b07762b48c5f2"
 
 
 def _run_probe(code: str) -> dict:

@@ -4,7 +4,7 @@
  * 消费者有两个：DockerView 的卷/网络详情与 DockerContainerDetail 的容器详情。
  * 弹窗都 Teleport 到 body，且容器详情已拆成子组件 —— 留在任一组件 scoped 里，
  * 另一个就得抄一份（改一处、另一处悄悄漂移）。与 approval-card.css 同构，
- * 由 main.ts 引入。
+ * 首屏不加载：由 load-css.ts 在 DockerView / K8sView 挂载后动态引入。
  *
  * .badge / .kv / .logs / .flag 这类类名在 SftpPane、TunnelView、GatewayDialogs 等
  * 组件里都有各自版本：本文件不裸写它们，统一收在 .dt-dialog 下，避免提升为

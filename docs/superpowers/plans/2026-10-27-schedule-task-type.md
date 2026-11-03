@@ -1,6 +1,7 @@
 # 定时任务双类型（运维 / 日常）Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **状态：已执行完毕。** 全部步骤与收尾验证均已勾选；交付提交 `6f79644`/`9230bbc`/`f539db2` 等，实现口径以 spec `docs/superpowers/specs/2026-10-27-schedule-task-type-design.md` 为准。
 
 **Goal:** 给定时任务增加「运维任务 / 日常任务」双分类，默认运维，差异仅体现在模板集合、列表分区与卡片色条。
 
@@ -33,7 +34,7 @@
 **Interfaces:**
 - Produces: `schedules.task_type TEXT NOT NULL DEFAULT 'ops'`；`db.create_schedule(data)` 读 `data.get("task_type")`；`db.list_schedules()/get_schedule()` 返回含 `task_type` 键。`update_schedule` 的 `allowed` 集合**不含** task_type（类型不可变，即便 patch 带也被 db 层丢弃）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `backend/tests/test_schedule_task_type.py`：
 
@@ -86,12 +87,12 @@ def test_update_cannot_change_task_type(base_db):
 >
 > 下文所有 `temp_db` 均换名为 `base_db`。REST 测试的 `client` fixture 同样参考 `test_schedule_routes.py:58-70`（含 monkeypatch 掉 `compute_next_run`/`get_schedule_engine`）。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `npm run test:backend -- backend/tests/test_schedule_task_type.py`
 Expected: FAIL —KeyError 'task_type' 或列不存在
 
-- [ ] **Step 3: CREATE TABLE 加列**
+- [x] **Step 3: CREATE TABLE 加列**
 
 `backend/database.py:394` 的 `enabled INTEGER DEFAULT 1,` 之前插入一行：
 
@@ -99,7 +100,7 @@ Expected: FAIL —KeyError 'task_type' 或列不存在
                 task_type       TEXT NOT NULL DEFAULT 'ops',
 ```
 
-- [ ] **Step 4: _migrate_db 补列**
+- [x] **Step 4: _migrate_db 补列**
 
 在 `backend/database.py` `_migrate_db` 内、`last_abnormal_at` 补列分支旁（约 :478-480）追加同模式：
 
@@ -112,7 +113,7 @@ Expected: FAIL —KeyError 'task_type' 或列不存在
 
 > `schedule_cols` 已在 :478 由 PRAGMA table_info 取得，直接复用。
 
-- [ ] **Step 5: _SCHEDULE_COLS 加字段**
+- [x] **Step 5: _SCHEDULE_COLS 加字段**
 
 `backend/database.py:2633` 首段列串改为含 task_type：
 
@@ -123,7 +124,7 @@ _SCHEDULE_COLS = (
 )
 ```
 
-- [ ] **Step 6: create_schedule INSERT 落 task_type**
+- [x] **Step 6: create_schedule INSERT 落 task_type**
 
 `backend/database.py:2679-2701`：列名清单在 `name,` 后加 `task_type,`，占位符加一个 `?`，值元组在 name 值后加：
 
@@ -131,12 +132,12 @@ _SCHEDULE_COLS = (
                 (data.get("task_type") or "ops"),
 ```
 
-- [ ] **Step 7: 运行确认通过**
+- [x] **Step 7: 运行确认通过**
 
 Run: `npm run test:backend -- backend/tests/test_schedule_task_type.py`
 Expected: PASS
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add backend/database.py backend/tests/test_schedule_task_type.py
@@ -157,7 +158,7 @@ git commit -m "feat(schedule): schedules 表新增 task_type 列并读写透传"
 - Consumes: Task 1 的 `db.create_schedule` 读 task_type、`update_schedule` 丢弃 task_type。
 - Produces: `POST /schedules` 接受 `task_type`（Literal ops|daily，默认 ops，非法 422）；`PATCH /schedules/{id}` 对已存行传入不同 task_type → 422。
 
-- [ ] **Step 1: 追加失败测试**
+- [x] **Step 1: 追加失败测试**
 
 在 `backend/tests/test_schedule_task_type.py` 追加（沿用同文件已有的 TestClient/httpx fixture；参考 `backend/tests/` 中现成的 REST 测试客户端用法）：
 
@@ -182,12 +183,12 @@ def test_patch_change_type_rejected(client):
 
 > `client` fixture 已含 `base_db` 依赖与懒导入补丁（见 Task 1 注），本文件内定义一份即可复用。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `npm run test:backend -- backend/tests/test_schedule_task_type.py`
 Expected: FAIL（422 断言不成立 / task_type 被忽略）
 
-- [ ] **Step 3: ScheduleIn 加字段**
+- [x] **Step 3: ScheduleIn 加字段**
 
 `backend/routes/schedules.py` 顶部 import 补 `from typing import Literal, Optional`（已有 Optional，追加 Literal）。`ScheduleIn`（:33 后）加：
 
@@ -195,7 +196,7 @@ Expected: FAIL（422 断言不成立 / task_type 被忽略）
     task_type: Literal["ops", "daily"] = "ops"
 ```
 
-- [ ] **Step 4: SchedulePatch 加字段**
+- [x] **Step 4: SchedulePatch 加字段**
 
 `SchedulePatch`（:52 后）加：
 
@@ -203,7 +204,7 @@ Expected: FAIL（422 断言不成立 / task_type 被忽略）
     task_type: Optional[Literal["ops", "daily"]] = None
 ```
 
-- [ ] **Step 5: PATCH 拒绝改类型**
+- [x] **Step 5: PATCH 拒绝改类型**
 
 `update_schedule`（:119 `_drop_nulls` 之后、:120 merged 之前）插入：
 
@@ -219,12 +220,12 @@ Expected: FAIL（422 断言不成立 / task_type 被忽略）
 
 > 注意：Task 1 已让 `db.update_schedule` 丢弃 task_type，这里 pop 是双保险并保证 `merged.get("schedule_type")` 校验不受干扰。
 
-- [ ] **Step 6: 运行确认通过**
+- [x] **Step 6: 运行确认通过**
 
 Run: `npm run test:backend -- backend/tests/test_schedule_task_type.py`
 Expected: PASS
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add backend/routes/schedules.py backend/tests/test_schedule_task_type.py
@@ -249,7 +250,7 @@ git commit -m "feat(schedule): REST 接受 task_type 并拒绝编辑改类型"
 
 > **真实签名（勿再猜 kwargs）**：`execute(self, context, action, mode="interval", interval_minutes=None, cron=None, task=None, command=None, schedule_id=None, name=None, target_host=None)`，create 分支转调 `self._create(mode, interval_minutes, cron, task, command, name, target_host)`（:310）。`_create` 内变量：`task`→`task_prompt`、`name`→`task_name`。context 在 create 路径未使用。
 
-- [ ] **Step 1: 追加失败测试**
+- [x] **Step 1: 追加失败测试**
 
 ```python
 # spec 2026-10-27-schedule-task-type
@@ -285,12 +286,12 @@ def test_tool_create_invalid_type_errors(tool_env):
 
 > 首参 `None` 是 context（create 路径不用）。若 `_FakeEngine`/`_fake_compute_next_run` 不方便跨文件导入，在本测试文件内拷一份同实现。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `npm run test:backend -- backend/tests/test_schedule_task_type.py`
 Expected: FAIL（未知参数被忽略 / 未报错）
 
-- [ ] **Step 3: parameters 加 task_type**
+- [x] **Step 3: parameters 加 task_type**
 
 `ops_schedule.py:226` `interval_minutes` 定义之前，`properties` 内加：
 
@@ -303,7 +304,7 @@ Expected: FAIL（未知参数被忽略 / 未报错）
             },
 ```
 
-- [ ] **Step 4: execute/_create 加形参 + 校验 + 入库**
+- [x] **Step 4: execute/_create 加形参 + 校验 + 入库**
 
 `execute` 签名（:302-304）在 `target_host=None` 后加 `task_type="ops"`；create 转调（:310-311）改为：
 
@@ -327,7 +328,7 @@ Expected: FAIL（未知参数被忽略 / 未报错）
         task_type = task_type or "ops"
 ```
 
-- [ ] **Step 5: list 输出附类型标注**
+- [x] **Step 5: list 输出附类型标注**
 
 `_list` 渲染行（`ops_schedule.py:430`）在 `r.get('name')` 后插类型标注：
 
@@ -336,12 +337,12 @@ Expected: FAIL（未知参数被忽略 / 未报错）
             lines.append(f"{r.get('id')} | [{tag}] {r.get('name') or ''} | {st} | {first}")
 ```
 
-- [ ] **Step 6: 运行确认通过**
+- [x] **Step 6: 运行确认通过**
 
 Run: `npm run test:backend -- backend/tests/test_schedule_task_type.py`
 Expected: PASS
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add backend/agent/tools/builtin/ops_schedule.py backend/tests/test_schedule_task_type.py
@@ -363,7 +364,7 @@ git commit -m "feat(schedule): schedule_op 支持 task_type 参数与列表标�
 - Consumes: 后端 REST 已支持 task_type。
 - Produces: 表单 `form.task_type`；create payload 带 task_type；编辑态类型锁定；模板按 task_type 过滤。
 
-- [ ] **Step 1: ScheduleRecord/ScheduleIn 加字段**
+- [x] **Step 1: ScheduleRecord/ScheduleIn 加字段**
 
 `src/api/agent.ts:126` `name: string` 后加：
 
@@ -377,7 +378,7 @@ git commit -m "feat(schedule): schedule_op 支持 task_type 参数与列表标�
   task_type?: 'ops' | 'daily'
 ```
 
-- [ ] **Step 2: 写失败测试**
+- [x] **Step 2: 写失败测试**
 
 新建 `src/views/ssh/__tests__/SchedulesView.task-type.spec.ts`（沿用项目 Vitest + @vue/test-utils 挂载方式，参考现有 `src/**/__tests__/*.spec.ts`）：
 
@@ -399,16 +400,16 @@ describe('定时任务类型', () => {
 
 > 若 SchedulesView 未暴露 `form`，用 `<script setup>` 的 `defineExpose` 或改为断言 DOM：切到「日常」分段按钮后 chips 文本含「周报素材汇总」且不含「定时巡检」。优先 DOM 断言，避免暴露内部状态。
 
-- [ ] **Step 3: 运行确认失败**
+- [x] **Step 3: 运行确认失败**
 
 Run: `npm test -- SchedulesView.task-type`
 Expected: FAIL（task_type 不存在）
 
-- [ ] **Step 4: ScheduleForm 类型与默认值**
+- [x] **Step 4: ScheduleForm 类型与默认值**
 
 `SchedulesView.vue:264-275` `interface ScheduleForm` 首行加 `task_type: 'ops' | 'daily'`；`FORM_DEFAULTS`（:278）加 `task_type: 'ops',`。
 
-- [ ] **Step 5: Template 加类型 + 日常模板**
+- [x] **Step 5: Template 加类型 + 日常模板**
 
 `Template` 接口（:316-326）加 `task_type?: 'ops' | 'daily'`。现有 4 条模板各补 `task_type: 'ops'`。数组末尾追加 3 条日常模板：
 
@@ -439,7 +440,7 @@ const visibleTemplates = computed(() =>
 
 模板列表渲染（:100 `v-for="t in templates"`）改为 `v-for="t in visibleTemplates"`。
 
-- [ ] **Step 6: 标题栏放类型分段开关**
+- [x] **Step 6: 标题栏放类型分段开关**
 
 `SchedulesView.vue:93` `.modal-title` 改为 flex 容器并在右侧放开关：
 
@@ -466,13 +467,13 @@ function switchType(t: 'ops' | 'daily') {
 }
 ```
 
-- [ ] **Step 7: openEdit 回填类型 + formPayload 带上**
+- [x] **Step 7: openEdit 回填类型 + formPayload 带上**
 
 `openEdit`（:478 起）加 `form.task_type = s.task_type ?? 'ops'`。`formPayload`（:498 return）加 `task_type: form.task_type,`。
 
 > changedPayload 遍历 formPayload 键与 baseline 比对：编辑态 form.task_type 恒等于 baseline，不会发出 task_type，天然满足「PATCH 不改类型」。
 
-- [ ] **Step 8: 样式**
+- [x] **Step 8: 样式**
 
 `<style scoped>` 追加：
 
@@ -484,12 +485,12 @@ function switchType(t: 'ops' | 'daily') {
 .type-switch .sched-option:disabled { cursor: not-allowed; }
 ```
 
-- [ ] **Step 9: 运行确认通过 + 类型检查**
+- [x] **Step 9: 运行确认通过 + 类型检查**
 
 Run: `npm test -- SchedulesView.task-type` 然后 `npm run typecheck`
 Expected: PASS 且无类型错误
 
-- [ ] **Step 10: 提交**
+- [x] **Step 10: 提交**
 
 ```bash
 git add src/api/agent.ts src/views/ssh/SchedulesView.vue src/views/ssh/__tests__/SchedulesView.task-type.spec.ts
@@ -509,7 +510,7 @@ git commit -m "feat(schedule): 弹窗标题区类型切换开关与模板按类�
 - Consumes: Task 4 的 `form.task_type`、`ScheduleRecord.task_type`。
 - Produces: 按 task_type 分组的 `opsItems`/`dailyItems` computed；空区隐藏；日常卡片 `.daily` 色条。
 
-- [ ] **Step 1: 追加失败测试**
+- [x] **Step 1: 追加失败测试**
 
 ```ts
 // spec 2026-10-27-schedule-task-type
@@ -520,12 +521,12 @@ it('按类型分区渲染，空区隐藏', () => {
 })
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `npm test -- SchedulesView.task-type`
 Expected: FAIL（无分区结构）
 
-- [ ] **Step 3: 分组 computed**
+- [x] **Step 3: 分组 computed**
 
 script 加：
 
@@ -534,7 +535,7 @@ const opsItems = computed(() => items.value.filter(s => (s.task_type ?? 'ops') =
 const dailyItems = computed(() => items.value.filter(s => s.task_type === 'daily'))
 ```
 
-- [ ] **Step 4: 列表改分区渲染**
+- [x] **Step 4: 列表改分区渲染**
 
 将 `SchedulesView.vue:23-57` 的「empty-state + 单个 schedule-list」替换为两个区块。抽出卡片主体为可复用片段（用 `v-for` 两处各渲染，或抽 `<template>`）。空状态条件由 `items.length===0` 保持：
 
@@ -558,7 +559,7 @@ const dailyItems = computed(() => items.value.filter(s => s.task_type === 'daily
 
 > 卡片内部（head/meta/body/actions）与现有 `:25-56` 完全一致，仅外层从单 `v-for="s in items"` 变为两个分组各自 `v-for`。建议复制卡片块两次而非抽组件，避免大改；若重复过长可抽 `ScheduleCard.vue`，但属可选优化，非本任务强制。
 
-- [ ] **Step 5: 样式（色条沿用 token + 分区标题）**
+- [x] **Step 5: 样式（色条沿用 token + 分区标题）**
 
 `.schedule-card` 已有 `border-left: 3px solid var(--accent-primary)`（运维天然成立）。追加：
 
@@ -573,12 +574,12 @@ const dailyItems = computed(() => items.value.filter(s => s.task_type === 'daily
 
 > 色条仅冗余编码，分区标题「运维任务/日常任务」是主分类信息载体（无障碍兜底，符合 spec §3）。
 
-- [ ] **Step 6: 运行确认通过 + 类型检查**
+- [x] **Step 6: 运行确认通过 + 类型检查**
 
 Run: `npm test -- SchedulesView.task-type` 然后 `npm run typecheck`
 Expected: PASS
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add src/views/ssh/SchedulesView.vue src/views/ssh/__tests__/SchedulesView.task-type.spec.ts
@@ -589,11 +590,11 @@ git commit -m "feat(schedule): 定时任务列表按类型分区并用色条区�
 
 ## 收尾验证（全计划完成后跑一次）
 
-- [ ] `npm run test:backend` 全绿（含新增 test_schedule_task_type.py）
-- [ ] `npm test` 全绿（含 SchedulesView.task-type）
-- [ ] `npm run typecheck` 无错误
-- [ ] `npm run ci` 本地门禁通过
-- [ ] 真机冒烟：新建运维/日常任务、编辑态类型置灰、列表两分区与色条、AI 工具创建带类型
+- [x] `npm run test:backend` 全绿（含新增 test_schedule_task_type.py）
+- [x] `npm test` 全绿（含 SchedulesView.task-type）
+- [x] `npm run typecheck` 无错误
+- [x] `npm run ci` 本地门禁通过
+- [x] 真机冒烟：新建运维/日常任务、编辑态类型置灰、列表两分区与色条、AI 工具创建带类型
 
 ## Self-Review 结论
 

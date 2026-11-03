@@ -10,7 +10,7 @@
  * 弹窗都 Teleport 到 body（不在 .docker-view 内），它们的骨架与 `.badge`/`.kv`/
  * `.mono` 版本仍由 docker-modal.css 的 `.dt-dialog` 作用域提供。
  *
- * 由 main.ts 引入。
+ * 首屏不加载：由 load-css.ts 在 DockerView 挂载后动态引入。
  */
 
 /* ── 列表骨架（四个页签共用） ── */

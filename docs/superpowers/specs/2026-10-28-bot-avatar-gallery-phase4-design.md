@@ -81,3 +81,21 @@
 - 图库图片按**头像口径**（方形 256 webp）存，不作为大图查看。
 - 群内按真人分头像**本设计不做**，作后续期。
 - QQ 会话显示名/头像仅**本地覆盖**，不影响 QQ 真实群、不改真实数据。
+
+## 实施回填（2026-10-28）
+
+按 `docs/superpowers/plans/2026-10-28-bot-avatar-gallery-phase4.md` T1-T13 全部完成。
+
+提交链：`685a4d2`（T1 表+CRUD）→ `72e4797`（T2 图库路由）→ `d0cf57e`（T3 你的头像端点）→ `1fbc7ef`（T4 QQ 会话显示覆盖）→ `4fb5054`（T5+6 去马赛克 + GeneratedAvatar/PersonaAvatar）→ `0b67429`（T7 API+AvatarPicker）→ `de1cbcb`（T8+9 设置 Bot 管理）→ `62811d4`（T10+11 QQ 会话编辑入口）→ `7bccc59`（T12 PersonaEditor 收编 AvatarPicker）→ `85a442b`（评审修复）。
+
+### 验证（HEAD 隔离 worktree 门禁）
+
+- `python -m pytest` 3543 passed
+- `npm run test` 154 files / 1792 passed
+- `npm run typecheck` EXIT=0
+- CodeReview 整枝：无 Critical；2 Major（跨会话串写 / 头像不同步）已于 `85a442b` 修复并复审通过。
+
+### 与设计的偏差 / 后续变更
+
+1. **设置侧「Bot 管理」分类已下线**：与陪聊页「聊天记录设置」职责重叠（两个长得像的头像入口），反复被当成「第二个管机器人的地方」。`BotPanel.vue`、`SettingCategory` 的 `'bot'`、`IconBot` 一并删除，由守卫测试 `src/components/settings/panels/bot-avatar-panel.guards.test.ts` 钉住。头像能力本身没有消失：`AvatarPicker`（上传/从图库选）仍在人格编辑器与会话显示设置里；「你的头像」历史值仍由 store 读出给本地用户气泡用。
+2. CodeReview 登记的 2 Minor + 2 Nit（图库缓存陈旧、PersonaAvatar 缺 `:seed`/`:label`、`get_bot_conversation` 补 preview、display_name strip）为待办，不影响本阶段交付。

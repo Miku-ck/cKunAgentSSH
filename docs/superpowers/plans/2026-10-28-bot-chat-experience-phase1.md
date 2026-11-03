@@ -1,6 +1,7 @@
 # cKunBot 聊天体验优化 · Phase 1 实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **状态：已执行完毕（2026-10-28）。** 全部步骤与收尾验证均已勾选；提交链 `89b8a2b`…`9d30baf`（含基线补提 `30a4d5d`、评审修复 `24591c0`），SDD 台账 `.superpowers/sdd/2026-10-28-bot-chat-experience-phase1/progress.md`。
 
 **Goal:** 给 cKunBot（本地陪聊 + QQ 官方机器人）落地人格级、渠道感知的回复体验：系统提示词增强、回复风格可控（简洁/适中/长文）、开场白、thinking 开关、表情/Markdown 排版。
 
@@ -32,7 +33,7 @@
 **Interfaces:**
 - Produces: `bot_personas.reply_style TEXT DEFAULT 'moderate'`、`bot_personas.enable_thinking INTEGER DEFAULT 0`、`bot_messages.reasoning TEXT`；`_bot_persona_dict` 输出含这两键（`enable_thinking` 归一为 int）。
 
-- [ ] **Step 1: 写失败测试**（`backend/tests/test_bot_routes.py` 末尾追加）
+- [x] **Step 1: 写失败测试**（`backend/tests/test_bot_routes.py` 末尾追加）
 
 ```python
 def test_persona_chat_experience_columns_migrate_and_default(client):
@@ -44,12 +45,12 @@ def test_persona_chat_experience_columns_migrate_and_default(client):
     assert int(p["enable_thinking"]) == 0
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `python -m pytest tests/test_bot_routes.py::test_persona_chat_experience_columns_migrate_and_default -v`
 Expected: FAIL（KeyError `reply_style` 或 SELECT * 无此列）
 
-- [ ] **Step 3: 给 `bot_personas` CREATE 补两列**
+- [x] **Step 3: 给 `bot_personas` CREATE 补两列**
 
 在 `backend/database.py` `bot_personas` 定义里 `model_id TEXT,` 之后、`is_builtin` 之前插入：
 
@@ -60,7 +61,7 @@ Expected: FAIL（KeyError `reply_style` 或 SELECT * 无此列）
                 is_builtin   INTEGER NOT NULL DEFAULT 0,
 ```
 
-- [ ] **Step 4: 给 `bot_messages` CREATE 补 reasoning**
+- [x] **Step 4: 给 `bot_messages` CREATE 补 reasoning**
 
 在 `bot_messages` 定义里 `external_msg_id TEXT,` 之后加一行：
 
@@ -68,7 +69,7 @@ Expected: FAIL（KeyError `reply_style` 或 SELECT * 无此列）
                 reasoning     TEXT,
 ```
 
-- [ ] **Step 5: 旧库幂等迁移**（`_migrate_db`，复用已有 `bot_message_cols` 变量处附近）
+- [x] **Step 5: 旧库幂等迁移**（`_migrate_db`，复用已有 `bot_message_cols` 变量处附近）
 
 在 `if "answered_at" not in bot_message_cols:` 块之后追加：
 
@@ -88,7 +89,7 @@ Expected: FAIL（KeyError `reply_style` 或 SELECT * 无此列）
         )
 ```
 
-- [ ] **Step 6: `_bot_persona_dict` 归一 enable_thinking**
+- [x] **Step 6: `_bot_persona_dict` 归一 enable_thinking**
 
 改为：
 
@@ -101,12 +102,12 @@ def _bot_persona_dict(row: sqlite3.Row) -> dict:
     return result
 ```
 
-- [ ] **Step 7: 运行确认通过**
+- [x] **Step 7: 运行确认通过**
 
 Run: `python -m pytest tests/test_bot_routes.py -q`
 Expected: PASS
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add backend/database.py backend/tests/test_bot_routes.py
@@ -125,7 +126,7 @@ git commit -m "feat(bot): add persona reply_style/enable_thinking and message re
 - Consumes: Task 1 的列。
 - Produces: `create_bot_persona(..., reply_style: str = "moderate", enable_thinking: int = 0)`；`update_bot_persona` 允许写 `reply_style`/`enable_thinking`；`copy_bot_persona` 透传两者。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 def test_persona_roundtrip_reply_style_and_thinking(client):
@@ -140,12 +141,12 @@ def test_persona_roundtrip_reply_style_and_thinking(client):
     assert int(patched["enable_thinking"]) == 1
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `python -m pytest tests/test_bot_routes.py::test_persona_roundtrip_reply_style_and_thinking -v`
 Expected: FAIL（新字段被忽略，`reply_style` 仍 moderate）
 
-- [ ] **Step 3: 扩展 `create_bot_persona`**
+- [x] **Step 3: 扩展 `create_bot_persona`**
 
 签名加两参、INSERT 列与占位加两值：
 
@@ -180,7 +181,7 @@ def create_bot_persona(
 
 > 说明：`enable_thinking` 存 0/1；入参可能是 bool/int，统一 `int(...)`。若嫌绕，直接传 `int(bool(enable_thinking))`。
 
-- [ ] **Step 4: `copy_bot_persona` 透传**
+- [x] **Step 4: `copy_bot_persona` 透传**
 
 在 `create_bot_persona(...)` 调用的 `model_id=persona["model_id"],` 之后加：
 
@@ -189,19 +190,19 @@ def create_bot_persona(
         enable_thinking=persona.get("enable_thinking", 0),
 ```
 
-- [ ] **Step 5: `update_bot_persona` 放行**
+- [x] **Step 5: `update_bot_persona` 放行**
 
 ```python
     allowed = {"name", "avatar", "personality", "background", "greeting", "model_id",
                "reply_style", "enable_thinking"}
 ```
 
-- [ ] **Step 6: 运行确认通过**
+- [x] **Step 6: 运行确认通过**
 
 Run: `python -m pytest tests/test_bot_routes.py -q`
 Expected: PASS
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add backend/database.py backend/tests/test_bot_routes.py
@@ -220,7 +221,7 @@ git commit -m "feat(bot): persist persona reply_style/enable_thinking through cr
 - Consumes: Task 2 的 CRUD。
 - Produces: `PersonaRequest.reply_style: Literal['concise','moderate','long'] = 'moderate'`、`enable_thinking: bool = False`；`PersonaUpdateRequest` 对应 Optional 版；非法风格 → 422。路由把值透传进 `db.create_bot_persona(**req.model_dump())`（现有）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 def test_persona_invalid_reply_style_rejected(client):
@@ -228,12 +229,12 @@ def test_persona_invalid_reply_style_rejected(client):
     assert r.status_code == 422
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `python -m pytest tests/test_bot_routes.py::test_persona_invalid_reply_style_rejected -v`
 Expected: FAIL（未知字段被忽略，返回 200）
 
-- [ ] **Step 3: 给两个模型加字段**
+- [x] **Step 3: 给两个模型加字段**
 
 `PersonaRequest`（`model_id` 之后）：
 
@@ -249,14 +250,14 @@ Expected: FAIL（未知字段被忽略，返回 200）
     enable_thinking: Optional[bool] = None
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `python -m pytest tests/test_bot_routes.py -q`
 Expected: PASS（422；`enable_thinking` bool 会被 Pydantic 转 int 存库）
 
 > `update_persona` 现有过滤 `value is not None or key == "model_id"`——`enable_thinking=False` 属 `not None` 会保留；`reply_style` 非 None 保留。无需改 `update_persona` 主体。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/routes/bot.py backend/tests/test_bot_routes.py
@@ -275,7 +276,7 @@ git commit -m "feat(bot): validate persona reply_style/enable_thinking in API mo
 - Consumes: `persona.greeting`（已有）。
 - Produces: `create_bot_conversation(persona_id, channel='local', ...)` 当 `channel=='local'` 且 `persona['greeting']` 非空时，额外插入一条 `role='assistant'` 消息（不走 LLM）。返回值不变（会话 dict）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 def test_local_conversation_created_with_greeting_message(client):
@@ -287,12 +288,12 @@ def test_local_conversation_created_with_greeting_message(client):
     assert len(msgs) == 1 and msgs[0]["role"] == "assistant" and msgs[0]["content"] == "初次见面，多多指教"
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `python -m pytest tests/test_bot_routes.py::test_local_conversation_created_with_greeting_message -v`
 Expected: FAIL（0 条消息）
 
-- [ ] **Step 3: 建会话后插入 greeting**
+- [x] **Step 3: 建会话后插入 greeting**
 
 在 `create_bot_conversation` 的 `conn.commit()` 之后、`return get_bot_conversation(conversation_id)` 之前（先确认函数末尾结构），把返回改为落 greeting：
 
@@ -304,12 +305,12 @@ Expected: FAIL（0 条消息）
 
 > 若 greeting 插入需在 `conn.close()` 之外，用模块级 `add_bot_message`（自开连接）。确认 `create_bot_conversation` 主体在 try/finally 内已 `conn.close()`，greeting 插入放在 `finally` 之后（即函数体末尾、return 前），避免同连接事务交错。
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `python -m pytest tests/test_bot_routes.py -q`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/database.py backend/tests/test_bot_routes.py
@@ -328,7 +329,7 @@ git commit -m "feat(bot): seed greeting as first assistant message on local conv
 - Consumes: `persona` dict（含 `reply_style`）。
 - Produces: `_system_prompt(self, persona: dict, channel: str = "local") -> str`。风格指令映射 + 渠道排版规则。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 from bot.chat_service import BotChatService
@@ -347,12 +348,12 @@ def test_system_prompt_style_directives_and_channel():
     assert "禁止表格" in qq and "Markdown 排版与" not in qq
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `python -m pytest tests/test_bot_chat_service.py -v`
 Expected: FAIL（旧 `_system_prompt` 无 channel 参数 → TypeError）
 
-- [ ] **Step 3: 重写 `_system_prompt`**
+- [x] **Step 3: 重写 `_system_prompt`**
 
 ```python
     _STYLE_DIRECTIVE = {
@@ -377,12 +378,12 @@ Expected: FAIL（旧 `_system_prompt` 无 channel 参数 → TypeError）
         return "\n\n".join(sections)
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `python -m pytest tests/test_bot_chat_service.py -v`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/bot/chat_service.py backend/tests/test_bot_chat_service.py
@@ -405,7 +406,7 @@ git commit -m "feat(bot): channel-aware persona system prompt with reply-style d
   - `stream_reply(self, conversation_id, content, external_msg_id=None, *, channel="local") -> AsyncGenerator[tuple[str, str], None]`，产出 `("reasoning"|"content", text)`。
   - `complete_reply(self, conversation_id, content, external_msg_id=None, *, channel="qq") -> str`（仅聚合 content）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 import asyncio
@@ -465,12 +466,12 @@ async def test_complete_reply_only_content(monkeypatch):
     assert text == "正文"
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `python -m pytest tests/test_bot_chat_service.py -v`
 Expected: FAIL（`stream_reply` 无 channel/未产出 tuple）
 
-- [ ] **Step 3: `add_bot_message` 加 reasoning**（`backend/database.py`）
+- [x] **Step 3: `add_bot_message` 加 reasoning**（`backend/database.py`）
 
 签名 `external_msg_id: Optional[str] = None,` 后加 `reasoning: Optional[str] = None`；INSERT 列与占位补 `reasoning`：
 
@@ -483,7 +484,7 @@ Expected: FAIL（`stream_reply` 无 channel/未产出 tuple）
         )
 ```
 
-- [ ] **Step 4: 重写 `stream_reply`**（`backend/bot/chat_service.py`）
+- [x] **Step 4: 重写 `stream_reply`**（`backend/bot/chat_service.py`）
 
 ```python
     async def stream_reply(
@@ -567,7 +568,7 @@ Expected: FAIL（`stream_reply` 无 channel/未产出 tuple）
 
 > `async for` 消费 tuple 生成器：`complete_reply` 用列表推导 `for kind, text in self.stream_reply(...)` 需是异步；改为 `async for`：见 Step 5。
 
-- [ ] **Step 5: `complete_reply` 用 async 聚合**
+- [x] **Step 5: `complete_reply` 用 async 聚合**
 
 ```python
     async def complete_reply(
@@ -583,12 +584,12 @@ Expected: FAIL（`stream_reply` 无 channel/未产出 tuple）
         return "".join(out).strip()
 ```
 
-- [ ] **Step 6: 运行确认通过**
+- [x] **Step 6: 运行确认通过**
 
 Run: `python -m pytest tests/test_bot_chat_service.py -v`
 Expected: PASS
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add backend/bot/chat_service.py backend/database.py backend/tests/test_bot_chat_service.py
@@ -607,7 +608,7 @@ git commit -m "feat(bot): stream_reply yields (kind,text), passthrough thinking,
 - Consumes: `stream_reply(..., channel="local")` 产出 tuple。
 - Produces: SSE 事件 `{type:'content'|'reasoning'|'done'|'error'}`；`content`/`done`/`error` 形状不变（向后兼容），新增 `{type:'reasoning','content':str}`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 def test_bot_chat_sse_emits_reasoning_event(client, monkeypatch):
@@ -625,12 +626,12 @@ def test_bot_chat_sse_emits_reasoning_event(client, monkeypatch):
     assert '"type": "reasoning"' in body and '"type": "content"' in body and '"type": "done"' in body
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `python -m pytest tests/test_bot_routes.py::test_bot_chat_sse_emits_reasoning_event -v`
 Expected: FAIL（events() 仍按 str 迭代，无 reasoning 事件）
 
-- [ ] **Step 3: 改 events() 消费 tuple**
+- [x] **Step 3: 改 events() 消费 tuple**
 
 ```python
     async def events():
@@ -649,12 +650,12 @@ Expected: FAIL（events() 仍按 str 迭代，无 reasoning 事件）
             yield f"data: {json.dumps({'type': 'error', 'detail': detail}, ensure_ascii=False)}\n\n"
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `python -m pytest tests/test_bot_routes.py -q`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/routes/bot.py backend/tests/test_bot_routes.py
@@ -673,7 +674,7 @@ git commit -m "feat(bot): local SSE emits reasoning events, stream_reply called 
 - Consumes: `complete_reply(..., channel="qq")`、`conversation['persona']['greeting']`、`db.get_recent_bot_messages`。
 - Produces: QQ 首回合（该会话历史为空）回复文本前置 `f"{greeting}\n\n{answer}"`；后续回合原样。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 import asyncio
@@ -717,12 +718,12 @@ class _Svc:
         return "正文"
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `python -m pytest tests/test_bot_qq_channel.py -v`
 Expected: FAIL（未前置 greeting）
 
-- [ ] **Step 3: 改 `_handle`**
+- [x] **Step 3: 改 `_handle`**
 
 在 `lock` 内、`complete_reply` 调用前后调整：
 
@@ -739,17 +740,17 @@ Expected: FAIL（未前置 greeting）
 
 > `conversation["persona"]`：`get_or_create_bot_conversation` 返回的 dict 经 `_bot_conversation_dict` 已含 `persona`。若该函数返回不含 persona，则改用 `db.get_bot_conversation(conversation["id"])["persona"]`（执行时核对返回结构）。
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `python -m pytest tests/test_bot_qq_channel.py -v`
 Expected: PASS
 
-- [ ] **Step 5: 后端全量回归**
+- [x] **Step 5: 后端全量回归**
 
 Run: `python -m pytest tests/test_bot_routes.py tests/test_bot_chat_service.py tests/test_bot_qq_channel.py -q`
 Expected: 全 PASS
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add backend/bot/qq_channel.py backend/tests/test_bot_qq_channel.py
@@ -772,7 +773,7 @@ git commit -m "feat(bot): QQ channel=qq and prepend greeting on first turn"
   - `BotMessage.reasoning?: string | null`
   - `streamBotChat(id, content, {onContent, onReasoning?, signal?})`
 
-- [ ] **Step 1: 写失败测试**（`src/stores/bot.test.ts` 顶部 mock 处补 reasoning 分发用例，或新增 `src/api/bot.test.ts`）
+- [x] **Step 1: 写失败测试**（`src/stores/bot.test.ts` 顶部 mock 处补 reasoning 分发用例，或新增 `src/api/bot.test.ts`）
 
 ```typescript
 // 断言 streamBotChat 会把 type:'reasoning' 转交 onReasoning
@@ -792,12 +793,12 @@ it('onReasoning receives reasoning chunks', async () => {
 
 > `sseReader`/`ensureApiToken` mock 复用本仓既有 bot.test 的桩；若无，按 vitest 现有 `streamBotChat` 测试写法补 `getReader` 逐块返回。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run（仓库根）: `npx vitest run src/api/bot.test.ts`
 Expected: FAIL（无 onReasoning / 类型缺字段）
 
-- [ ] **Step 3: 补类型与事件**
+- [x] **Step 3: 补类型与事件**
 
 `BotPersona` 加：
 
@@ -830,12 +831,12 @@ Expected: FAIL（无 onReasoning / 类型缺字段）
     else if (event.type === 'done' && event.message) result = event.message
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `npx vitest run src/api/bot.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/api/bot.ts src/api/bot.test.ts
@@ -854,7 +855,7 @@ git commit -m "feat(bot): api types + streamBotChat onReasoning for chat-experie
 - Consumes: `streamBotChat(..., {onContent, onReasoning})`。
 - Produces: `streamReasoning = ref('')`；`sendMessage` 期间累积 reasoning；切会话/重置换位清空；`done` 后随 `saved.reasoning` 落到消息。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```typescript
 it('captures reasoning stream into message.reasoning', async () => {
@@ -870,12 +871,12 @@ it('captures reasoning stream into message.reasoning', async () => {
 })
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `npx vitest run src/stores/bot.test.ts`
 Expected: FAIL（无 streamReasoning，或 saved 未含 reasoning）
 
-- [ ] **Step 3: store 增 streamReasoning + 接线**
+- [x] **Step 3: store 增 streamReasoning + 接线**
 
 `src/stores/bot.ts`：
 
@@ -897,12 +898,12 @@ Expected: FAIL（无 streamReasoning，或 saved 未含 reasoning）
 
 `return { ..., streamText, streamReasoning, ... }`（导出加 `streamReasoning`）。
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `npx vitest run src/stores/bot.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/stores/bot.ts src/stores/bot.test.ts
@@ -921,7 +922,7 @@ git commit -m "feat(bot): store tracks streamReasoning during local chat"
 - Consumes: `store.streamReasoning`、`MarkdownStream`（`@/components/chat/MarkdownStream.vue`）、`BotPersona.reply_style/enable_thinking`。
 - Produces: 表单含「回复风格」下拉与「思考」开关；气泡走 Markdown；思考过程可折叠。
 
-- [ ] **Step 1: 写守卫测试**
+- [x] **Step 1: 写守卫测试**
 
 ```typescript
 it('人格表单含回复风格与思考开关，气泡走 MarkdownStream', () => {
@@ -933,12 +934,12 @@ it('人格表单含回复风格与思考开关，气泡走 MarkdownStream', () =
 })
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `npx vitest run src/views/ssh/CkunBotView.guards.test.ts`
 Expected: FAIL
 
-- [ ] **Step 3: `personaForm` + `openPersona` 加两字段**
+- [x] **Step 3: `personaForm` + `openPersona` 加两字段**
 
 ```typescript
 const personaForm = reactive({ name: '', avatar: '', personality: '', background: '', greeting: '', model_id: null as string | null, reply_style: 'moderate' as 'concise' | 'moderate' | 'long', enable_thinking: false })
@@ -951,7 +952,7 @@ const personaForm = reactive({ name: '', avatar: '', personality: '', background
 ```
 （新增分支默认：`reply_style: 'moderate', enable_thinking: false`）
 
-- [ ] **Step 4: 表单控件**（在「聊天模型」`<label>` 之后插入）
+- [x] **Step 4: 表单控件**（在「聊天模型」`<label>` 之后插入）
 
 ```html
         <label class="field"><span>回复风格</span>
@@ -969,7 +970,7 @@ const personaForm = reactive({ name: '', avatar: '', personality: '', background
 
 `savePersona` 里 payload 构造带上 `reply_style: personaForm.reply_style, enable_thinking: personaForm.enable_thinking`（对齐既有 createPersona/updatePersona 调用点）。
 
-- [ ] **Step 5: 气泡用 MarkdownStream + 折叠思考**
+- [x] **Step 5: 气泡用 MarkdownStream + 折叠思考**
 
 正式消息（38-41）内容单元替换 `<div class="message-content">…{{ m.content }}</div>` 为：
 
@@ -1001,17 +1002,17 @@ const MarkdownStream = defineAsyncComponent(() => import('@/components/chat/Mark
 
 （异步引入对齐记忆：Markdown 栈不进首屏包。）新增 `.reasoning`/`.field-inline`/`.field-hint` 少量样式，沿用现有令牌。
 
-- [ ] **Step 6: 运行守卫 + typecheck**
+- [x] **Step 6: 运行守卫 + typecheck**
 
 Run: `npx vitest run src/views/ssh/CkunBotView.guards.test.ts` → PASS
 Run（仓库根）: `npm run typecheck` → 无错
 
-- [ ] **Step 7: 前端全量测试**
+- [x] **Step 7: 前端全量测试**
 
 Run: `npm run test`
 Expected: PASS
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add src/components/bot/CkunBotView.vue src/views/ssh/CkunBotView.guards.test.ts
@@ -1022,9 +1023,9 @@ git commit -m "feat(bot): persona dialog style/thinking controls, Markdown bubbl
 
 ## 收尾验证（全部 Task 后）
 
-- [ ] 后端全量：`cd backend` → `python -m pytest tests/test_bot_routes.py tests/test_bot_chat_service.py tests/test_bot_qq_channel.py -q` 全绿。
-- [ ] 前端：`npm run test` + `npm run typecheck` 全绿。
-- [ ] **重启后端**（`reload=False`），手动冒烟：新建本地会话见开场白；设 concise 回复变短、长文可展开；选思考模型开启后本地显示可折叠思考；QQ 首条带开场白、纯文本、长度受控。
+- [x] 后端全量：`cd backend` → `python -m pytest tests/test_bot_routes.py tests/test_bot_chat_service.py tests/test_bot_qq_channel.py -q` 全绿。
+- [x] 前端：`npm run test` + `npm run typecheck` 全绿。
+- [x] **重启后端**（`reload=False`），手动冒烟：新建本地会话见开场白；设 concise 回复变短、长文可展开；选思考模型开启后本地显示可折叠思考；QQ 首条带开场白、纯文本、长度受控。
 
 ## Self-Review 结论
 

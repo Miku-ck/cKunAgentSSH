@@ -1,6 +1,7 @@
 # 定时任务/剧本执行历史弹窗渲染折叠 实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **状态：已执行完毕（2026-10-27）。** 全部步骤与收尾验证均已勾选；实施结果与「与设计的偏差」见 spec `docs/superpowers/specs/2026-10-27-schedule-history-render-design.md` §10，SDD 台账 `.superpowers/sdd/2026-10-27-schedule-history-render/progress.md`。
 
 **Goal:** 执行历史弹窗从「markdown 生肉平铺」升级为「单行紧凑折叠 + 渲染全文 + 失败默认展开」，定时任务与运维剧本两处经共享展示组件同步对齐。
 
@@ -40,7 +41,7 @@
   - `shortId(id?: string | null): string`
   - `toScheduleRow(r: ScheduleRun): HistoryRow` / `toRunbookRow(r: RunbookRunRecord): HistoryRow`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 创建 `src/utils/history-view.test.ts`：
 
@@ -135,12 +136,12 @@ describe('行适配器', () => {
 })
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npx vitest run src/utils/history-view.test.ts`
 Expected: FAIL —「Cannot find module '@/utils/history-view'」
 
-- [ ] **Step 3: 写实现**
+- [x] **Step 3: 写实现**
 
 创建 `src/utils/history-view.ts`：
 
@@ -264,12 +265,12 @@ export function toRunbookRow(r: RunbookRunRecord): HistoryRow {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `npx vitest run src/utils/history-view.test.ts`
 Expected: PASS（14 用例）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/utils/history-view.ts src/utils/history-view.test.ts
@@ -288,7 +289,7 @@ git commit -m "feat(schedule): 执行历史纯函数层——预览剥制/状态
 - Consumes: Task 1 的 `HistoryRow` / `statusLabel` / `durationText` / `shortId` / `STATUS_LABEL_SCHEDULE`（仅作默认 labelMap）；既有 `renderMarkdown`（`@/utils/markdown`）、`formatBackendTs`（`@/utils/format`）
 - Produces: 组件 props `{ rows: HistoryRow[]; labelMap?: Record<string, string> }`；slots `extra` / `actions`（均回传 `{ row: HistoryRow }`）。Task 3/4 按此接线。
 
-- [ ] **Step 1: 写失败守卫**
+- [x] **Step 1: 写失败守卫**
 
 创建 `src/components/schedules/HistoryList.guards.test.ts`（本仓无挂载测试环境，`?raw` 钉形状，先例 RunbookPanel.test.ts 头注）：
 
@@ -334,12 +335,12 @@ describe('HistoryList 展示契约', () => {
 })
 ```
 
-- [ ] **Step 2: 跑守卫确认失败**
+- [x] **Step 2: 跑守卫确认失败**
 
 Run: `npx vitest run src/components/schedules/HistoryList.guards.test.ts`
 Expected: FAIL — 文件不存在 / 断言找不到
 
-- [ ] **Step 3: 写组件**
+- [x] **Step 3: 写组件**
 
 创建 `src/components/schedules/HistoryList.vue`：
 
@@ -476,12 +477,12 @@ function toggle(row: HistoryRow) {
 
 注：`--bg-input`、`--accent-primary` 若个别主题块未定义，以 `variables.css` 实际令牌为准替换（改前先 grep 确认两令牌在全部主题块存在；不存在则换 `--bg-elevated` / `--accent-text`）。
 
-- [ ] **Step 4: 跑守卫确认通过**
+- [x] **Step 4: 跑守卫确认通过**
 
 Run: `npx vitest run src/components/schedules/HistoryList.guards.test.ts`
 Expected: PASS（7 用例）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/components/schedules/HistoryList.vue src/components/schedules/HistoryList.guards.test.ts
@@ -500,7 +501,7 @@ git commit -m "feat(schedule): HistoryList 共享展示组件——单行紧凑�
 - Consumes: Task 2 组件、Task 1 `toScheduleRow`
 - Produces: 无下游任务依赖本任务内部实现
 
-- [ ] **Step 1: 写失败守卫**
+- [x] **Step 1: 写失败守卫**
 
 创建 `src/views/ssh/SchedulesView.history.guards.test.ts`：
 
@@ -539,12 +540,12 @@ describe('历史接线', () => {
 })
 ```
 
-- [ ] **Step 2: 跑守卫确认失败**
+- [x] **Step 2: 跑守卫确认失败**
 
 Run: `npx vitest run src/views/ssh/SchedulesView.history.guards.test.ts`
 Expected: FAIL — 找不到 `<HistoryList`
 
-- [ ] **Step 3: 改模板**
+- [x] **Step 3: 改模板**
 
 `SchedulesView.vue` 中把历史 modal 的 `<div class="modal-body">…</div>` 整块（含 `.empty-small`、`.history-list` v-for 到 `.history-actions`）替换为：
 
@@ -563,7 +564,7 @@ Expected: FAIL — 找不到 `<HistoryList`
         </div>
 ```
 
-- [ ] **Step 4: 改脚本**
+- [x] **Step 4: 改脚本**
 
 imports 区补（跟随文件现有 import 风格）：
 
@@ -622,7 +623,7 @@ function statusLabel(s: string): string {
 
 并在 import 行补 `STATUS_LABEL_SCHEDULE`。`askAiDiagnose` 签名不变（仍收 `ScheduleRun`）。
 
-- [ ] **Step 5: 清样式**
+- [x] **Step 5: 清样式**
 
 删除 scoped 样式中已被组件取代的 5 条：`.history-list`、`.history-item`、`.history-head`、`.history-summary`、`.history-error`、`.history-actions`（保留 `.empty-small`、`.countdown`），并补错误条样式：
 
@@ -634,13 +635,13 @@ function statusLabel(s: string): string {
 }
 ```
 
-- [ ] **Step 6: 跑守卫 + 全量测试 + 类型检查**
+- [x] **Step 6: 跑守卫 + 全量测试 + 类型检查**
 
 Run: `npx vitest run src/views/ssh/SchedulesView.history.guards.test.ts` → PASS
 Run: `npm test` → 全绿（既有 `schedule-task-type` 等守卫不受影响）
 Run: `npm run typecheck` → 无错误
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add src/views/ssh/SchedulesView.vue src/views/ssh/SchedulesView.history.guards.test.ts
@@ -659,7 +660,7 @@ git commit -m "feat(schedule): 定时任务历史弹窗接 HistoryList——mark
 - Consumes: Task 2 组件、Task 1 `toRunbookRow` / `STATUS_LABEL_RUNBOOK`
 - Produces: 无下游依赖
 
-- [ ] **Step 1: 更新既有守卫并新增接线守卫（先失败）**
+- [x] **Step 1: 更新既有守卫并新增接线守卫（先失败）**
 
 `RunbookPanel.test.ts` 中「历史 modal 挂 diagnosis」describe 的断言
 `v-if="run.diagnosis"` / `{{ run.diagnosis }}` 改为（slot 形态）：
@@ -694,12 +695,12 @@ describe('历史接线 HistoryList', () => {
 })
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npx vitest run src/components/schedules/RunbookPanel.test.ts`
 Expected: FAIL — 找不到 `<HistoryList`
 
-- [ ] **Step 3: 改模板与脚本**
+- [x] **Step 3: 改模板与脚本**
 
 历史 modal 的 `.modal-body` 整块替换（与 Task 3 同构；`runbookApi.runs` 域内替换 `scheduleApi`）：
 
@@ -753,20 +754,20 @@ function statusLabel(s?: string | null): string {
 
 （`stepStatusLabel` 保留原位——它服务 slot 内容，不属历史行契约。）
 
-- [ ] **Step 4: 清样式**
+- [x] **Step 4: 清样式**
 
 删除被组件取代的 scoped 样式：`.history-list` / `.history-item` / `.history-head` /
 `.history-summary` / `.history-error`（如有）；**保留** `.hist-steps` / `.hist-step` /
 `.step-badge.*` / `.hist-cmd` / `.hist-verdict` / `.history-diagnosis` / `.diagnosis-text`
 （#extra slot 内容仍用）。补 `.history-load-error`（样式同 Task 3 Step 5）。
 
-- [ ] **Step 5: 跑测试 + 类型检查**
+- [x] **Step 5: 跑测试 + 类型检查**
 
 Run: `npx vitest run src/components/schedules/RunbookPanel.test.ts` → PASS
 Run: `npm test` → 全绿
 Run: `npm run typecheck` → 无错误
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add src/components/schedules/RunbookPanel.vue src/components/schedules/RunbookPanel.test.ts
@@ -780,19 +781,19 @@ git commit -m "feat(schedule): 剧本历史弹窗同步接 HistoryList"
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-27-schedule-history-render-design.md`（文末追加实施结果节）
 
-- [ ] **Step 1: 全量检查**
+- [x] **Step 1: 全量检查**
 
 Run: `npm test` → 全绿
 Run: `npm run typecheck` → 无错误
 Expected: 两者零失败。若 `styles/variables.test.ts` 等既有令牌守卫报错，说明 Task 2 用了
 未登记令牌——按报错替换为 variables.css 实有令牌后重跑。
 
-- [ ] **Step 2: 手工冒烟（可选但建议）**
+- [x] **Step 2: 手工冒烟（可选但建议）**
 
 `npm run dev` 起应用 → 定时任务 → 历史：确认成功行折叠显示预览句、点击展开渲染 markdown、
 失败行红条默认展开、诊断按钮可用；运维剧本同查 #extra 步骤徽章。
 
-- [ ] **Step 3: spec 回填实施结果并单独提交**
+- [x] **Step 3: spec 回填实施结果并单独提交**
 
 spec 文末追加「## 10. 实施结果」节：列出与设计的偏差（如有）与验证命令输出摘要。
 文档与代码分离提交：

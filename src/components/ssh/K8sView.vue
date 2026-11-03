@@ -156,7 +156,7 @@
 <script setup lang="ts">
 // K8sView.vue — K8s 页的编排层：五个分段的取数、四个窄动作的下发、弹窗的开关。
 // 命令拼接与解析一律在 stores/k8s-core.ts，执行底座在 k8s/context.ts，页签只画不跑。
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import {
@@ -181,6 +181,9 @@ import K8sServicesTab from './k8s/K8sServicesTab.vue'
 import K8sEventsTab from './k8s/K8sEventsTab.vue'
 import K8sResourceDetail from './k8s/K8sResourceDetail.vue'
 import K8sScaleDialog from './k8s/K8sScaleDialog.vue'
+import { loadDockerModalCss, loadK8sPageCss } from '@/styles/load-css'
+
+onMounted(() => { void Promise.all([loadDockerModalCss(), loadK8sPageCss()]) })
 
 // 页面隐藏时收起弹窗：与 Docker 页同一约定（独立页是 v-show 常驻，弹窗不然会跨页留着）
 const props = defineProps<{ active?: boolean }>()

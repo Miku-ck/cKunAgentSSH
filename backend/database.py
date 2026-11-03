@@ -33,6 +33,12 @@ def _assert_sql_ident(name: str) -> None:
     if not _SQL_IDENT_RE.fullmatch(name):
         raise RuntimeError(f"拒绝拼接非法 SQL 标识符: {name!r}")
 
+
+def _assert_sql_ident_list(names: str) -> None:
+    """逗号分隔的列名串（如 SELECT 投影列列表）逐个过标识符守卫。"""
+    for n in names.split(","):
+        _assert_sql_ident(n.strip())
+
 # ── 线程本地连接池 ──
 _thread_local = threading.local()
 # 跟踪所有线程的连接，用于进程退出时统一清理。
@@ -790,6 +796,7 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         ("proactive_cooldown_until", "TEXT"),
     ):
         if col not in relation_cols:
+            _assert_sql_ident(col)
             conn.execute(f"ALTER TABLE bot_relations ADD COLUMN {col} {ddl}")
     # bot_personas：chat-experience 两列（旧库补齐，新库建表已含）。
     cursor = conn.execute("PRAGMA table_info(bot_personas)")
@@ -823,6 +830,7 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         ("mention_sender", "INTEGER NOT NULL DEFAULT 1"),
     ):
         if col not in persona_cols:
+            _assert_sql_ident(col)
             conn.execute(f"ALTER TABLE bot_personas ADD COLUMN {col} {ddl}")
     # 会话标题：早期会话沿用创建时的人格名，侧栏与 QQ 记录区无法区分。
     # 每个会话取首条用户消息当标题；标题已不是人格名的（迁移过或用户改过）不动。
@@ -4032,6 +4040,8 @@ _RUN_LIST_COLUMNS = (
     "id, conversation_id, task, status, mode, model_used, iteration, max_iterations, "
     "total_tokens, cost_usd, duration_ms, tool_call_count, undo_recorded, started_at, completed_at"
 )
+# 投影列是模块级常量，启动时校验一次，防止字面量被改坏带进 SELECT 列表
+_assert_sql_ident_list(_RUN_LIST_COLUMNS)
 
 
 def _run_filters(conversation_id: str = None, status: str = None,
@@ -4040,6 +4050,7 @@ def _run_filters(conversation_id: str = None, status: str = None,
     conds: list[str] = []
     params: list = []
     for col, val in (("conversation_id", conversation_id), ("status", status), ("id", run_id)):
+        _assert_sql_ident(col)
         if val:
             conds.append(f"{col} = ?")
             params.append(val)

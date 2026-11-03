@@ -133,3 +133,25 @@ images: list[str] = Field(default_factory=list, max_length=4)
 - 大 base64 走 SSE/JSON 落库的性能：单条消息图片体量受校验上限约束，风险可控。
 - DOMPurify 是否放行 `<img data:*>`：本阶段用独立 `<img :src>` 直渲，不经 Markdown 管道，规避白名单问题。
 - 非 vision 模型误配：无能力门控，靠错误提示引导用户换模型；若后续要精确提示，需给模型面板重新加回 `supports_image` 勾选（属额外范围，与 Phase 1 对 `supports_*` 的判断一致）。
+
+## 实施回填（2026-10-28）
+
+后端链路按 `docs/superpowers/plans/2026-10-28-bot-vision-input-phase2.md` 落地并保留；提交链 `633be81`（DB images 列 + 存取归一）→ `fc7b776`（`stream_reply` 多模态组装）→ `b260803`（`BotChatRequest.images` 校验 + 透传）。
+
+### 验证
+
+- 后端 `pytest -q`：3494 passed
+- 前端 `npm run test`：1754 passed / 151 files；`npm run typecheck` EXIT=0
+- CodeReview：无 Blocker/Major；1 Minor（历史用户图全量回喂无累计上限）属产品取舍，待用户决定是否加防御性总量 cap。
+
+### 后续变更：前端输入区发图入口已撤下
+
+Task 4-6 交付的前端部分（`readChatImage`/`MAX_CHAT_IMAGES`/📎 待发条/待发条预览）**已按裁决移除** —— 本地会话暂不开放上传入口，`store.sendMessage(content, images?)` 的 images 参数与 `BotMessage.images` 字段一并停用。
+
+保留的部分：
+
+- 后端 `images` 能力完整（列、存取归一、多模态组装、`/bot/chat` 校验与透传、QQ 忽略 images 的回归口径）；
+- 历史图片气泡仍可查看（`CkunBotView.vue` 的 `m.images` / `msg-image` 渲染分支保留）；
+- 恢复时只需加回前端那一小块输入区，后端零改动。
+
+守卫：`src/views/ssh/CkunBotView.guards.test.ts`（「本地会话撤掉上传入口，历史图片气泡仍可看」）。

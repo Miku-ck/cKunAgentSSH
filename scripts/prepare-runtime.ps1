@@ -9,7 +9,7 @@
          （自带 python.exe + Lib/，不需要像 Windows embeddable 那样手改 ._pth 再塞 pip）；
       2. 解压到 runtime/ —— 落位口径必须与两处一字不差：
          electron/backend-manager.ts resolvePythonCommand 的 bundled 分支、scripts/package.js 的探测；
-      3. pip install -r backend/requirements.txt（与 CI 跑后端测试用的是同一份清单）；
+      3. pip install -r backend/requirements.lock（完全钉版，保证内嵌运行时可复现；锁不存在时回退到 requirements.txt）；
       4. 用 checked-hash 模式预编译 site-packages 字节码 —— electron-builder 拷贝会重写源文件
          mtime，mtime 模式的 .pyc 会整批失效，代价是目标机每次启动重新编译
          （与 backend/__pycache__ 同一教训，见 electron-builder.yml 的注释）；
@@ -91,7 +91,11 @@ $root         = Split-Path -Parent $PSScriptRoot
 $runtimeDir   = Join-Path $root 'runtime'
 $pythonExe    = Join-Path $runtimeDir 'python.exe'
 $sitePackages = Join-Path $runtimeDir 'Lib\site-packages'
-$requirements = Join-Path $root 'backend\requirements.txt'
+# 优先用完全钉版的锁文件，保证内嵌运行时可复现；锁不存在时回退到区间版 requirements.txt
+$requirements = Join-Path $root 'backend\requirements.lock'
+if (-not (Test-Path -LiteralPath $requirements)) {
+    $requirements = Join-Path $root 'backend\requirements.txt'
+}
 $versionFile  = Join-Path $runtimeDir 'VERSION'
 
 Assert-Path $requirements '内嵌运行时就是为它准备的，缺清单无法制备'
