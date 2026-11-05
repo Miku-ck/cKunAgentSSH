@@ -6,16 +6,17 @@ An AI-driven SSH operations terminal that brings connection management, remote /
 
 **Frontend**: Electron + Vue 3 + TypeScript　**AI backend**: Python FastAPI　**Release target**: Windows x64
 
-[Features](#features) · [Tech stack](#tech-stack) · [Architecture](#architecture) · [Quick start](#quick-start) · [Packaging and release](#packaging-and-release) · [Logs and troubleshooting](#logs-and-troubleshooting)
+[Features](#features) · [Tech stack](#tech-stack) · [Architecture](#architecture) · [Project structure and engineering conventions](#project-structure-and-engineering-conventions) · [Quick start](#quick-start) · [Packaging and release](#packaging-and-release) · [Logs and troubleshooting](#logs-and-troubleshooting) · [Access gateway](#access-gateway)
 
 ## Features
 
-The title bar provides 10 feature entries plus a Settings page, serving as the single entry point for all application capabilities.
+The title bar provides 11 feature entries plus a Settings page, serving as the single entry point for all application capabilities.
 
 | Entry | Page | Shortcut | Description |
 | --- | --- | --- | --- |
 | AI | Task console (home) | `Ctrl+Shift+B` | Agent runs, approvals, and traces; badge shows pending approvals / running / unread |
 | Docker | Remote Docker | `Ctrl+Shift+6` | Containers, images, volumes, networks |
+| K8s | K8s clusters | `Ctrl+Shift+0` | Pods / workloads / services / nodes / events and scaling via kubectl; attached to a remote SSH session |
 | Git | Git tools | `Ctrl+Shift+7` | GitHub acceleration and repository management |
 | SFTP | File transfer | `Ctrl+Shift+2` | Dual-pane file management with resumable transfers |
 | Terminal | Remote management | `Ctrl+Shift+1` | Remote / local multi-tab terminals |
@@ -186,19 +187,10 @@ The virtual companion persona subsystem opened by the "Bot" entry (`Ctrl+Shift+9
 | LLM client | openai SDK | OpenAI-compatible protocol (vLLM / Ollama / OpenAI, etc.) |
 | Storage | SQLite | Conversations, memory (FTS5 + vectors), skills, and audit |
 
-### Dependency and security audit status
+### Known issues
 
-The audit has to go through the official registry: the repository has no `.npmrc` — the registry comes from user-level npm config and resolves to npmmirror, which does not implement `/-/npm/v1/security/*`, so `npm audit` just returns 404. To reproduce:
-
-```
-npm audit --registry=https://registry.npmjs.org --omit=dev   # shipped surface
-npm audit --registry=https://registry.npmjs.org              # including the dev toolchain
-```
-
-- **0 vulnerabilities in the shipped surface**: `node-pty` / `ssh2` and their transitive dependencies are clean.
-- **All 37 findings sit in the dev toolchain**: `vite 6.4.3` (high, including `launch-editor` argument building and a `server.fs.allow` escape) and `undici 6.27.0` (under `electron-builder → @electron/rebuild → node-gyp`, which only runs on install/packaging).
-- **Why this was not upgraded opportunistically**: any `npm install` triggers `postinstall` (`scripts/rebuild-native.cjs` recompiles node-pty/ssh2/cpu-features with MSVC), and `npm audit fix` would additionally downgrade `@noble/hashes` from 2.2.0 to 1.8.0. Deferred to a window where a native rebuild is acceptable, as its own commit. `dev:web` binds Vite to `0.0.0.0`, which is the concrete reason to upgrade Vite.
-- **openai version mismatch (pending real-endpoint validation)**: `backend/requirements.txt` declares `>=1.30.0,<2.0` while the development interpreter has 2.24.0 — CI and the embedded runtime install 1.x, the dev machine runs 2.x. `tests/test_ai_loop_core_regression.py` monkeypatches `AsyncOpenAI` with a fake client, so the real 2.x surface is not covered by tests. Recorded only; widen the ceiling or pin the environment after validating against a live LLM endpoint.
+- `backend/requirements.txt` pins `openai` to `>=1.30.0,<2.0`: CI and the embedded runtime install 1.x while a dev machine may run 2.x. `backend/tests/test_ai_loop_core_regression.py` replaces `AsyncOpenAI` with a fake client, so the real 2.x interface is not covered. Decide whether to widen the ceiling or pin the dev environment only after validating against a live LLM endpoint.
+- npm audits need the official registry explicitly: there is no `.npmrc` in the repository, and a user-level registry that does not implement `/-/npm/v1/security/*` makes `npm audit` return 404. Reproduce with `npm audit --registry=https://registry.npmjs.org`. The shipped surface is only `node-pty` and `ssh2`; dev-toolchain upgrades are scheduled separately because any `npm install` triggers the native rebuild in `scripts/rebuild-native.cjs`.
 
 ## Architecture
 
@@ -227,33 +219,50 @@ npm audit --registry=https://registry.npmjs.org              # including the dev
 - **Terminal / SSH / SFTP / tunnels**: Renderer → Electron IPC → node-pty / ssh2, bypassing Python.
 - **Agent remote execution**: Python backend → WebSocket reverse channel `/ws/bridge` → Electron main process → ssh2. When the channel is down the system fails closed and in-flight requests are not retried.
 
-### Startup cost (measured on 2026-10-31)
+### Startup critical path
 
-Backend process start to healthy readiness ≈710ms: 543ms imports + 50ms app assembly + 50ms uvicorn bootstrap + 65ms lifespan init (`init_db` 19ms, the seven concurrent steps 43ms, background components 3ms). Within the import stage, fastapi 164ms, uvicorn 66ms and asyncio 50ms are framework costs that cannot be squeezed out.
+Both the backend and the main process defer heavy dependencies until first use: `openai` / `botpy` / `cryptography` are absent from the `import main` graph, and the main process loads node-pty's `.node` binary and ssh2 on demand via `loadPty()` / `loadSsh2()`. Moving them back to module-level imports turns neither unit tests nor typecheck red — only `backend/tests/test_startup_critical_path.py` catches it, so that guard alone protects this invariant.
 
-What actually saves time is what is *not* imported: `openai` 477ms, `botpy` 271ms and `cryptography` 15ms are all absent from the `import main` graph (763ms together — more than the whole cold start); the main process does the same — node-pty's `.node` load (≈290ms) and ssh2 are deferred to first use (`loadPty()` / `loadSsh2()`).
-
-`backend/tests/test_startup_critical_path.py` pins this invariant: moving them back to module-level imports turns neither the unit tests nor typecheck red — only this guard catches it, which is why startup cost can only be protected here.
-
-## Project structure
+## Project structure and engineering conventions
 
 ```
 cKunAgentSSH/
-├── electron/              # Electron main process: windows, IPC, SSH/SFTP/PTY/tunnels, backend and gateway management
+├── electron/              # Main process: windows, IPC, SSH/SFTP/PTY/tunnels, backend and gateway management
 ├── src/                   # Vue 3 renderer: pages, components, composables, Pinia stores, API
-├── shared/                # Shared pure logic and protocols for main / renderer / gateway
-├── backend/               # Python FastAPI: Agent, memory, tools, routes, and tests
+├── shared/                # Pure logic and protocols shared by main / renderer / gateway
+├── backend/               # Python FastAPI: Agent, memory, tools, routes, tests
 │   ├── agent/             # Harness, memory, tools, intent detection, reflection evolution, bridge relay
-│   ├── routes/            # agent / chat (attachments and conversations) / settings / skills / terminal / audit / schedules / workflow / rollbacks / runbooks / bot (conversations and personas) / bot_channels (channels) / bot_stickers (sticker packs) / wechat_callback (WeChat callback)
+│   ├── routes/            # HTTP routes (agent / chat / settings / skills / ... / bot family)
 │   └── tests/             # pytest tests
-├── gateway/               # TLS access gateway (single file, zero dependencies, deployed independently)
+├── gateway/               # TLS access gateway (single file, zero deps, deployed independently)
 ├── scripts/               # dev / package / clean / ci-check / rebuild-native / prepare-runtime / deploy
 ├── resources/             # App and tray icons
-├── docs/                  # Design and implementation specs
+├── docs/                  # Design and implementation specs (not shipped)
+├── designs/               # UI concept mockups (local artifacts, ignored by .gitignore)
+├── runtime/               # Embedded Python runtime (prepared locally, ignored by .gitignore)
 ├── electron.vite.config.ts
 ├── electron-builder.yml
 └── package.json
 ```
+
+**Directory boundaries**: `electron/`, `src/`, `shared/`, `backend/`, `gateway/`, `scripts/` and `resources/` are part of the build and runtime chain; their names are hardcoded in configs, CI and runtime paths (`shared/` alone has nearly 100 cross-layer imports), so do not rename them casually. `docs/` and `designs/` are documentation and mockups and are not packaged. `runtime/`, `out/`, `dist/` and `node_modules/` are reproducible local artifacts. Tests and guard scripts deliberately sit next to the code under test and are collected by the globs in `vitest.config.ts`; the `.ts` files in `src/styles/` are CSS guard utilities and tests, not stylesheets. Frontend visual and component rules live in [DESIGN.md](DESIGN.md); terminology is pinned in [CONTEXT.md](CONTEXT.md).
+
+**Naming and formatting conventions** (rules already in effect; existing inconsistencies are not bulk-renamed, new code follows these):
+
+| Object | Convention | Example |
+| --- | --- | --- |
+| Directories / TS files | kebab-case | `electron/backend-manager.ts`, `src/utils/transfer-conflict.ts` |
+| Vue component files | PascalCase | `ConnectionModal.vue`, `K8sView.vue` |
+| composable | `useXxx.ts` / `useXxx()` (established exception in that directory) | `useSshNavigation.ts` |
+| `src/stores/` and store ids | kebab-case (new code) | `server-monitor`, `ssh-ai` |
+| Python modules / functions | snake_case | `bridge_relay.py`, `init_db()` |
+| Python classes / constants | PascalCase / UPPER_SNAKE | `ChannelRuntime`, `ALLOWLIST_PATH` |
+| Frontend tests | next to the code under test, `*.test.ts` | `src/utils/think-scrubber.test.ts` |
+| Backend tests | `test_<domain>_<what it guards>.py`; no round or ticket numbers in names | `test_startup_critical_path.py` |
+| Encoding / indentation | UTF-8; TS / Vue / JSON 2 spaces, Python 4 spaces | see [.editorconfig](.editorconfig) |
+| Line endings | LF for new files and new content; existing CRLF / LF mix is not bulk-converted | see [.editorconfig](.editorconfig) |
+
+**Verification**: `npm run ci` is the full local gate — backend pytest, ruff `F,E9`, vue-tsc, vitest, electron-vite build and the gateway byte-drift self-check, in that order; `scripts/ci-check.sh` and `.github/workflows/ci.yml` share one definition. When features, commands or architecture change, both READMEs must be updated section by section (see [CONTEXT.md](CONTEXT.md)).
 
 ## Quick start
 
@@ -351,6 +360,7 @@ Logs live in the Electron `userData` directory:
 | `electron-bridge.log` | Bridge channel and remote command execution errors | ISO timestamps; 1 MB per file, rotated to `.old` when exceeded |
 
 - The Python backend log format is `%(asctime)s %(levelname)-7s %(name)s: %(message)s`, with time format `%H:%M:%S` and default level `warning`; uvicorn access logs are disabled to avoid health-check spam.
+- When running the backend directly in development (`cd backend && python main.py`), `qq-botpy` writes `botpy.log` under `backend/` and rotates it daily as `botpy.log.<YYYY-MM-DD>` according to its own configuration. These are local run artifacts covered by the `*.log` and `*.log.[0-9-]*` rules in `.gitignore`, and never enter version control.
 - The Python backend log output redacts sensitive fields such as passwords. If `userData` is not writable, the main process silently disables file logging without affecting the app.
 
 ## Access gateway

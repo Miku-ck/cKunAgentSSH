@@ -6,16 +6,17 @@ SSH 智能运维终端，将连接管理、远程 / 本地终端、SFTP、Docker
 
 **前端**：Electron + Vue 3 + TypeScript　**AI 后端**：Python FastAPI　**发布目标**：Windows x64
 
-[功能](#功能) · [技术栈](#技术栈) · [架构](#架构) · [快速开始](#快速开始) · [打包与发布](#打包与发布) · [日志与排障](#日志与排障)
+[功能](#功能) · [技术栈](#技术栈) · [架构](#架构) · [项目结构与工程约定](#项目结构与工程约定) · [快速开始](#快速开始) · [打包与发布](#打包与发布) · [日志与排障](#日志与排障) · [接入网关](#接入网关)
 
 ## 功能
 
-标题栏提供 10 个功能入口与设置页，作为应用全部能力的统一入口。
+标题栏提供 11 个功能入口与设置页，作为应用全部能力的统一入口。
 
 | 入口 | 页面 | 快捷键 | 说明 |
 | --- | --- | --- | --- |
 | AI | 首页任务台 | `Ctrl+Shift+B` | Agent 运行、审批与轨迹；徽章提示待审批 / 运行中 / 未读 |
 | Docker | 远程 Docker | `Ctrl+Shift+6` | 容器、镜像、卷、网络 |
+| K8s | K8s 集群 | `Ctrl+Shift+0` | 经 kubectl 查看 Pod / 工作负载 / 服务 / 节点 / 事件与扩缩容；依附远程 SSH 会话 |
 | Git | Git 工具 | `Ctrl+Shift+7` | GitHub 加速与仓库管理 |
 | SFTP | 文件传输 | `Ctrl+Shift+2` | 双栏文件管理与断点续传 |
 | 终端 | 远程管理 | `Ctrl+Shift+1` | 远程 / 本地多标签终端 |
@@ -186,19 +187,10 @@ SSH 智能运维终端，将连接管理、远程 / 本地终端、SFTP、Docker
 | LLM 客户端 | openai SDK | OpenAI 兼容协议（vLLM / Ollama / OpenAI 等） |
 | 存储 | SQLite | 会话、记忆（FTS5 + 向量）、技能与审计 |
 
-### 依赖与安全审计现状
+### 已知事项
 
-审计得走官方源：仓库里没有 `.npmrc`，registry 来自用户级 npm 配置，实测解析为 npmmirror —— 而它没有实现 `/-/npm/v1/security/*`，`npm audit` 直接 404。复现口径：
-
-```
-npm audit --registry=https://registry.npmjs.org --omit=dev   # 发布面
-npm audit --registry=https://registry.npmjs.org              # 含 dev 工具链
-```
-
-- **发布面 0 漏洞**：`node-pty` / `ssh2` 及其传递依赖干净。
-- **37 条全部落在 dev 工具链**：`vite 6.4.3`（high，含 `launch-editor` 参数拼接与 `server.fs.allow` 逃逸）与 `undici 6.27.0`（藏在 `electron-builder → @electron/rebuild → node-gyp` 下，只在装依赖/打包时执行）。
-- **为什么没顺手升**：任何 `npm install` 都会触发 `postinstall`（`scripts/rebuild-native.cjs` 用 MSVC 重编 node-pty/ssh2/cpu-features），而 `npm audit fix` 除了升包还会把 `@noble/hashes` 从 2.2.0 降到 1.8.0。留到能接受一次原生重编的窗口单独成一个提交。`dev:web` 会把 Vite 绑到 `0.0.0.0`，这条是升级 Vite 的实际理由。
-- **openai 版本口径不一致（待实测）**：`backend/requirements.txt` 声明 `>=1.30.0,<2.0`，而开发机的解释器装着 2.24.0 —— CI 与内嵌 runtime 会装 1.x，开发机跑 2.x。`tests/test_ai_loop_core_regression.py` 把 `AsyncOpenAI` monkeypatch 成假客户端，所以 2.x 的真实接口面并没有被测到；先记录，等拿真 LLM 端点验过再决定放宽上限还是收紧环境。
+- `backend/requirements.txt` 将 `openai` 约束在 `>=1.30.0,<2.0`：CI 与内嵌运行时装 1.x，开发机可能装 2.x。`backend/tests/test_ai_loop_core_regression.py` 把 `AsyncOpenAI` 换成假客户端，2.x 的真实接口面没有被测到；需拿真实 LLM 端点验证后，再决定放宽上限还是锁定开发环境。
+- npm 审计要显式走官方源：仓库没有 `.npmrc`，用户级 registry 若指向未实现 `/-/npm/v1/security/*` 的镜像，`npm audit` 会返回 404；用 `npm audit --registry=https://registry.npmjs.org` 复现。发布面只有 `node-pty` 与 `ssh2`；dev 工具链升级单独安排，因为任何 `npm install` 都会触发 `scripts/rebuild-native.cjs` 的原生重编。
 
 ## 架构
 
@@ -226,33 +218,50 @@ npm audit --registry=https://registry.npmjs.org              # 含 dev 工具链
 - **终端 / SSH / SFTP / 隧道**：Renderer → Electron IPC → node-pty / ssh2，不经过 Python。
 - **Agent 远程执行**：Python 后端 → WebSocket 反向通道 `/ws/bridge` → Electron 主进程 → ssh2。通道断开时 fail-closed，在途请求不重发。
 
-### 启动成本（2026-10-31 本机实测）
+### 启动关键路径
 
-后端从进程起来到健康就绪 ≈710ms：导入段 543ms + 装配段 50ms + uvicorn 引导 50ms + lifespan 初始化 65ms（`init_db` 19ms、七步并发 43ms、后台组件 3ms）。导入段里 fastapi 164ms、uvicorn 66ms、asyncio 50ms 是框架自身成本，压不下去。
+后端与主进程都把重依赖延迟到首次使用：`openai` / `botpy` / `cryptography` 不出现在 `import main` 的导入图里，主进程的 node-pty `.node` 与 ssh2 由 `loadPty()` / `loadSsh2()` 按需加载。把它们写回模块级 import，单测与 typecheck 都不会变红，只有 `backend/tests/test_startup_critical_path.py` 会拦下 —— 这条不变量由该守卫单独守住。
 
-真正省下的是「不导入什么」：`openai` 477ms、`botpy` 271ms、`cryptography` 15ms 都不在 `import main` 的导入图里（三者 763ms，比整个冷启动还贵）；主进程侧同理 —— node-pty 的 `.node` 加载 ≈290ms 与 ssh2 都推迟到首次用时才取（`loadPty()` / `loadSsh2()`）。
-
-这条不变量由 `backend/tests/test_startup_critical_path.py` 钉住：把它们写回模块级 import，单测与 typecheck 都不会变红，只有这个守卫会 —— 所以启动成本只能在这里被守住。
-
-## 项目结构
+## 项目结构与工程约定
 
 ```
 cKunAgentSSH/
-├── electron/              # Electron 主进程：窗口、IPC、SSH/SFTP/PTY/隧道、后端与网关管理
-├── src/                   # Vue 3 渲染进程：页面、组件、composables、Pinia store、API
+├── electron/              # 主进程：窗口、IPC、SSH/SFTP/PTY/隧道、后端与网关管理
+├── src/                   # 渲染进程：页面、组件、composables、Pinia store、API
 ├── shared/                # 主进程 / 渲染进程 / 网关共享的纯逻辑与协议
 ├── backend/               # Python FastAPI：Agent、记忆、工具、路由与测试
 │   ├── agent/             # Harness、记忆、工具、意图识别、反思演化、桥接转发
-│   ├── routes/            # agent / chat（附件与会话）/ settings / skills / terminal / audit / schedules / workflow / rollbacks / runbooks / bot（会话与人格）/ bot_channels（渠道）/ bot_stickers（表情包）/ wechat_callback（微信回调）
+│   ├── routes/            # HTTP 路由（agent / chat / settings / skills / … / bot 系列）
 │   └── tests/             # pytest 测试
 ├── gateway/               # TLS 接入网关（单文件、零依赖、独立部署）
 ├── scripts/               # dev / package / clean / ci-check / rebuild-native / prepare-runtime / deploy
 ├── resources/             # 应用与托盘图标
-├── docs/                  # 设计与实施 spec
+├── docs/                  # 设计与实施 spec（不进发行包）
+├── designs/               # UI 概念稿（本地产物，已被 .gitignore 忽略）
+├── runtime/               # 内嵌 Python 运行时（本地制备，已被 .gitignore 忽略）
 ├── electron.vite.config.ts
 ├── electron-builder.yml
 └── package.json
 ```
+
+**目录职责边界**：`electron/`、`src/`、`shared/`、`backend/`、`gateway/`、`scripts/`、`resources/` 属构建与运行链路，目录名被配置、CI 与运行时路径硬编码引用（例如 `shared/` 有近百处跨层 import），不要随意重命名；`docs/`、`designs/` 是文档与概念稿，不进发行包；`runtime/`、`out/`、`dist/`、`node_modules/` 是可再生的本地产物。测试与守卫脚本刻意与被测文件同目录，由 `vitest.config.ts` 的 glob 收集，`src/styles/` 里的 `.ts` 即 CSS 守卫工具与测试，不是样式文件。前端视觉与组件硬规则见 [DESIGN.md](DESIGN.md)，术语口径见 [CONTEXT.md](CONTEXT.md)。
+
+**命名与格式约定**（描述已落地的规则；存量不一致处不批量改名，新代码按此执行）：
+
+| 对象 | 约定 | 示例 |
+| --- | --- | --- |
+| 目录 / TS 文件 | kebab-case | `electron/backend-manager.ts`、`src/utils/transfer-conflict.ts` |
+| Vue 组件文件 | PascalCase | `ConnectionModal.vue`、`K8sView.vue` |
+| composable | `useXxx.ts` / `useXxx()`（该目录的既定特例） | `useSshNavigation.ts` |
+| `src/stores/` 与 store id | kebab-case（新代码） | `server-monitor`、`ssh-ai` |
+| Python 模块 / 函数 | snake_case | `bridge_relay.py`、`init_db()` |
+| Python 类 / 常量 | PascalCase / UPPER_SNAKE | `ChannelRuntime`、`ALLOWLIST_PATH` |
+| 前端测试 | 与被测文件同目录，`*.test.ts` | `src/utils/think-scrubber.test.ts` |
+| 后端测试 | `test_<域>_<守卫什么>.py`，名字不写轮次或工单号 | `test_startup_critical_path.py` |
+| 编码 / 缩进 | UTF-8；TS / Vue / JSON 2 空格，Python 4 空格 | 见 [.editorconfig](.editorconfig) |
+| 行尾 | 新文件与新增内容用 LF；存量 CRLF / LF 混合，不做一次性转换 | 见 [.editorconfig](.editorconfig) |
+
+**验证**：`npm run ci` 是本地完整门禁，依次跑后端 pytest、ruff `F,E9`、vue-tsc、vitest、electron-vite build 与网关字节漂移自检；`scripts/ci-check.sh` 与 `.github/workflows/ci.yml` 同源。改功能、命令或架构时，中英两份 README 必须逐节同步（见 [CONTEXT.md](CONTEXT.md)）。
 
 ## 快速开始
 
