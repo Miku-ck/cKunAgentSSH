@@ -114,7 +114,7 @@ function friendlyFromMessage(raw: string, fallback: string): string {
   if (!msg) return fallback
   if (/Backend not ready|后端未就绪/i.test(msg)) return '后端服务未就绪，请稍后重试'
   if (/fetch failed|NetworkError|Failed to fetch|网络连接失败/i.test(msg)) return '网络连接失败，请检查服务是否运行'
-  if (/未登录|登录已过期|Unauthorized|401/i.test(msg)) return '未登录或登录已过期，请重新登录'
+  if (/Unauthorized|401/i.test(msg)) return 'API 鉴权失败，请检查 token 配置'
   if (isTechnicalErrorMessage(msg)) return '服务暂时不可用，请稍后重试'
   return msg
 }
