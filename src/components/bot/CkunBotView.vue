@@ -709,7 +709,7 @@ onUnmounted(() => { stopRemotePolling(); store.stopGenerating(); clearStaging() 
 
 <style scoped>
 .bot-view { --bubble-radius: calc(var(--radius-lg) * 2); height: 100%; display: flex; flex-direction: column; background: var(--canvas-bg); color: var(--text-primary); overflow: hidden; }
-.bot-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-16); padding: var(--spacing-20) var(--margin) var(--spacing-12); border-bottom: 1px solid var(--border-subtle); }
+.bot-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-16); padding: var(--spacing-20) var(--padding) var(--spacing-12); border-bottom: 1px solid var(--border-subtle); }
 .brand { min-width: 0; display: flex; align-items: center; gap: var(--spacing-10); }
 /* 窄屏抽屉开关：默认不渲染（宽屏侧栏常驻），≤700px 才由媒体查询放出 */
 .sidebar-toggle { display: none; }
@@ -843,7 +843,7 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: var(--page-title-size); letter-spac
 .composer-send { width: 32px; height: 32px; flex: 0 0 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: linear-gradient(150deg, var(--accent-primary), color-mix(in srgb, var(--accent-primary) 60%, #ffffff)); color: var(--accent-on); cursor: pointer; box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-primary) 35%, transparent); transition: filter var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast); }
 .composer-send:hover:not(:disabled) { filter: brightness(1.06); } .composer-send:disabled { background: var(--bg-active); color: var(--text-tertiary); cursor: default; box-shadow: none; } .composer-send svg { width: 15px; height: 15px; }
 .composer-send.stop { background: var(--danger-bg); color: var(--danger-text); box-shadow: none; } .composer-send.stop:hover:not(:disabled) { filter: none; background: var(--danger-border); }
-.persona-page { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: var(--spacing-24) var(--margin); }
+.persona-page { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: var(--spacing-24) var(--padding); }
 /* 空状态双向居中，且只在无人格时占满；有列表时它不渲染，不影响网格 */
 .persona-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
 .persona-empty p { max-width: 420px; color: var(--text-tertiary); font-family: var(--font-spec); font-size: 14px; line-height: 1.7; text-align: center; } .section-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-20); } .section-heading h3 { font-family: var(--font-spec); font-size: var(--page-title-size); }

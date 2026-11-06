@@ -378,7 +378,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: var(--spacing-8);
-  padding: var(--spacing-20) var(--margin) var(--spacing-12);
+  padding: var(--spacing-20) var(--padding) var(--spacing-12);
   border-bottom: 1px solid var(--border-subtle);
 }
 .head-spacer { flex: 1; }
@@ -411,7 +411,7 @@ onMounted(() => {
   color: var(--accent-text);
   background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
 }
-.editor-scroll { flex: 1; min-width: 0; overflow-y: auto; padding: var(--spacing-20) var(--margin) var(--spacing-24); }
+.editor-scroll { flex: 1; min-width: 0; overflow-y: auto; padding: var(--spacing-20) var(--padding) var(--spacing-24); }
 .editor-section {
   max-width: 760px;
   margin: 0 auto var(--spacing-20);

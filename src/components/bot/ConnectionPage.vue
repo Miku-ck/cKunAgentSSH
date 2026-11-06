@@ -86,7 +86,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 <style scoped>
 /* 与 persona-page / editor-scroll 同一组垂直内边距：三页同层级，各写一个值会
    在 tab 切换时看到内容跳一下。 */
-.connection-page { flex: 1; min-height: 0; overflow-y: auto; padding: var(--spacing-24) var(--margin); }
+.connection-page { flex: 1; min-height: 0; overflow-y: auto; padding: var(--spacing-24) var(--padding); }
 .connection-group { display: flex; flex-direction: column; gap: var(--spacing-10); }
 .group-head { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-12); }
 .group-head h3 { margin: 0; font-family: var(--font-spec); font-size: 16px; }
