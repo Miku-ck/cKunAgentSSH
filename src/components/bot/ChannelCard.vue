@@ -385,7 +385,11 @@ async function remove() {
 .status-dot.connecting, .status-dot.reconnecting { background: var(--status-warn-text); }
 .status-dot.error { background: var(--danger-text); }
 .channel-actions { display: flex; align-items: center; gap: var(--spacing-8); flex-wrap: wrap; }
-.channel-status { color: var(--text-secondary); font-family: var(--font-spec); font-size: 14px; }
+/* 状态文字与同行 .btn-sm 按钮同源：同字号（13px），同横向内边距。
+   padding 不是装饰 —— .channel-actions 的 gap 只在「元素边界之间」生效，按钮自带
+   横向 padding 时它就被算了三遍（pad+gap+pad = 32px），而裸文字只有 gap+pad = 20px，
+   一行里于是出现两种间距。给文字同样的 padding 后每个边界都等长。 */
+.channel-status { color: var(--text-secondary); font-family: var(--font-spec); font-size: 13px; padding: 0 var(--spacing); }
 .channel-status.online { color: var(--status-success-text); }
 .channel-status.connecting, .channel-status.reconnecting { color: var(--status-warn-text); }
 .channel-status.error { color: var(--danger-text); }

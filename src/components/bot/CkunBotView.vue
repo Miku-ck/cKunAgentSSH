@@ -716,7 +716,7 @@ onUnmounted(() => { stopRemotePolling(); store.stopGenerating(); clearStaging() 
 /* 品牌名读 --page-title-size：variables.css 里它是「版面」令牌（主题不得覆盖），
    全站页面标题都收敛到它，bot 的 22px 是漏迁移的那一个。 */
 h1, h2, h3, p { margin: 0; } h1 { font-size: var(--page-title-size); letter-spacing: -.5px; } .bot-tabs { display: flex; gap: var(--spacing-2); padding: 3px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-input); }
-.bot-tabs button { border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); padding: var(--spacing-6) var(--padding); cursor: pointer; transition: color var(--transition-fast), background var(--transition-fast); }
+.bot-tabs button { border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); padding: var(--spacing-6) var(--padding); font-size: inherit; cursor: pointer; transition: color var(--transition-fast), background var(--transition-fast); }
 .bot-tabs button:hover { color: var(--text-primary); }
 .bot-tabs button.active { background: var(--bg-elevated); color: var(--text-primary); box-shadow: var(--shadow-sm); }
 .chat-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 232px minmax(0, 1fr); }
