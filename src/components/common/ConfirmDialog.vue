@@ -210,22 +210,27 @@ defineExpose({ open, close })
   color: var(--text-primary);
 }
 
+/* 确认按钮走项目规范 7.3 的实心主色（--accent-primary 底 + --accent-text 字）：
+   手记主题明令「强调色只做填充/描边，文字一律读 --accent-text」，
+   所以这里不能改成纯文字——那会撞上 variables.test.ts 的守卫。 */
 .confirm-btn.ok {
-  color: var(--accent-primary);
-  font-weight: 600;
+  background: var(--accent-primary);
+  color: var(--accent-text);
 }
 
 .confirm-btn.ok:hover {
-  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  /* 同一枚强调色的浅一档，而不是写死的 #4a8fe3：强调色选绿/橙/朱砂时，
+     主按钮一 hover 就跳成蓝 —— 非 hover 态本来读 --accent-primary */
+  background: color-mix(in srgb, var(--accent-primary) 85%, white);
 }
 
 .confirm-btn.ok:focus {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 40%, transparent);
+  outline: none;
 }
 
-/* 危险档用规范 7.4 的危险实色 --color-danger（与 .btn-danger 同源），
-   不再走审批卡的 --danger-bg 浅粉底 —— 那档是为「风险徽章」设计的，
-   当按钮底在白卡上几乎读不出危险 */
+/* 危险档改走规范 7.4 的文字链接风格：--color-danger 实色 + 无边框/背景。
+   审批卡的 --danger-bg 浅粉底是为「风险徽章」设计的，当按钮底在白卡上
+   几乎读不出危险，且那套令牌带边框，与项目按钮规范不一致。 */
 .confirm-btn.ok.danger {
   color: var(--color-danger);
 }
@@ -235,7 +240,7 @@ defineExpose({ open, close })
 }
 
 .confirm-btn.ok.danger:focus {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-danger) 40%, transparent);
+  outline: none;
 }
 
 /* 过渡动画 */
