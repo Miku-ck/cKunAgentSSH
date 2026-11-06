@@ -859,6 +859,12 @@ onUnmounted(() => {
 
 
 .schedule-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: var(--spacing-10); padding: var(--spacing-12) var(--spacing-16) var(--spacing-16); }
+
+/* ── xl 断点（≥1920px）：规范补充条款 2 —— 不出滚动条 ──
+   列表 overflow:hidden，卡片区在容器内自适应高度。 */
+@media (min-width: 1920px) {
+  .schedule-list { overflow: hidden; }
+}
 .schedule-card {
   border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--accent-primary);

@@ -35,6 +35,10 @@ export default defineConfig({
         /docker-page\.css/,
         // K8s 页同理：没放行的话 .k8s-view 的原子守卫会对着空模块恒真
         /k8s-page\.css/,
+        // 24 栅格规范：spec-tokens / grid 的令牌与消费方断言
+        // （spec-button.css 曾与 button.css 平行，已删除——它的断言并入 button.css）
+        /spec-tokens\.css/,
+        /grid\.css/,
       ],
     },
   },

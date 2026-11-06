@@ -1,0 +1,76 @@
+/**
+ * spec-tokens.css —— 24 栅格规范设计令牌层
+ *
+ * 本文件是「24 栅格规则」UI 规范（用户提供）的令牌实现，只保留**有真实消费方**的
+ * 令牌：button.css 的规范按钮配色 / 控件高度，grid.css 的栅格间距。
+ *
+ * 命名空间隔离的原因：variables.css 是深色主题为主的多主题系统，
+ * 规范中的 #333333 主文字 / #E4E7ED 边框是为浅色背景设计的。
+ * 直接覆盖会破坏深色主题可读性。本层只放「画布无关」的规范档（危险实色 + 前景）；
+ * 主色、间距、字体一律接回 variables.css —— 规范里的「系统主色」就是
+ * --accent-primary（ACCENT_MAP 十档强调色），间距同值于 --spacing-12/--spacing-16，
+ * 字体同 --font-sans。
+ * 另立一枚 --color-primary 的教训：它与 --accent-primary 同值并存，只在
+ * button.css 的 :focus-visible 用了一次 —— 切强调色时按钮跟着变、焦点描边
+ * 扒着 #0078d4 不放，同一屏两套「主色」。同值两套名字迟早漂移，别开这个头。
+ *
+ * 维护约定：新增令牌必须同时有消费方（button.css / grid.css）。
+ * 本文件曾有一批 --color-text-* / --radius-spec-* / --shadow-spec / --border-* /
+ * --color-disabled-* / --breakpoint-* / --grid-cols 令牌，全部随之退役 ——
+ * 留着无消费方的令牌，下次改值时不会有任何一处渲染变化，只会让下一个人
+ * 以为「规范已经落地了」。
+ */
+
+:root {
+  /* ── 规范色板（画布无关档，全主题同一值）──
+     规范 7.4 危险实色 / 禁用底与字。主色与中性色不在这里 ——
+     主色走 --accent-primary（随强调色变），中性色随主题走 --text-* / --border-*。 */
+  --color-danger: #c71a1a;
+  --color-on-danger: #ffffff;      /* 压在 #C71A1A 上的前景（4.68:1） */
+
+  /* ── 栅格间距（规范原文）──
+     规范原文：Gutter 12 / Margin 16 / Padding 16 / Spacing 12。
+     项目 variables.css 已有同值的 --spacing-12 / --spacing-16 偶数刻度。
+     别名接回而不是新写一个同值常量：两套名字并存时，改了一套另一套不知道，
+     下一个人看到「规范间距」以为改这里生效，实际只影响一部分消费点。
+     gutter 由 grid.css 栅格骨架读取；padding/spacing 由 button.css 等读取。 */
+  --gutter: var(--spacing-12);
+  --padding: var(--spacing-16);
+  --spacing: var(--spacing-12);
+
+  /* ── 规范字体栈（别名，不是第二份字表）──
+     规范 §4：MAC 用 San Francisco UI / PingFangSC，WINDOWS 用 Microsoft YaHei。
+     但项目已有 --font-sans（variables.css）：它的排序把 system-ui 放在最前
+     （MAC 上解析成 San Francisco），且手记主题会整族换成衬线（Georgia 起）。
+     这里再抄一份固定栈会造成两个真问题：
+       1. 固定栈把 "PingFang SC" 排在最前，MAC 上抢在 San Francisco 前面，
+          与规范 §4 自己的字体序相悖；
+       2. 它是 :root 常量，手记主题的衬线字族在 64 处 --font-spec 消费点上
+          全部失效 —— 切到手记，只有没引用它的地方才变衬线。
+     所以 --font-spec 只是 --font-sans 的别名（同 --font-display 的写法）：
+     规范「一套字体」的意图保留，主题换字族时全站跟着走。 */
+  --font-spec: var(--font-sans);
+
+  /* ── 控件尺寸（规范 7.1 / 7.2）──
+     规范原文：xl（≥1920px）用 32px；lg 及以下用 28px。
+     本项目窗口 minWidth=960，实际多数时间在 960–1919 区间 —— 按原文会全站按钮
+     从 32px 收到 28px（约 210+ 处 .btn 与全部输入框）。那是布局之外的尺寸改动，
+     不在「按规范优化 UI」的授权范围内，所以：
+       --control-h     = 32px（标准档，等于改动前的实际渲染值，全站零变化）
+       --control-h-sm  = 28px（紧凑档，规范的小号，已有 .btn-sm 在用）
+       --control-h-xl  = 32px（xl 档，规范要求 ≥1920 用 32 —— 与标准档同值）
+     断点档仍写在文件末尾，只是两档同值；将来若要按原文收窄 lg 档，改那一处即可，
+     消费方只读 --control-h，不必各自写断点。 */
+  --control-h: 32px;             /* 标准档：按钮/输入框/选择器高度 */
+  --control-h-sm: 28px;          /* 紧凑档：规范的小号（lg 及以下原文值） */
+  --control-h-xl: 32px;          /* xl 档（≥1920px）：规范要求 32px */
+}
+
+/* ── 控件高度的断点档（规范 7.1 / 7.2）──
+   xl 分辨率下使用 32px 高度按钮；lg 及以下使用 28px。
+   变量重定义而不是让组件各写一遍 @media —— 断点是规范的一部分，只能有一份。 */
+@media (min-width: 1920px) {
+  :root {
+    --control-h: var(--control-h-xl);
+  }
+}

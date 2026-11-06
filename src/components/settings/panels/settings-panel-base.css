@@ -9,9 +9,10 @@
  * 收敛前四份/七份副本已漂移，以下取值按「带 :hover 反馈的完整版」统一：
  *   .panel-header margin-bottom 16px（4 份）vs 20px（3 份）→ 16px
  *   .panel-desc 无 line-height（6 份）vs OpsPanel 带 → 无
- *   .setting-select 28px + 下拉箭头 + hover/focus（Appearance/Chat/Ops）
- *     ← AgentPanel 的 26px/无箭头紧凑变体与 OpsPanel 缺 :hover 均已并入完整版；
- *       AgentPanel 仍保留自己的 flex-shrink 与 :disabled（本地差异，不是漂移）
+ *   .setting-select 32px + 14px + 左右 16px + 下拉箭头 + hover/focus（Appearance/Chat/Ops）
+ *     ← 2026-11 按「24 栅格规则」选择器规范统一：高度 32px / 字号 14px /
+ *       左右内边距 16px；AgentPanel 的 26px/无箭头紧凑变体与 OpsPanel 缺 :hover
+ *       均已并入完整版；AgentPanel 仍保留自己的 flex-shrink 与 :disabled（本地差异，不是漂移）
  *   .panel-body 的 padding-right: 4px；ModelsPanel 的 scrollbar-width: none
  *     是有意差异，留在它自己的 scoped 块里
  */
@@ -23,21 +24,21 @@
 .panel-body { flex: 1; overflow-y: auto; padding-right: var(--spacing-4); }
 
 .setting-select {
-  height: 28px;
-  padding: 0 var(--spacing-24) 0 var(--spacing-8);
+  height: var(--control-h);
+  padding: 0 var(--spacing-20) 0 var(--padding);
   background: var(--bg-input);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 0.9231rem;
-  font-family: inherit;
+  font-size: 14px;
+  font-family: var(--font-spec);
   outline: none;
   cursor: pointer;
   -webkit-appearance: none;
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%238b949e' stroke-width='1.5' stroke-linecap='round'%3E%3Cpolyline points='3 5 6 8 9 5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 6px center;
+  background-position: right 8px center;
   transition: border-color 0.15s ease;
 }
 .setting-select:hover { border-color: var(--border-default); }

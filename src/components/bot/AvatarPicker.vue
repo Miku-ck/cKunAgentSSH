@@ -62,7 +62,7 @@ async function pickFile(event: Event) {
       class="avatar-preview"
       :class="{ empty: !modelValue }"
       :title="modelValue ? '点击更换头像' : '点击上传头像'"
-      aria-label="点击上传头像"
+      :aria-label="modelValue ? '点击更换头像' : '点击上传头像'"
       @click="fileInput?.click()"
     ><PersonaAvatar :avatar="modelValue" /></button>
     <div class="avatar-picker-body">
@@ -93,7 +93,7 @@ async function pickFile(event: Event) {
 .avatar-preview {
   width: 64px; height: 64px; flex: 0 0 64px; display: grid; place-items: center;
   padding: 0; border: 0; border-radius: 50%; overflow: hidden;
-  background: var(--bg-input); font: inherit; font-size: 1.7692rem; color: inherit; cursor: pointer;
+  background: var(--bg-input); font-family: var(--font-spec); font-size: 1.7692rem; color: inherit; cursor: pointer;
   transition: box-shadow var(--transition-fast);
 }
 .avatar-preview:hover { box-shadow: inset 0 0 0 1px var(--accent-primary); }
@@ -101,11 +101,12 @@ async function pickFile(event: Event) {
 .avatar-preview.empty:hover { box-shadow: inset 0 0 0 1px var(--accent-primary); }
 .avatar-picker-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--spacing-8); }
 .avatar-picker-actions { display: flex; gap: var(--spacing-8); align-items: center; flex-wrap: wrap; }
-.keep-gallery { display: flex; align-items: center; gap: var(--spacing-4); color: var(--text-tertiary); font-size: 0.7692rem; }
+/* 可交互的复选框标签不按 10px 读：它是要点的东西，不是批注 */
+.keep-gallery { display: flex; align-items: center; gap: var(--spacing-4); color: var(--text-secondary); font-family: var(--font-spec); font-size: 13px; cursor: pointer; }
 .avatar-file { display: none; }
-.form-error { color: var(--danger-text); font-size: 0.8462rem; }
+.form-error { color: var(--danger-text); font-family: var(--font-spec); font-size: 0.8462rem; }
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: var(--spacing-6); margin-top: var(--spacing-4); }
-.gallery-item { padding: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; background: transparent; cursor: pointer; aspect-ratio: 1; }
+.gallery-item { padding: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); overflow: hidden; background: transparent; cursor: pointer; aspect-ratio: 1; }
 .gallery-item img { width: 100%; height: 100%; display: block; object-fit: cover; }
-.gallery-empty { grid-column: 1 / -1; color: var(--text-tertiary); font-size: 0.8462rem; }
+.gallery-empty { grid-column: 1 / -1; color: var(--text-tertiary); font-family: var(--font-spec); font-size: 0.8462rem; }
 </style>

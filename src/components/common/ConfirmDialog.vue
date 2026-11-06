@@ -135,7 +135,7 @@ defineExpose({ open, close })
   max-width: calc(100vw - 32px);
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   font-family: var(--font-sans);
   color: var(--text-primary);

@@ -869,15 +869,15 @@ defineExpose({
   padding: var(--spacing-4) 0;
   background: var(--bg-elevated-solid);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lg);
 }
 
 .tab-ctx-item {
   display: flex;
   align-items: center;
-  gap: var(--spacing-8);
-  padding: var(--spacing-6) var(--spacing-12);
+  gap: var(--spacing);
+  padding: var(--spacing-6) var(--spacing);
   font-size: 0.9231rem;
   color: var(--text-secondary);
   cursor: pointer;

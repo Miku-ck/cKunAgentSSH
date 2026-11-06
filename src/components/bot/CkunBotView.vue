@@ -49,6 +49,11 @@
               </button>
               <button class="icon-button" title="删除会话" aria-label="删除会话" @click="removeConversation(c.id)">×</button>
             </div>
+            <!-- 与远端侧栏同口径：加载中、读取失败、真空三态分开说。
+                 空容器会让人把「还没读到」误认为「真的没有」。 -->
+            <p v-if="store.loading" class="sidebar-empty">正在读取会话…</p>
+            <p v-else-if="store.error && !store.filteredConversations.length" class="sidebar-error">{{ store.error }}</p>
+            <p v-else-if="!store.filteredConversations.length" class="sidebar-empty">还没有会话。点「新建会话」开始第一段。</p>
           </div>
         </template>
         <template v-else>
@@ -72,7 +77,10 @@
                 <button class="icon-button" title="删除会话" aria-label="删除会话" @click="removeRemote(c.id)">×</button>
               </div>
             </template>
+            <!-- 与本地侧栏同口径：切渠道时列表先清空，拉回之前要占位，
+                 否则会闪一句「还没有 QQ 消息」把「还没读到」说成「真的没有」。 -->
             <p v-if="store.remoteError" class="sidebar-error">{{ store.remoteError }}</p>
+            <p v-else-if="store.remoteConversationsLoading" class="sidebar-empty">正在读取{{ store.remoteChannelLabel }}会话…</p>
             <p v-else-if="!store.remoteConversations.length" class="sidebar-empty">{{ remoteEmptyHint }}</p>
           </div>
         </template>
@@ -97,19 +105,45 @@
         </div>
         <div ref="messageListRef" class="bot-messages">
           <div v-if="!store.isRemote && !store.activeConversationId" class="chat-empty">
-            <h2>今天想聊点什么？</h2>
-            <p>到「人格」页挑一位，新建一段只属于你们的会话。</p>
+            <template v-if="store.loading">
+              <h2>正在读取…</h2>
+              <p>稍等一下，马上就好。</p>
+            </template>
+            <template v-else>
+              <h2>今天想聊点什么？</h2>
+              <p>到「人格」页挑一位，新建一段只属于你们的会话。</p>
+            </template>
           </div>
+          <!-- 主区不重复侧栏的渠道级提示（remoteEmptyHint 已在侧栏说过「在 QQ 里 @ 一下」）：
+               同一屏内同一句话出现两次是噪音，这里只说「看哪一侧」。 -->
           <div v-else-if="store.isRemote && !store.remoteActiveId" class="chat-empty">
-            <h2>{{ store.remoteError ? `${store.remoteChannelLabel} 记录读取失败` : `还没有 ${store.remoteChannelLabel} 消息` }}</h2>
-            <p>{{ store.remoteError || remoteEmptyHint }}</p>
+            <template v-if="store.remoteConversationsLoading">
+              <h2>正在读取…</h2>
+              <p>稍等一下，马上就好。</p>
+            </template>
+            <template v-else>
+              <h2>{{ store.remoteError ? `${store.remoteChannelLabel} 记录读取失败` : `还没有 ${store.remoteChannelLabel} 消息` }}</h2>
+              <p>{{ store.remoteError || '从左侧选一条会话查看。' }}</p>
+            </template>
           </div>
           <!-- 本地与 QQ 记录共用这一份气泡：方向、配色、meta、渲染口径都只按角色决定，
                渠道不再各留一套覆盖，切 tab 就是同一副观感。 -->
           <template v-else>
-            <div v-if="!store.isRemote && !store.messages.length && !store.streaming" class="greeting">
+            <!-- 切会话时 messages 已清空，若直接落进下面的 greeting 分支，
+                 用户会看到一句问候闪现再被聊天记录顶掉。messagesLoading 在途时先占位。 -->
+            <div v-if="!store.isRemote && store.messagesLoading" class="greeting loading-greeting">
+              <span class="loading-dot" aria-hidden="true"></span>
+              正在读取聊天记录…
+            </div>
+            <div v-else-if="!store.isRemote && !store.messages.length && !store.streaming" class="greeting">
               {{ store.activePersona?.greeting || `你好，我是${store.activePersona?.name || 'cKunBot'}。` }}
             </div>
+            <!-- 远端切会话时 remoteMessages 已清空，若直接落进下面的空态，
+                 用户会看到「这段会话还没有消息」闪现再被记录顶掉。 -->
+            <p v-else-if="store.isRemote && store.remoteMessagesLoading" class="qq-empty loading-greeting">
+              <span class="loading-dot" aria-hidden="true"></span>
+              正在读取{{ store.remoteChannelLabel }}记录…
+            </p>
             <p v-else-if="store.isRemote && !store.remoteMessages.length" class="qq-empty">这段会话还没有消息。</p>
             <template v-for="d in messageList" :key="`${d.item.id}-${d.item.bubbleIndex}`">
               <div v-if="d.divider" class="day-divider" role="separator">{{ d.divider }}</div>
@@ -122,17 +156,29 @@
                   <div class="message-content" :class="{ 'sticker-only': d.item.role !== 'user' && !!stickerKey(d.item.bubble) }">
                     <span class="sr-only">{{ speakerLabel(d.item) }}：</span>
                     <div v-if="d.item.images?.length && !d.item.bubbleIndex" class="msg-images">
-                      <img v-for="(u, i) in d.item.images" :key="i" :src="u" class="msg-image" alt="图片" @click="openLightbox(u)" />
+                      <img
+                        v-for="(u, i) in d.item.images"
+                        v-show="!imageFailed.has(`${d.item.id}:${i}`)"
+                        :key="i"
+                        :src="u"
+                        class="msg-image"
+                        alt="图片"
+                        @click="openLightbox(u)"
+                        @error="imageFailed.add(`${d.item.id}:${i}`)"
+                      />
                     </div>
                     <details v-if="!d.item.bubbleIndex && d.item.role !== 'user' && thinkingOn && d.item.reasoning" class="reasoning"><summary>思考过程</summary><div class="reasoning-body">{{ d.item.reasoning }}</div></details>
                     <img
-                      v-if="d.item.role !== 'user' && stickerKey(d.item.bubble)"
+                      v-if="d.item.role !== 'user' && stickerKey(d.item.bubble) && !stickerFailed.has(`${d.item.id}:${d.item.bubbleIndex}`)"
                       class="msg-sticker"
                       :src="stickerSrc(d.item.bubble)"
                       alt="表情包"
                       @click="openLightbox(stickerSrc(d.item.bubble))"
+                      @error="stickerFailed.add(`${d.item.id}:${d.item.bubbleIndex}`)"
                     />
-                    <MarkdownStream v-else-if="d.item.role !== 'user'" :content="d.item.bubble" />
+                    <MarkdownStream v-else-if="d.item.role !== 'user' && !stickerFailed.has(`${d.item.id}:${d.item.bubbleIndex}`)" :content="d.item.bubble" />
+                    <!-- 图片加载失败时回落到原始标记文本：破图图标比「[表情:开心]」更难读 -->
+                    <template v-else-if="d.item.role !== 'user'">{{ d.item.bubble }}</template>
                     <template v-else>{{ d.item.bubble }}</template>
                   </div>
                 </div>
@@ -165,7 +211,8 @@
         </div>
         <div v-if="!store.isRemote && store.error" class="chat-error">
           <span>{{ store.error }}</span>
-          <button v-if="store.lastFailedText" class="btn btn-sm" @click="retry">重试</button>
+          <!-- lastFailedText 有值 = 发送失败，重试重发那一句；否则是加载失败，重试重新拉取 -->
+          <button class="btn btn-sm" @click="store.lastFailedText ? retry() : store.init()">{{ store.lastFailedText ? '重试' : '重新加载' }}</button>
         </div>
         <div v-if="store.isRemote && store.remoteActiveId" class="readonly-bar">
           <span>来自 {{ store.remoteChannelLabel }} · 仅供查看，回复请在{{ store.remoteChannelLabel }}里进行</span>
@@ -177,7 +224,7 @@
             class="btn btn-sm"
             title="不等频率窗口，直接往这个会话发一句主动消息（照常占 12 小时间隔与当日配额）"
             :disabled="store.probing"
-            @click="store.probeProactive(store.remoteActiveId)"
+            @click="probeOnce"
           >{{ store.probing ? '发送中…' : '试一句' }}</button>
           <span v-if="store.probeNote" class="probe-note">{{ store.probeNote }}</span>
         </div>
@@ -213,8 +260,15 @@
     </div>
 
     <div v-else-if="tab === 'personas'" class="persona-page">
-      <div class="section-heading"><h2>人格</h2><button class="btn btn-primary" @click="openPersona()">新增人格</button></div>
-      <div class="persona-grid">
+      <div class="section-heading"><h3>人格</h3><button class="btn btn-primary" @click="openPersona()">新增人格</button></div>
+      <!-- 空状态独立成 flex:1 的居中容器：与列表拆成两个同级空壳，否则平分高度把居中顶偏。
+           加载中、加载失败、真空三态分开说：网络慢时不能说「还没有人格」，用户会当真。 -->
+      <div v-if="!store.personas.length" class="persona-empty">
+        <p v-if="store.loading">正在读取人格…</p>
+        <p v-else-if="store.error">{{ store.error }}</p>
+        <p v-else>还没有人格。用「新增人格」造一位，它会带着自己的性格和说话方式陪你聊。</p>
+      </div>
+      <div v-else class="persona-grid">
         <article v-for="p in store.personas" :key="p.id" class="persona-card">
           <div class="persona-card-head">
             <span class="persona-large-avatar"><PersonaAvatar :avatar="p.avatar" /></span>
@@ -262,7 +316,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import PersonaAvatar from './PersonaAvatar.vue'
 import PersonaEditor from './PersonaEditor.vue'
 import ConnectionPage from './ConnectionPage.vue'
@@ -323,17 +377,51 @@ async function send() {
   if (!text.trim() || store.streaming) return
   draft.value = ''
   await store.sendMessage(text)
+  // 失败时把原文放回输入框：store 已用 lastFailedText 兜底供「重试」，但输入框空着
+  // 会让人以为字丢了。error 在 sendMessage 开头清空过，await 后非空即本轮失败。
+  if (store.error && text) draft.value = text
 }
 async function retry() {
   const text = store.lastFailedText
   if (text) await store.sendMessage(text)
 }
+/** 删除会话不可逆（后端连聊天记录一起删），且入口是 hover 才浮现的小 ×，
+    与旁边的 ⋯ 相邻 —— 误触就丢数据，必须二次确认。 */
 async function removeConversation(id: string) {
+  const target = store.conversations.find(c => c.id === id)
+  const ok = await confirm({
+    message: target
+      ? `删除会话「${target.title}」？聊天记录会一并删除，无法恢复。`
+      : '删除这个会话？聊天记录会一并删除，无法恢复。',
+    danger: true,
+  })
+  if (!ok) return
   try { await store.deleteConversation(id) } catch (e) { toast.error(toFriendlyMessage(e, '删除失败')) }
 }
-/** 远程记录删除与本地同一口径：一次点击即执行，不弹确认。 */
+/** 远端记录与本地同一口径：都是不可逆删除，都要确认。 */
 async function removeRemote(id: string) {
+  const target = store.remoteConversations.find(c => c.id === id)
+  const ok = await confirm({
+    message: target
+      ? `删除「${target.display_name || target.title}」的这条记录？无法恢复。`
+      : '删除这条记录？无法恢复。',
+    danger: true,
+  })
+  if (!ok) return
   try { await store.deleteRemoteConversation(id) } catch (e) { toast.error(toFriendlyMessage(e, '删除失败')) }
+}
+/** 「试一句」是对外发声：以 bot 的身份往真实 QQ 会话发一条消息，QQ 没有撤回通道，
+ *  且照常占 12 小时间隔与当日配额 —— 误点就发出去一条，必须二次确认。 */
+async function probeOnce() {
+  const id = store.remoteActiveId
+  if (!id) return
+  const target = store.remoteConversations.find(c => c.id === id)
+  const ok = await confirm({
+    message: `往「${target?.display_name || target?.title || '这个会话'}」发一句主动消息？`
+      + '对方会真的收到，且照常占 12 小时间隔与当日配额。',
+  })
+  if (!ok) return
+  await store.probeProactive(id)
 }
 /** 消息流跟到底：四处触发（新消息/流式、逐条揭开、切会话、QQ 轮询）共用一份。 */
 function scrollToBottom() {
@@ -474,6 +562,12 @@ function stickerSrc(bubble: string): string {
   const key = stickerKey(bubble)
   return key ? stickerAssetUrl(key) : ''
 }
+/** 加载失败的表情包按消息 id 记账：内置 png 缺失或后端未就绪时（src 为空串）
+ *  404，破图图标比原始标记文本更难读，回落到文本。 */
+const stickerFailed = reactive(new Set<string>())
+/** 消息配图按 消息id:下标 记账：bot 回复里的后端图片 URL 可能已失效，
+ *  失败的那张隐藏（v-show，不动布局），同组其他图照常显示。 */
+const imageFailed = reactive(new Set<string>())
 
 // ── 在场感（P4）：多气泡投递节奏 ──
 // done 落库的一轮若是多气泡，第 2~N 条按拟打字延迟逐条揭开：每条揭开前
@@ -615,12 +709,14 @@ onUnmounted(() => { stopRemotePolling(); store.stopGenerating(); clearStaging() 
 
 <style scoped>
 .bot-view { --bubble-radius: calc(var(--radius-lg) * 2); height: 100%; display: flex; flex-direction: column; background: var(--canvas-bg); color: var(--text-primary); overflow: hidden; }
-.bot-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-16); padding: 20px 28px var(--spacing-12); border-bottom: 1px solid var(--border-subtle); }
+.bot-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-16); padding: var(--spacing-20) var(--margin) var(--spacing-12); border-bottom: 1px solid var(--border-subtle); }
 .brand { min-width: 0; display: flex; align-items: center; gap: var(--spacing-10); }
 /* 窄屏抽屉开关：默认不渲染（宽屏侧栏常驻），≤700px 才由媒体查询放出 */
 .sidebar-toggle { display: none; }
-h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; } .bot-tabs { display: flex; gap: var(--spacing-2); padding: 3px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-input); }
-.bot-tabs button { border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); padding: 6px 16px; cursor: pointer; transition: color var(--transition-fast), background var(--transition-fast); }
+/* 品牌名读 --page-title-size：variables.css 里它是「版面」令牌（主题不得覆盖），
+   全站页面标题都收敛到它，bot 的 22px 是漏迁移的那一个。 */
+h1, h2, h3, p { margin: 0; } h1 { font-size: var(--page-title-size); letter-spacing: -.5px; } .bot-tabs { display: flex; gap: var(--spacing-2); padding: 3px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-input); }
+.bot-tabs button { border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); padding: var(--spacing-6) var(--padding); cursor: pointer; transition: color var(--transition-fast), background var(--transition-fast); }
 .bot-tabs button:hover { color: var(--text-primary); }
 .bot-tabs button.active { background: var(--bg-elevated); color: var(--text-primary); box-shadow: var(--shadow-sm); }
 .chat-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 232px minmax(0, 1fr); }
@@ -628,75 +724,90 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 .chat-sidebar::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 200px; background: radial-gradient(72% 100% at 50% 0%, color-mix(in srgb, var(--accent-primary) 10%, transparent), transparent 72%); pointer-events: none; }
 .chat-sidebar > * { position: relative; }
 .channel-switch { display: flex; gap: var(--spacing-2); margin: 0 0 var(--spacing-12); padding: 3px; border: 1px solid var(--border-subtle); border-radius: var(--radius-pill); background: var(--bg-input); }
-.channel-switch button { flex: 1; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-secondary); padding: 5px 0; font: inherit; font-size: 0.9231rem; cursor: pointer; transition: color var(--transition-fast), background var(--transition-fast); }
+.channel-switch button { flex: 1; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-secondary); padding: 5px 0; font-family: var(--font-spec); font-size: 14px; cursor: pointer; transition: color var(--transition-fast), background var(--transition-fast); }
 .channel-switch button:hover { color: var(--text-primary); }
 .channel-switch button.active { background: var(--bg-elevated); color: var(--text-primary); box-shadow: var(--shadow-sm); }
-.new-chat { width: 100%; height: 30px; margin: 0 0 var(--spacing-16); justify-content: center; border-color: transparent; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-text); font-size: 0.9231rem; }
+.new-chat { width: 100%; height: 30px; margin: 0 0 var(--spacing-16); justify-content: center; border-color: transparent; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-text); font-family: var(--font-spec); font-size: 14px; }
 .new-chat:hover:not(:disabled) { border-color: transparent; background: color-mix(in srgb, var(--accent-primary) 20%, transparent); color: var(--accent-text); }
-.history-label { padding: 0 var(--spacing-6) var(--spacing-8); color: var(--text-tertiary); font-size: 0.8462rem; }
+/* 与 .conversation-main 的水平 padding 对齐：标签和它下方列表项的文字左缘同一垂线，
+   各抄 6px 时标签会比列表项更靠左 6px。 */
+.history-label { padding: 0 var(--spacing-12) var(--spacing-8); color: var(--text-tertiary); font-family: var(--font-spec); font-size: 13px; }
 .conversation-list { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: var(--spacing-2); }
-.conversation { display: flex; align-items: center; border-radius: var(--radius-xl); transition: background var(--transition-fast), box-shadow var(--transition-fast); }
+.conversation { display: flex; align-items: center; border-radius: var(--radius-lg); transition: background var(--transition-fast), box-shadow var(--transition-fast); }
+/* 行内按钮不被 stretch 拉伸：它只占内容尺寸，× 的点击区域才保持方正 */
+.conversation .icon-button { align-self: center; }
 .conversation:hover { background: var(--bg-hover); }
 .conversation.active { background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
 .conversation-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; border: 0; background: transparent; color: var(--text-primary); padding: 9px var(--spacing-12); cursor: pointer; text-align: left; }
-.conversation-main span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .conversation-main small { color: var(--text-tertiary); font-size: 0.7692rem; }
+.conversation-main span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .conversation-main small { color: var(--text-tertiary); font-family: var(--font-spec); font-size: 13px; }
 .conv-title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 群聊/私聊分组标题：只在两组都有时才出现，轻到不抢会话名。 */
-.conv-group-label { padding: var(--spacing-6) var(--spacing-6) var(--spacing-2); color: var(--text-tertiary); font-size: 0.7692rem; }
+.conv-group-label { padding: var(--spacing-6) var(--spacing-12) var(--spacing-2); color: var(--text-tertiary); font-family: var(--font-spec); font-size: 13px; }
 /* 远端行收成一行：名字吃剩余宽度。代号与最后消息时间不进正文 ——
    250px 窄栏里第二段必然折行，行高忽高忽低，挪进 title。 */
 .conversation-main.conv-single { flex-direction: row; align-items: center; gap: var(--spacing-6); }
 /* 侧栏会话的对方头像：只显示自定义上传图，没设就留空 —— 圆裁、不暴露真实资料、不自造图案。 */
 .conv-peer-avatar { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; overflow: hidden; }
-.sidebar-empty, .sidebar-error { margin: var(--spacing-4) 0 0; padding: 0 var(--spacing-6); color: var(--text-tertiary); font-size: 0.8462rem; line-height: 1.6; }
+.sidebar-empty, .sidebar-error { margin: var(--spacing-4) 0 0; padding: 0 var(--spacing-12); color: var(--text-tertiary); font-family: var(--font-spec); font-size: 13px; line-height: 1.6; }
 .sidebar-error { color: var(--danger-text); }
-.icon-button { flex: 0 0 auto; border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer; padding: 5px var(--spacing-8); font-size: 1.3077rem; opacity: 0; transition: opacity var(--transition-fast), color var(--transition-fast); } .conversation:hover .icon-button, .conversation:focus-within .icon-button { opacity: 1; } .icon-button:hover { color: var(--danger-text); }
+.icon-button { flex: 0 0 auto; border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer; padding: 5px var(--spacing-8); font-family: var(--font-spec); font-size: 1.3077rem; opacity: 0; transition: opacity var(--transition-fast), color var(--transition-fast); } .conversation:hover .icon-button, .conversation:focus-within .icon-button { opacity: 1; } .icon-button:hover { color: var(--danger-text); }
 @media (hover: none) { .icon-button { opacity: 1; } }
 .chat-main { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .chat-main::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 240px; background: radial-gradient(78% 100% at 50% 0%, color-mix(in srgb, var(--accent-primary) 14%, transparent), transparent 70%); pointer-events: none; }
 .chat-main > * { position: relative; }
-.chat-titlebar { display: flex; align-items: center; gap: var(--spacing-10); padding: var(--spacing-12) var(--spacing-24) var(--spacing-8); }
-.chat-titlebar .persona-avatar { width: 32px; height: 32px; flex: 0 0 32px; display: grid; place-items: center; border-radius: 50%; font-size: 1.1538rem; }
-.chat-titlebar div { display: flex; flex-direction: column; gap: var(--spacing-2); } .chat-titlebar strong { font-size: 1rem; } .chat-titlebar small { color: var(--text-tertiary); font-size: 0.7692rem; }
+/* 标题栏与消息区、输入框共用同一个 760px 居中公式：三者必须对齐成同一列，
+   否则宽屏下标题靠左 24px、气泡靠左 100px，视觉上是错位的。 */
+.chat-titlebar { display: flex; align-items: center; gap: var(--spacing-10); padding: var(--spacing-12) max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-8); }
+.chat-titlebar .persona-avatar { width: 32px; height: 32px; flex: 0 0 32px; display: grid; place-items: center; border-radius: 50%; font-family: var(--font-spec); font-size: 1.1538rem; }
+.chat-titlebar div { display: flex; flex-direction: column; gap: var(--spacing-2); } .chat-titlebar strong { font-family: var(--font-spec); font-size: 1rem; } .chat-titlebar small { color: var(--text-tertiary); font-family: var(--font-spec); font-size: 13px; }
 /* 关系徽标：阶段 + 到下一阶段的进度条。它存在的意义是让「越聊越熟」可见，
    所以进度条必须窄而低对比，不能抢走对话本身的注意力。 */
-.relation-chip { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 3px var(--spacing-10); border: 1px solid var(--border-subtle); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); color: var(--accent-text); font-size: 0.8462rem; white-space: nowrap; }
-.relation-chip.small { padding: 2px var(--spacing-8); font-size: 0.7692rem; }
+.relation-chip { margin-left: auto; display: inline-flex; align-items: center; gap: var(--spacing-6); padding: 3px var(--spacing-10); border: 1px solid var(--border-subtle); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); color: var(--accent-text); font-family: var(--font-spec); font-size: 13px; white-space: nowrap; }
+.relation-chip.small { padding: var(--spacing-2) var(--spacing-8); font-family: var(--font-spec); font-size: 12px; }
 .relation-bar { width: 34px; height: 3px; flex: 0 0 34px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-primary) 20%, transparent); overflow: hidden; }
 .relation-bar b { display: block; height: 100%; background: var(--accent-primary); transition: width .3s ease; }
 .bot-messages { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: var(--spacing-10) max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-8); }
-.chat-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-secondary); } .chat-empty h2 { color: var(--text-primary); font-size: 1.5385rem; } .chat-empty p { margin-top: var(--spacing-8); font-size: 1rem; }
+.chat-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-secondary); } .chat-empty h2 { color: var(--text-primary); font-family: var(--font-spec); font-size: 1.5385rem; } .chat-empty p { margin-top: var(--spacing-8); font-family: var(--font-spec); font-size: 1rem; }
 /* 基准取自 QQ 记录那套气泡：人格说的话用强调色（那才是你在读的内容），人说的话走中性卡片。
    尾巴朝自己这侧：bot 在左收左下、人在右收右下。 */
 .greeting { align-self: flex-start; max-width: 82%; margin-bottom: var(--spacing-16); padding: var(--spacing-12) var(--spacing-14); border: 1px solid color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; color: var(--text-secondary); line-height: 1.7; white-space: pre-wrap; }
+/* 加载占位刻意不沿用气泡外观：带边框会被读成「已经发出的一条消息」。
+   它是过渡态，用中性的居中行 + 呼吸点表达「正在来」。 */
+.loading-greeting { align-self: center; display: flex; align-items: center; gap: var(--spacing-8); max-width: none; margin: var(--spacing-24) 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text-tertiary); font-size: 13px; line-height: 1; }
+.loading-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); animation: greeting-pulse 1.2s ease-in-out infinite; }
+@keyframes greeting-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .loading-dot { animation: none; opacity: .6; } }
+/* 远端那一份借用了 .qq-empty（它靠 margin:auto 在 column flex 里双向居中），
+   而 .loading-greeting 的 margin 会把它顶到上方 —— 这里把居中改回来。 */
+.qq-empty.loading-greeting { align-self: auto; margin: auto; }
 .bot-message { display: flex; align-items: flex-start; gap: 9px; max-width: 82%; margin-bottom: var(--spacing-10); }
 .bot-message.assistant { align-self: flex-start; } .bot-message.user { align-self: flex-end; }
 /* 用户/对方气泡靠右，头像跟着排在气泡右侧；bot 在左，头像在气泡左侧。 */
 .bot-message.user .msg-avatar { order: 2; }
-.msg-avatar { width: 26px; height: 26px; flex: 0 0 26px; display: grid; place-items: center; border-radius: 50%; font-size: 0.9231rem; }
+.msg-avatar { width: 26px; height: 26px; flex: 0 0 26px; display: grid; place-items: center; border-radius: 50%; font-family: var(--font-spec); font-size: 0.9231rem; }
 .message-content { padding: var(--spacing-10) var(--spacing-14); border: 1px solid color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .bot-message.user .message-content { border-color: var(--border-subtle); border-radius: var(--bubble-radius) var(--bubble-radius) var(--radius-sm) var(--bubble-radius); background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
-.reasoning { margin: 0 0 var(--spacing-6); border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.8462rem; }
-.reasoning summary { cursor: pointer; padding: 4px var(--spacing-8); color: var(--text-tertiary); list-style: none; }
+.reasoning { margin: 0 0 var(--spacing-6); border-radius: var(--radius-sm); background: var(--bg-input); font-family: var(--font-spec); font-size: 13px; }
+.reasoning summary { cursor: pointer; padding: var(--spacing-4) var(--spacing-8); color: var(--text-tertiary); list-style: none; }
 .reasoning summary::-webkit-details-marker { display: none; }
 .reasoning-body { padding: 0 var(--spacing-8) var(--spacing-6); color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* 气泡只有一套规则：方向、配色与 meta 对齐都按角色决定（bot 在左、人在右），
    本地与 QQ 记录同形。头像侧由 .msg-avatar 的 order 决定（user 通用规则给 order:2 → 头像在气泡右）。 */
 /* 弹窗内容：BaseModal 的 body 已给 padding 与纵向间距，这里只管控件自身。
    显示名走 AvatarPicker 的 #fields 插槽，与头像同一栏，不再另起一行。 */
-.display-field { display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
-.display-field input { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 9px var(--spacing-10); font: inherit; font-size: 0.9231rem; }
+.display-field { display: flex; flex-direction: column; gap: var(--spacing-6); color: var(--text-secondary); font-family: var(--font-spec); font-size: 14px; }
+.display-field input { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); height: var(--control-h); padding: 0 var(--padding); font-family: var(--font-spec); font-size: 14px; }
 .display-field input:focus { border-color: var(--accent-primary); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent); }
-.form-error { color: var(--danger-text); font-size: 0.8462rem; }
+.form-error { color: var(--danger-text); font-family: var(--font-spec); font-size: 13px; }
 /* 重置是整表单级的动作，和取消/保存同一层；margin-right:auto 把它推到左端 */
 .display-reset { margin-right: auto; }
 /* 行右侧的 ⋯ 默认藏起来：hover 淡入 / 触屏常显的行为由 .icon-button 统一提供
   （该元素同时挂 icon-button conv-menu 两个类），这里不再重复一份。 */
 .msg-body { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--spacing-2); }
 .bot-message.user .msg-body { align-items: flex-end; }
-.msg-meta { color: var(--text-tertiary); font-size: 0.7692rem; }
+.msg-meta { color: var(--text-tertiary); font-family: var(--font-spec); font-size: 13px; }
 /* 日期分隔线：居中淡色小字，两侧渐隐细线，不打断阅读节奏。 */
-.day-divider { align-self: center; display: flex; align-items: center; gap: var(--spacing-10); margin: var(--spacing-12) 0 var(--spacing-10); color: var(--text-tertiary); font-size: 0.7692rem; }
+.day-divider { align-self: center; display: flex; align-items: center; gap: var(--spacing-10); margin: var(--spacing-12) 0 var(--spacing-10); color: var(--text-tertiary); font-family: var(--font-spec); font-size: 13px; }
 .day-divider::before, .day-divider::after { content: ''; width: 44px; height: 1px; background: linear-gradient(90deg, transparent, var(--border-subtle), transparent); }
 /* 三档间距：同轮连发 4px（一眼是连着发的）、同一人另起一轮 8px、换人 10px。
    头像在连发时隐去重复，说话人那行按「轮」标（见模板的 bubbleIndex === 0）。 */
@@ -708,7 +819,7 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
    会把一行字撑成 60px 高的框；拆成多条气泡后每条都吃一遍，必须清掉。 */
 .message-content :deep(.markdown-body) > :first-child { margin-top: 0; }
 .message-content :deep(.markdown-body) > :last-child { margin-bottom: 0; }
-.qq-empty { margin: auto; color: var(--text-secondary); font-size: 0.9231rem; }
+.qq-empty { margin: auto; color: var(--text-secondary); font-family: var(--font-spec); font-size: 14px; }
 .typing-dots { display: inline-flex; align-items: center; gap: var(--spacing-4); padding: 3px 0; min-height: 1.7em; }
 .typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-tertiary); animation: bot-bob 1.2s ease-in-out infinite; }
 .typing-dots i:nth-child(2) { animation-delay: .15s; } .typing-dots i:nth-child(3) { animation-delay: .3s; }
@@ -718,33 +829,39 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
 @keyframes bot-bob { 0%, 60%, 100% { transform: translateY(0); opacity: .55; } 30% { transform: translateY(-3px); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .typing-dots i { animation: none; } }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-.chat-error { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-12); margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-8); padding: var(--spacing-10) var(--spacing-12); border: 1px solid var(--danger-border); border-radius: var(--radius-md); background: var(--danger-bg); color: var(--danger-text); font-size: 0.9231rem; line-height: 1.6; } .chat-error span { min-width: 0; overflow-wrap: anywhere; }
-.readonly-bar { display: flex; flex-direction: column; align-items: center; gap: var(--spacing-8); margin: 0; padding: var(--spacing-8) var(--spacing-24) var(--spacing-12); color: var(--text-tertiary); font-size: 0.7692rem; text-align: center; }
+.chat-error { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-12); margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-8); padding: var(--spacing-10) var(--spacing-12); border: 1px solid var(--danger-border); border-radius: var(--radius-sm); background: var(--danger-bg); color: var(--danger-text); font-family: var(--font-spec); font-size: 14px; line-height: 1.6; } .chat-error span { min-width: 0; overflow-wrap: anywhere; }
+/* 只读提示条与消息区、输入框同列：三者共用 760px 居中公式 */
+.readonly-bar { display: flex; flex-direction: column; align-items: center; gap: var(--spacing-8); margin: 0; padding: var(--spacing-8) max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-12); color: var(--text-tertiary); font-size: 0.7692rem; text-align: center; }
 .probe-note { max-width: 760px; line-height: 1.6; overflow-wrap: anywhere; }
 .chat-composer { position: relative; display: flex; align-items: center; gap: var(--spacing-8); margin: 0 max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-20); padding: var(--spacing-6) var(--spacing-6) var(--spacing-6) var(--spacing-16); border: 1px solid var(--border-subtle); border-radius: var(--radius-pill); background: var(--bg-elevated); box-shadow: var(--shadow-lg); transition: border-color var(--transition-fast), box-shadow var(--transition-fast); }
 .chat-composer:focus-within { border-color: var(--accent-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent), var(--shadow-lg); }
-.composer-input { flex: 1; min-width: 0; display: block; max-height: 32vh; overflow-y: auto; border: 0; outline: 0; resize: none; background: transparent; color: var(--text-primary); padding: var(--spacing-8) 0; font-family: var(--font-sans); font-size: 1.1538rem; line-height: 1.6; caret-color: var(--accent-primary); }
+.composer-input { flex: 1; min-width: 0; display: block; max-height: 32vh; overflow-y: auto; border: 0; outline: 0; resize: none; background: transparent; color: var(--text-primary); padding: var(--spacing-8) 0; font-family: var(--font-spec); font-size: 1.1538rem; line-height: 1.6; caret-color: var(--accent-primary); }
 .composer-input.with-count { padding-bottom: var(--spacing-20); }
 .composer-input::placeholder { color: var(--text-tertiary); }
-.composer-count { position: absolute; left: var(--spacing-16); bottom: var(--spacing-4); color: var(--text-tertiary); font-size: 0.7692rem; font-variant-numeric: tabular-nums; pointer-events: none; }
+.composer-count { position: absolute; left: var(--spacing-16); bottom: var(--spacing-4); color: var(--text-tertiary); font-family: var(--font-spec); font-size: 13px; font-variant-numeric: tabular-nums; pointer-events: none; }
 .composer-count.full { color: var(--danger-text); }
 .composer-send { width: 32px; height: 32px; flex: 0 0 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: linear-gradient(150deg, var(--accent-primary), color-mix(in srgb, var(--accent-primary) 60%, #ffffff)); color: var(--accent-on); cursor: pointer; box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-primary) 35%, transparent); transition: filter var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast); }
 .composer-send:hover:not(:disabled) { filter: brightness(1.06); } .composer-send:disabled { background: var(--bg-active); color: var(--text-tertiary); cursor: default; box-shadow: none; } .composer-send svg { width: 15px; height: 15px; }
 .composer-send.stop { background: var(--danger-bg); color: var(--danger-text); box-shadow: none; } .composer-send.stop:hover:not(:disabled) { filter: none; background: var(--danger-border); }
-.persona-page { flex: 1; min-height: 0; overflow-y: auto; padding: var(--spacing-24) 28px; } .section-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; } .section-heading h2 { font-size: 1.3846rem; }
-.persona-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--spacing-16); } .persona-card { display: flex; flex-direction: column; padding: 18px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-elevated); }
-.persona-card-head { display: flex; align-items: center; gap: var(--spacing-12); } .persona-large-avatar { width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center; border-radius: 50%; font-size: 2.4615rem; } .persona-card-head h3 { margin-bottom: var(--spacing-4); font-size: 1.2308rem; } .persona-card-head div span { color: var(--text-tertiary); font-size: 0.8462rem; }
+.persona-page { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: var(--spacing-24) var(--margin); }
+/* 空状态双向居中，且只在无人格时占满；有列表时它不渲染，不影响网格 */
+.persona-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+.persona-empty p { max-width: 420px; color: var(--text-tertiary); font-family: var(--font-spec); font-size: 14px; line-height: 1.7; text-align: center; } .section-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-20); } .section-heading h3 { font-family: var(--font-spec); font-size: var(--page-title-size); }
+/* persona-page 是 flex column：网格与标题都不许被纵向压缩，否则长列表塌高 */
+.section-heading, .persona-grid { flex: 0 0 auto; }
+.persona-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--spacing-16); } .persona-card { display: flex; flex-direction: column; padding: var(--padding); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-elevated); }
+.persona-card-head { display: flex; align-items: center; gap: var(--spacing-12); } .persona-large-avatar { width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center; border-radius: 50%; font-family: var(--font-spec); font-size: 2.4615rem; } .persona-card-head h3 { margin-bottom: var(--spacing-4); font-family: var(--font-spec); font-size: 1.2308rem; } .persona-card-head div span { color: var(--text-tertiary); font-family: var(--font-spec); font-size: 13px; }
 /* 默认人格：列表置顶、渠道迁移兜底、不可删除。标记跟名字同一行，不另起一个信息块。 */
-.default-chip { margin-left: 6px; padding: 1px 7px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-text); font-size: 0.6923rem; font-weight: 500; vertical-align: 3px; white-space: nowrap; }
+.default-chip { margin-left: var(--spacing-6); padding: 1px 7px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-text); font-family: var(--font-spec); font-size: 12px; font-weight: 500; vertical-align: 3px; white-space: nowrap; }
 /* 卡片定高：性格截两行、开场白一行占位 —— 长文案不撑爆网格，卡片高度不随内容漂 */
-.personality { flex: 1; margin: 18px 0 var(--spacing-12); color: var(--text-secondary); font-size: 1rem; line-height: 1.7; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 3.4em; } .persona-greeting { margin-bottom: var(--spacing-16); color: var(--text-tertiary); font-size: 0.9231rem; line-height: 1.6; min-height: 1.6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.personality { flex: 1; margin: var(--spacing-20) 0 var(--spacing-12); color: var(--text-secondary); font-family: var(--font-spec); font-size: 1rem; line-height: 1.7; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 3.4em; } .persona-greeting { margin-bottom: var(--spacing-16); color: var(--text-tertiary); font-family: var(--font-spec); font-size: 14px; line-height: 1.6; min-height: 1.6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .persona-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-6); }
 .msg-images { display: flex; flex-wrap: wrap; gap: var(--spacing-6); margin-bottom: var(--spacing-6); }
-.msg-image { max-width: 200px; max-height: 200px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); object-fit: contain; cursor: zoom-in; transition: filter var(--transition-fast), transform var(--transition-fast); }
+.msg-image { max-width: 200px; max-height: 200px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); object-fit: contain; cursor: zoom-in; transition: filter var(--transition-fast), transform var(--transition-fast); }
 .msg-image:hover { filter: brightness(1.06); transform: translateY(-1px); }
 /* 表情包是一张图而不是一句话：不带气泡底色与内边距，图本身就是这条消息。 */
 .message-content.sticker-only { padding: 0; border: 0; background: transparent; box-shadow: none; }
-.msg-sticker { display: block; width: 128px; height: 128px; border-radius: var(--radius-md); object-fit: contain; cursor: zoom-in; transition: filter var(--transition-fast), transform var(--transition-fast); }
+.msg-sticker { display: block; width: 128px; height: 128px; border-radius: var(--radius-sm); object-fit: contain; cursor: zoom-in; transition: filter var(--transition-fast), transform var(--transition-fast); }
 .msg-sticker:hover { filter: brightness(1.06); transform: translateY(-1px); }
 @media (max-width: 850px) { .chat-layout { grid-template-columns: 190px minmax(0, 1fr); } .bot-header { padding: var(--spacing-16); } }
 /* 窄屏：侧栏收成抽屉，点「会话」拉出，选完/点遮罩收起，聊天区拿满整行 */
@@ -759,7 +876,9 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 1.6923rem; letter-spacing: -.5px; }
     transition: transform var(--transition-fast);
   }
   .chat-layout.sidebar-open .chat-sidebar { transform: none; }
-  .sidebar-backdrop { position: absolute; inset: 0; z-index: 5; background: color-mix(in srgb, #000 32%, transparent); }
+  /* 遮罩读 --scrim：它是「浮层遮罩」的专名令牌，各主题自持色温（浅色 16%、
+     手记 14% 暖墨）。写死纯黑 32% 会在浅色/手记主题下压出一片不协调的灰。 */
+  .sidebar-backdrop { position: absolute; inset: 0; z-index: 5; background: var(--scrim); backdrop-filter: blur(2px); }
   .sidebar-toggle { display: inline-flex; }
 }
 @media (prefers-reduced-motion: reduce) { .chat-sidebar { transition: none; } }

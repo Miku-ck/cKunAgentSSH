@@ -108,13 +108,13 @@ const fullCreatedTime = computed(() => new Date(props.connection.createdAt).toLo
   display: grid;
   grid-template-columns: var(--rm-grid-cols, 22px 12px minmax(110px, 1.1fr) minmax(160px, 1.4fr) 60px minmax(80px, 0.9fr) 84px 84px 112px);
   align-items: center;
-  gap: var(--spacing-10);
-  height: 44px;
-  padding: 0 var(--spacing-12);
+  gap: var(--spacing);
+  height: 36px;
+  padding: 0 var(--padding);
   border-bottom: 1px solid var(--border-subtle);
   cursor: default;
   transition: background var(--transition-fast);
-  font-family: var(--font-sans);
+  font-family: var(--font-spec);
   text-align: left;
 }
 

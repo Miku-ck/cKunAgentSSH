@@ -1061,7 +1061,7 @@ onUnmounted(() => {
 .df-panel {
   position: absolute; right: var(--spacing-16); bottom: calc(24px + var(--spacing-8)); z-index: 10;
   width: 440px; max-width: calc(100% - var(--spacing-32));
-  background: var(--bg-elevated); border: 1px solid var(--divider-primary); border-radius: var(--radius-md);
+  background: var(--bg-elevated); border: 1px solid var(--divider-primary); border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg); overflow: hidden;
 }
 .df-head { display: flex; align-items: center; gap: var(--spacing-8); padding: var(--spacing-8) var(--spacing-12); border-bottom: 1px solid var(--divider-primary); }

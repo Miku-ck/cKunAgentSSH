@@ -411,25 +411,44 @@ onMounted(refresh)
   padding: var(--spacing-10) var(--spacing-12);
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 .audit-filters select,
 .audit-filters input {
+  height: var(--control-h);
   background: var(--bg-input);
   border: 1px solid var(--border-default);
   color: var(--text-primary);
   border-radius: var(--radius-sm);
-  padding: var(--spacing-4) var(--spacing-8);
-  font-size: 0.9231rem;
+  padding: 0 var(--padding);
+  font-size: 14px;
+  font-family: var(--font-spec);
 }
 .audit-filters input { flex: 1; max-width: 240px; }
+/* 选择器随栅格列流动：xs 铺满 / sm 半屏 / md 三分之一 / lg 与 xl 四分之一 */
+.audit-filters select {
+  flex: 1 1 180px;
+  max-width: 320px;
+}
+@media (max-width: 767px) {
+  .audit-filters { flex-wrap: wrap; }
+  .audit-filters select,
+  .audit-filters input { flex: 1 1 100%; max-width: none; }
+}
 .audit-table-wrap {
   flex: 1;
   overflow: auto;
+  min-height: 0;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   margin: var(--spacing-12) var(--spacing-16) 0;
   background: var(--bg-elevated);
+}
+
+/* ── xl 断点（≥1920px）：规范补充条款 2 —— 不出滚动条 ──
+   表格卡 overflow:hidden，行区在卡内自适应高度。 */
+@media (min-width: 1920px) {
+  .audit-table-wrap { overflow: hidden; }
 }
 .audit-table {
   width: 100%;

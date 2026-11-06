@@ -1069,6 +1069,9 @@ onMounted(() => { void load() })
   color: var(--text-tertiary);
   cursor: pointer;
 }
+/* 规范 7.3：文字链接悬停加粗 */
+.grdc-linkbtn:hover:not(:disabled) { color: var(--text-primary); text-decoration: underline; font-weight: 600; }
+.grdc-linkbtn:disabled { opacity: .45; cursor: default; }
 .grdc-pushprev {
   flex-shrink: 0;
   font-size: 0.8462rem;
@@ -1191,28 +1194,6 @@ onMounted(() => { void load() })
 /* 移出列表：仅动注册表不动文件，克制地放动作条末位 */
 .grdp-remove { color: var(--status-error-text); border-color: color-mix(in srgb, var(--status-error-text) 35%, transparent); }
 .grdp-remove:hover:not(:disabled) { background: color-mix(in srgb, var(--status-error-text) 10%, transparent); }
-
-/* 按钮基础形态（面板是独立 scoped 文件，吃不到父级样式；与 GitReposPanel 同款） */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-6);
-  height: 26px;
-  padding: 0 var(--spacing-10);
-  border: 1px solid var(--border-default);
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 0.9231rem;
-  font-family: var(--font-sans);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.btn:hover:not(:disabled) { background: var(--bg-hover); }
-.btn:disabled { opacity: 0.45; cursor: default; }
-.btn-primary { background: var(--accent-primary); border-color: var(--accent-primary); color: var(--accent-on); }
-.btn-primary:hover:not(:disabled) { filter: brightness(1.15); }
-.btn-sm { height: 22px; padding: 0 var(--spacing-8); font-size: 0.8462rem; }
 
 .mono { font-family: var(--font-mono); }
 </style>

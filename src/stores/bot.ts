@@ -23,6 +23,16 @@ export const useBotStore = defineStore('bot', () => {
   const lastStreamedId = ref('')
   const error = ref('')
   const lastFailedText = ref('')
+  /** init() 在途标记：首屏/重试期间为空状态与错误态之间的「正在读取」占位，
+   *  避免网络慢时用户把「还没读到」误认为「真的没有」。 */
+  const loading = ref(false)
+  /** 会话消息读取在途：切会话时旧消息已清空，没有这个标记就是一片空白。 */
+  const messagesLoading = ref(false)
+  /** 远端渠道同一口径：remoteMessages 清空到拉回之间也有一段空白。 */
+  const remoteMessagesLoading = ref(false)
+  /** 会话列表同一口径：refreshRemote 会先把列表清空再拉回，
+   *  没有这个标记就会闪一句「还没有 QQ 消息」的空态。 */
+  const remoteConversationsLoading = ref(false)
   const channel = ref<'local' | 'qq' | 'wechat'>('local')
   /** 远程渠道（QQ / 微信）的只读列表：两边同一条读取路径，只有渠道名不同。 */
   const remoteConversations = ref<BotConversation[]>([])
@@ -61,6 +71,7 @@ export const useBotStore = defineStore('bot', () => {
     remoteActiveId.value = ''
     remoteError.value = ''
     probeNote.value = ''
+    remoteConversationsLoading.value = true
   }
 
   /**
@@ -90,6 +101,7 @@ export const useBotStore = defineStore('bot', () => {
     remoteMessages.value = []
     // 上一条会话的探口结论对它自己才成立：不换会话就会把旧群的原因顶在新群头上
     probeNote.value = ''
+    remoteMessagesLoading.value = true
     try {
       const rows = await botApi.getMessages(id)
       if (remoteActiveId.value !== id || channel.value !== provider) return
@@ -98,6 +110,8 @@ export const useBotStore = defineStore('bot', () => {
     } catch (e) {
       if (channel.value !== provider) return
       remoteError.value = toFriendlyMessage(e, `${remoteChannelLabel.value}记录读取失败`)
+    } finally {
+      remoteMessagesLoading.value = false
     }
   }
 
@@ -106,6 +120,8 @@ export const useBotStore = defineStore('bot', () => {
     if (provider === 'local' || remoteRefreshing) return
     const label = remoteChannelLabel.value
     remoteRefreshing = true
+    // 首次进这个渠道时列表还是空的，拉回之前要占位（轮询期间列表有内容，不重置）
+    if (!remoteConversations.value.length) remoteConversationsLoading.value = true
     const seq = ++remoteQuerySeq
     try {
       const rows = await botApi.listChannelConversations(provider)
@@ -127,6 +143,7 @@ export const useBotStore = defineStore('bot', () => {
       if (channel.value === provider) remoteError.value = toFriendlyMessage(e, `${label}记录读取失败`)
     } finally {
       remoteRefreshing = false
+      remoteConversationsLoading.value = false
     }
   }
 
@@ -165,10 +182,13 @@ export const useBotStore = defineStore('bot', () => {
     error.value = ''
     lastFailedText.value = ''
     if (!id) return
+    messagesLoading.value = true
     try {
       messages.value = await botApi.getMessages(id)
     } catch (e) {
       error.value = toFriendlyMessage(e, '聊天记录读取失败')
+    } finally {
+      messagesLoading.value = false
     }
   }
 
@@ -182,6 +202,7 @@ export const useBotStore = defineStore('bot', () => {
   }
 
   async function init() {
+    loading.value = true
     error.value = ''
     try {
       const [personaRows, conversationRows] = await Promise.all([
@@ -198,6 +219,8 @@ export const useBotStore = defineStore('bot', () => {
       await selectConversation(selected)
     } catch (e) {
       error.value = toFriendlyMessage(e, 'cKunBot 初始化失败')
+    } finally {
+      loading.value = false
     }
   }
 
@@ -283,6 +306,7 @@ export const useBotStore = defineStore('bot', () => {
     activePersona, activeConversation, filteredConversations,
     relations, activeRelation,
     streamText, streamReasoning, streaming, error, lastFailedText, pacing, lastStreamedId,
+    loading, messagesLoading, remoteMessagesLoading, remoteConversationsLoading,
     channel, isRemote, remoteChannelLabel,
     remoteConversations, remoteMessages, remoteActiveId, remoteError, remoteActiveConversation,
     userAvatar,

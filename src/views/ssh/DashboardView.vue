@@ -631,9 +631,9 @@ const Sparkline = defineComponent({
   align-items: center;
   justify-content: space-between;
   height: var(--page-head-h);
-  padding: 0 var(--spacing-16);
+  padding: 0 var(--padding);
   border-bottom: 1px solid var(--border-subtle);
-  gap: var(--spacing-12);
+  gap: var(--spacing);
 }
 
 .conn-left {
@@ -722,10 +722,10 @@ const Sparkline = defineComponent({
 .dash-body {
   flex: 1;
   overflow-y: auto;
-  padding: var(--spacing-16);
+  padding: var(--padding);
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--spacing);
   /* 内容滚动画布：同整页根走 --canvas-bg，连接后不再用实心 --bg-base 重新盖住渐变 */
   background: var(--canvas-bg);
 }
@@ -733,11 +733,11 @@ const Sparkline = defineComponent({
 .dash-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--spacing-12);
+  gap: var(--gutter);
 }
 
 .card {
-  padding: var(--spacing-12) var(--spacing-14);
+  padding: var(--spacing) var(--padding);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
@@ -783,7 +783,7 @@ const Sparkline = defineComponent({
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  padding: var(--spacing-12) var(--spacing-14);
+  padding: var(--spacing) var(--padding);
 }
 
 .section-title {
@@ -906,7 +906,7 @@ const Sparkline = defineComponent({
 
 .proc-table td {
   text-align: center;
-  padding: 5px var(--spacing-8);
+  padding: var(--spacing-4) var(--spacing-8);
   border-bottom: 1px solid var(--border-subtle);
   font-variant-numeric: tabular-nums;
 }
@@ -995,7 +995,7 @@ const Sparkline = defineComponent({
 
 .proc-kill {
   padding: var(--spacing-2) var(--spacing-8);
-  border: none;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--accent-red);
@@ -1040,7 +1040,7 @@ const Sparkline = defineComponent({
 
 .port-table td {
   text-align: center;
-  padding: 5px var(--spacing-8);
+  padding: var(--spacing-4) var(--spacing-8);
   border-bottom: 1px solid var(--border-subtle);
   font-variant-numeric: tabular-nums;
 }
@@ -1183,14 +1183,32 @@ const Sparkline = defineComponent({
 
 /* ── 窄窗口 ── */
 @media (max-width: 760px) {
-  .dash-body { padding: var(--spacing-12); gap: var(--spacing-14); }
+  .dash-body { padding: var(--spacing); gap: var(--spacing); }
   .conn-stopped { max-width: 220px; }
-  .dash-section { padding: var(--spacing-10) var(--spacing-12); }
+  .dash-section { padding: var(--spacing-10) var(--spacing); }
   .disk-row { gap: var(--spacing-6); }
   .disk-mount { width: 76px; font-size: 0.8462rem; }
   .disk-size { width: 84px; font-size: 0.7692rem; }
   /* 原来这里封 .proc-name 110px 防溢出；列宽改按比例后固定布局自己会缩，
      封顶反而白丢名称列的宽度（副行更需要它） */
+}
+
+/* ── xl 断点（≥1920px）：规范补充条款 2 —— 不出滚动条 ──
+   内容区 overflow:hidden + 内部区块 fr 自适应高度，卡片内部不裁切。 */
+@media (min-width: 1920px) {
+  .dash-body {
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    gap: var(--spacing);
+  }
+  .dash-cards {
+    grid-row: 1;
+  }
+  .dash-section {
+    min-height: 0;
+    overflow: hidden;
+  }
 }
 
 /* ===============================================================

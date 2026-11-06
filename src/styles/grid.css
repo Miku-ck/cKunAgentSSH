@@ -1,0 +1,65 @@
+/**
+ * grid.css —— 24 栅格布局系统
+ *
+ * 实现「24 栅格规则」的布局规范：
+ *   - 24 列网格，列间距 Gutter 12px
+ *   - 响应式断点：xs<768 / sm≥768 / md≥992 / lg≥1440 / xl≥1920
+ *   - 同一列可为不同断点分别指定 span（补充条款 1 的「铺满适配」靠此实现）
+ *
+ * 维护约定：**本文件只保留有消费方的列档**。
+ * 消费方：RemoteManager.vue 的搜索栏（col-24 / col-sm-12 / col-md-8 / col-lg-6 / col-xl-6）。
+ * 要新档先加消费方再回到这里加规则；不要预置一批「以后可能用」的列 ——
+ * 留着无消费方的列档，下次改栅格时不会有任何一处渲染变化，只会让下一个人
+ * 以为「整套 24 栅格已经落地了」。
+ *
+ * 本文件只放栅格骨架，不放卡片/表格/表单等组件类 —— 那些各有归属
+ * （卡片见 variables.css 的 --radius-*/--shadow-*，表单见各弹窗 scoped，
+ * 表格见各视图 scoped）。曾有一批 .card/.spec-* 组件类在此，只被
+ * SpecDemoPage 演示页消费；演示页移除后随之退役。
+ */
+
+/* ── 栅格容器 ── */
+.grid-row {
+  display: flex;
+  flex-wrap: wrap;
+  margin-left: calc(var(--gutter) / -2);
+  margin-right: calc(var(--gutter) / -2);
+}
+
+/* ── 栅格列基础 ──
+   flex: 0 0 auto 而非只写 width：flex 子项的 flex-shrink 默认是 1，
+   容器比「各列宽之和」窄时会按比例压缩列宽，栅格比例就静默失效了
+   （col-lg-6 想占 25%，实际可能缩到内容宽）。width 定死 + 不收缩才锁得住档位。 */
+.grid-col {
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
+  padding-left: calc(var(--gutter) / 2);
+  padding-right: calc(var(--gutter) / 2);
+  box-sizing: border-box;
+}
+
+/* ── 基础列宽（xs：<768px，占满一行）── */
+.col-24 { width: calc(100% / 24 * 24); }
+
+/* ── 响应式断点 ── */
+
+/* sm：≥768px */
+@media (min-width: 768px) {
+  .col-sm-12 { width: calc(100% / 24 * 12); }
+}
+
+/* md：≥992px */
+@media (min-width: 992px) {
+  .col-md-8 { width: calc(100% / 24 * 8); }
+}
+
+/* lg：≥1440px */
+@media (min-width: 1440px) {
+  .col-lg-6 { width: calc(100% / 24 * 6); }
+}
+
+/* xl：≥1920px */
+@media (min-width: 1920px) {
+  .col-xl-6 { width: calc(100% / 24 * 6); }
+}

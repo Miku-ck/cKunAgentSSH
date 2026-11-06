@@ -3,6 +3,13 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import { useToastStore } from './stores/toast'
 import './styles/global.css'
+// 24 栅格规范令牌层与布局系统（spec-tokens → grid）。
+// 与现有 variables.css 并存：规范里「画布无关」的档（危险实色 + 前景）经此层
+// 供 button.css 消费；控件高度/间距/字体都接回 variables.css 的既有令牌
+// （--control-h / --spacing-* / --font-sans），中性色板随主题走 --text-*/--border-*
+// （规范的 #333333/#E4E7ED 是浅色画布档，直接套深色主题会给主文字装 1.37:1 的皮）。
+import './styles/spec-tokens.css'
+import './styles/grid.css'
 // Markdown 渲染容器的共享视觉词汇：聊天（MarkdownStream）与执行历史（HistoryList）
 // 都经 renderMarkdown 产出 HTML，代码块/表格/标题样式只能有一份。
 import './styles/markdown.css'

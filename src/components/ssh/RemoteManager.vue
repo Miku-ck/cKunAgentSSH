@@ -6,17 +6,20 @@
         <span>远程管理</span>
       </div>
       <div class="rm-header-actions">
-        <button v-if="remoteSessionCount > 1" class="btn" @click="showBulkModal = true" title="对当前活动远程会话批量下发命令并对比结果">
+        <button v-if="remoteSessionCount > 1" class="btn btn-outline" @click="showBulkModal = true" title="对当前活动远程会话批量下发命令并对比结果">
           批量下发（{{ remoteSessionCount }} 台）
         </button>
         <button class="btn btn-primary" @click="showNewDialog = true">新建连接</button>
       </div>
     </div>
 
-    <!-- 工具栏：两类连接共用一条搜索，类型由行内徽标区分 -->
+    <!-- 工具栏：两类连接共用一条搜索，类型由行内徽标区分。
+         24 栅格：搜索框 xs 铺满 → sm 半屏 → md 8 列 → lg/xl 6 列。 -->
     <div class="rm-toolbar">
-      <div class="rm-search">
-        <input v-model="searchText" placeholder="搜索名称/主机/用户名/备注..." />
+      <div class="grid-row">
+        <div class="grid-col col-24 col-sm-12 col-md-8 col-lg-6 col-xl-6 rm-search">
+          <input v-model="searchText" placeholder="搜索名称/主机/用户名/备注..." />
+        </div>
       </div>
     </div>
 
@@ -88,7 +91,7 @@
       <button class="btn btn-danger" @click="handleDeleteBatch">
         删除
       </button>
-      <button class="btn" @click="clearSelection">取消选择</button>
+      <button class="btn btn-outline" @click="clearSelection">取消选择</button>
     </div>
 
     <!-- 右键菜单：按行类型给出不同动作（SSH 开终端；TLS 接入/断开） -->
@@ -563,7 +566,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   height: var(--page-head-h);
-  padding: 0 var(--spacing-16);
+  padding: 0 var(--padding);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
@@ -587,8 +590,8 @@ onUnmounted(() => {
 .rm-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--spacing-12);
-  padding: var(--spacing-10) var(--spacing-16);
+  gap: var(--spacing);
+  padding: var(--spacing) var(--padding);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   flex-wrap: wrap;
@@ -597,10 +600,9 @@ onUnmounted(() => {
 .rm-search {
   display: flex;
   align-items: center;
-  gap: var(--spacing-8);
-  width: 240px;
-  height: 30px;
-  padding: 0 var(--spacing-10);
+  gap: var(--spacing);
+  height: var(--control-h);
+  padding: 0 var(--padding);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   transition: border-color var(--transition-fast);
@@ -723,9 +725,9 @@ onUnmounted(() => {
 .rm-batch-bar {
   display: flex;
   align-items: center;
-  gap: var(--spacing-8);
-  height: 40px;
-  padding: 0 var(--spacing-16);
+  gap: var(--spacing);
+  height: var(--control-h);
+  padding: 0 var(--padding);
   border-top: 1px solid var(--border-default);
   /* 底部批量操作栏：结构面走 --canvas-bg 与整页统一 */
   background: var(--canvas-bg);
@@ -781,5 +783,12 @@ onUnmounted(() => {
   height: 1px;
   margin: var(--spacing-4) 0;
   background: var(--border-subtle);
+}
+
+/* ── xl 断点（≥1920px）：规范补充条款 2 —— 不出滚动条 ── */
+@media (min-width: 1920px) {
+  .rm-list {
+    overflow: hidden;
+  }
 }
 </style>

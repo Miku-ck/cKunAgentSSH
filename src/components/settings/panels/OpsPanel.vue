@@ -170,7 +170,7 @@
                 />
                 分钟
               </label>
-              <button class="btn btn-ghost btn-sm" @click="remove(task.id)">删除</button>
+              <button class="btn btn-ghost btn-xs" @click="remove(task.id)">删除</button>
             </div>
           </div>
         </div>
@@ -470,5 +470,4 @@ onMounted(() => {
 .alert-task-rules { margin-top: var(--spacing-4); font-size: 0.8846rem; color: var(--text-secondary); line-height: 1.5; }
 .alert-task-foot { display: flex; align-items: center; justify-content: space-between; margin-top: var(--spacing-8); }
 .cooldown-label { display: inline-flex; align-items: center; gap: var(--spacing-6); font-size: 0.8846rem; color: var(--text-secondary); }
-.btn-sm { height: 24px; padding: 0 var(--spacing-8); font-size: 0.8462rem; }
 </style>

@@ -371,37 +371,37 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* 顶栏 padding 抄 bot-header（含它既成的 28px）：编辑态顶替的就是同一行，
-   品牌横移会让人觉得切了页。 */
+/* 顶栏 padding 与 bot-header 同源（同一组令牌）：编辑态顶替的就是同一行，
+   各抄一份字面量迟早漂移。 */
 .editor-head {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: var(--spacing-8);
-  padding: var(--spacing-20) 28px var(--spacing-12);
+  padding: var(--spacing-20) var(--margin) var(--spacing-12);
   border-bottom: 1px solid var(--border-subtle);
 }
 .head-spacer { flex: 1; }
-.head-stat { color: var(--text-tertiary); font-size: 0.8462rem; }
+.head-stat { color: var(--text-tertiary); font-size: 0.8462rem; font-family: var(--font-spec); }
 .persona-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .editor-shell { flex: 1; min-height: 0; display: flex; }
 .editor-rail {
   flex: 0 0 190px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-2);
   padding: var(--spacing-16) var(--spacing-8);
   border-right: 1px solid var(--divider-primary);
   overflow-y: auto;
 }
 .rail-item {
-  padding: 6px var(--spacing-10);
+  padding: var(--spacing-6) var(--spacing);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-tertiary);
-  font: inherit;
-  font-size: 0.9231rem;
+  font-family: var(--font-spec);
+  font-size: 14px;
   text-align: left;
   cursor: pointer;
   transition: color var(--transition-fast), background var(--transition-fast);
@@ -411,7 +411,7 @@ onMounted(() => {
   color: var(--accent-text);
   background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
 }
-.editor-scroll { flex: 1; min-width: 0; overflow-y: auto; padding: var(--spacing-20) var(--spacing-24) var(--spacing-24); }
+.editor-scroll { flex: 1; min-width: 0; overflow-y: auto; padding: var(--spacing-20) var(--margin) var(--spacing-24); }
 .editor-section {
   max-width: 760px;
   margin: 0 auto var(--spacing-20);
@@ -426,24 +426,28 @@ onMounted(() => {
 .editor-section h3 {
   margin: 0;
   color: var(--text-primary);
-  font-size: 0.9231rem;
+  font-family: var(--font-spec);
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: .2px;
 }
-.field { display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
+.field { display: flex; flex-direction: column; gap: var(--spacing-6); color: var(--text-secondary); font-family: var(--font-spec); font-size: 14px; }
 .field input, .field select, .field textarea {
   width: 100%;
   box-sizing: border-box;
+  height: var(--control-h);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--bg-base);
   color: var(--text-primary);
-  padding: 9px var(--spacing-10);
-  font: inherit;
-  font-size: 0.9231rem;
+  padding: 0 var(--padding);
+  font-family: var(--font-spec);
+  font-size: 14px;
   line-height: 1.6;
   resize: vertical;
 }
+/* textarea 是长卷，高度由 rows 决定，不吃控件高度 */
+.field textarea { height: auto; padding: var(--spacing-8) var(--padding); }
 .field input:focus, .field select:focus, .field textarea:focus {
   border-color: var(--accent-primary);
   outline: none;
@@ -451,8 +455,9 @@ onMounted(() => {
 }
 .field-inline { flex-direction: row; align-items: center; gap: var(--spacing-10); }
 .field-inline span { flex: 0 0 auto; }
-.field-inline input { width: auto; }
-.field-hint { color: var(--text-tertiary); font-size: 0.8462rem; font-style: normal; }
+/* 复选框不吃控件高度，只按自己的尺寸 */
+.field-inline input { width: auto; height: auto; padding: 0; }
+.field-hint { color: var(--text-tertiary); font-family: var(--font-spec); font-size: 0.8462rem; font-style: normal; }
 .chips { display: flex; flex-wrap: wrap; gap: var(--spacing-6); }
 .chip {
   padding: 5px var(--spacing-12);
@@ -460,8 +465,8 @@ onMounted(() => {
   border-radius: var(--radius-pill);
   background: var(--bg-base);
   color: var(--text-secondary);
-  font: inherit;
-  font-size: 0.9231rem;
+  font-family: var(--font-spec);
+  font-size: 14px;
   cursor: pointer;
   transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
 }
@@ -479,7 +484,7 @@ onMounted(() => {
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-tertiary);
-  font: inherit;
+  font-family: var(--font-spec);
   font-size: 0.8462rem;
   cursor: pointer;
   transition: color var(--transition-fast), border-color var(--transition-fast);
@@ -492,7 +497,7 @@ onMounted(() => {
   gap: var(--spacing-8);
   max-width: 640px;
 }
-.sticker-card { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.sticker-card { margin: 0; display: flex; flex-direction: column; align-items: center; gap: var(--spacing-4); }
 .sticker-card img {
   width: 100%;
   aspect-ratio: 1;
@@ -500,7 +505,7 @@ onMounted(() => {
   border-radius: var(--radius-sm);
   object-fit: cover;
 }
-.sticker-card figcaption { color: var(--text-tertiary); font-size: 0.8462rem; line-height: 1.2; }
-.form-error { color: var(--danger-text); font-size: 0.9231rem; }
+.sticker-card figcaption { color: var(--text-tertiary); font-family: var(--font-spec); font-size: 0.8462rem; line-height: 1.2; }
+.form-error { color: var(--danger-text); font-family: var(--font-spec); font-size: 14px; }
 @media (max-width: 900px) { .editor-rail { display: none; } }
 </style>

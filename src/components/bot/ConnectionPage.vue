@@ -84,10 +84,12 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 </script>
 
 <style scoped>
-.connection-page { flex: 1; min-height: 0; overflow-y: auto; padding: var(--spacing-24); }
+/* 与 persona-page / editor-scroll 同一组垂直内边距：三页同层级，各写一个值会
+   在 tab 切换时看到内容跳一下。 */
+.connection-page { flex: 1; min-height: 0; overflow-y: auto; padding: var(--spacing-24) var(--margin); }
 .connection-group { display: flex; flex-direction: column; gap: var(--spacing-10); }
 .group-head { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-12); }
-.group-head h3 { margin: 0; font-size: 1.0769rem; }
-.empty-hint { margin: 0; color: var(--text-tertiary); font-size: 0.9231rem; line-height: 1.7; }
-.page-error { margin: 0; color: var(--danger-text); font-size: 0.9231rem; }
+.group-head h3 { margin: 0; font-family: var(--font-spec); font-size: 16px; }
+.empty-hint { margin: 0; color: var(--text-tertiary); font-family: var(--font-spec); font-size: 14px; line-height: 1.7; }
+.page-error { margin: 0; color: var(--danger-text); font-family: var(--font-spec); font-size: 14px; }
 </style>

@@ -548,14 +548,14 @@ async function handleSave() {
 .form-group input[type="text"],
 .form-group input[type="password"],
 .form-group input[type="number"] {
-  height: 32px;
-  padding: 0 var(--spacing-10);
+  height: var(--control-h);
+  padding: 0 var(--padding);
   background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 1rem;
-  font-family: var(--font-sans);
+  font-size: 14px;
+  font-family: var(--font-spec);
   outline: none;
   transition: border-color var(--transition-fast);
   width: 100%;
@@ -571,18 +571,24 @@ async function handleSave() {
 }
 
 .env-select select {
-  height: 32px;
+  height: var(--control-h);
   width: 100%;
-  padding: 0 var(--spacing-10);
+  /* 右侧留出下拉箭头空间：左内边距按规范 16px，右内边距 20px 容纳箭头 */
+  padding: 0 var(--spacing-20) 0 var(--padding);
   background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 1rem;
-  font-family: var(--font-sans);
+  font-size: 14px;
+  font-family: var(--font-spec);
   outline: none;
   cursor: pointer;
   box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%238b949e' stroke-width='1.5' stroke-linecap='round'%3E%3Cpolyline points='3 5 6 8 9 5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
 }
 .env-select select:focus {
   border-color: var(--accent-primary);
@@ -637,13 +643,13 @@ async function handleSave() {
 
 .input-with-btn input {
   flex: 1;
-  height: 32px;
-  padding: 0 var(--spacing-10);
+  height: var(--control-h);
+  padding: 0 var(--padding);
   background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: 14px;
   font-family: var(--font-mono);
   outline: none;
   transition: border-color var(--transition-fast);

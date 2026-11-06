@@ -1,79 +1,116 @@
 /**
- * button.css —— 跨面板统一按钮系统
+ * button.css —— 跨面板统一按钮系统（已对齐 24 栅格规范）
  *
- * 收敛前 7 个组件各写一份 .btn：ModelsPanel (无边框/6px/500) · OpsPanel (28px/4px) ·
- * settings-groups (24px/4px) · mem-btn (24px/4px) · TunnelView (自适应/sm) ·
- * rm-btn (自适应/sm) · approval-card (自适应/7px)。尺寸/字重/圆角各唱各的调，
- * 最大的疙瘩在 ConnectionModal：它是唯一用实心 --accent-primary 色块做主操作的，
- * 直接违反「操作按钮偏好纯文字彩色样式（无边框/背景）」的偏好。
+ * 本文件收敛全站 210+ 处 .btn 使用，直接实现「24 栅格规则」7.1-7.4 规范。
+ * 所有面板/页面无需逐个改模板，即获得规范按钮外观。
  *
- * 这套收敛后：所有面板走同一个「文本色 + 透明底 + hover 浮 --bg-hover」底座，
- * 语义只用字色和描边（统一 40–50% alpha）表达；不再有任何一块实心底色 CTA。
+ * 规范对齐：
+ *   7.1 主色按钮：主色背景 + 白字 + 图标，4px 圆角，12px 间距
+ *   7.2 功能按钮：白底 + 主题色边框，4px 圆角
+ *   7.3 文字链接：主题色/危险色/禁用色，悬停加粗
+ *   7.4 状态：常规/悬停/危险 #C71A1A/禁用
+ *
+ * 令牌来源：spec-tokens.css（圆角/间距/控件高度）+ 现有主题令牌（颜色）
+ * 消费方：全站所有 .btn* 使用处（210+ 处）
  *
  * 语义：
- *   .btn         次级/中性操作
- *   .btn-primary 业务主操作（开/关/保存/连接）
- *   .btn-danger  不可逆操作（删除/清空/断开）
+ *   .btn         次级/中性操作（文字链接风格，悬停浮起）
+ *   .btn-primary 业务主操作（实色主色背景 + 白字）
+ *   .btn-danger  不可逆操作（实色危险色背景 + 白字）
  *   .btn-ghost   比次级更弱的按钮（取消/跳过/非模态辅助）
- *   .btn-sm      紧凑场景再小一圈（表格内、折叠条、记忆抽屉）
- *
- * Consumers：遇到直接引用原 scoped 类名的 Vue 组件，同步把模板 class 换为 .btn-*；
- * 那些组件原来的 scoped .btn 块（若无再被引用）一并删除。
+ *   .btn-sm      紧凑场景（表格内、折叠条、记忆抽屉）
+ *   .btn-xs      超紧凑场景（步骤排序、行内操作）
  */
 
-/* ── 底座 ──
-   solid = 透明描边：hover 加 background 时布局不会跳 1px。字重回归 400：
-   ModelsPanel 原来的 500 在深色/米纸两套主题下都压过正文太多，正文找不回
-   视觉主次。 */
+/* ── 底座：规范 7.3 文字链接风格 ──
+   默认 .btn 是文字链接风格（透明底 + 主题色文字），悬停加粗。
+   这是项目中数量最多的一类按钮，保持轻量以适配紧凑布局。 */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--spacing-6);
-  height: 24px;
-  padding: 0 var(--spacing-10);
+  gap: var(--spacing);
+  height: var(--control-h);
+  padding: 0 var(--padding);
   border-radius: var(--radius-sm);
   background: transparent;
   border: 1px solid transparent;
-  color: var(--text-primary);
-  font-size: 0.9231rem;
+  color: var(--accent-text);
+  font-size: 14px;
   font-weight: 400;
-  font-family: inherit;
+  font-family: var(--font-spec);
   line-height: 1;
   cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+  transition: all 0.2s ease;
   user-select: none;
+  white-space: nowrap;
 }
-.btn:hover:not(:disabled) { background: var(--bg-hover); }
-.btn:active:not(:disabled) { background: var(--bg-active); }
-.btn:disabled { opacity: .45; cursor: default; }
+.btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  font-weight: 600;
+}
+.btn:active:not(:disabled) {
+  background: var(--bg-active);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .btn:focus-visible {
   outline: 2px solid var(--accent-primary);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
-/* ── Primary：强调色文本 + 50% alpha 描边 ──
-   color-mix 跟主题走，浅色主题下 50% alpha 也保可读。
-   强调色就只挂在这一档：基础 .btn 一律不吃强调色，面板想改按钮外观只需换变体，
-   不需要在自己作用域里再抄一份 color/border-color。 */
+/* ── 7.1 主色按钮：实色主色背景 + 白字 ── */
 .btn-primary {
-  color: var(--accent-text);
-  border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
+  background: var(--accent-primary);
+  color: var(--accent-on);
+  border-color: var(--accent-primary);
 }
 .btn-primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+  background: var(--accent-primary);
+  filter: brightness(1.1);
+  border-color: var(--accent-primary);
+  font-weight: 400;
+}
+.btn-primary:active:not(:disabled) {
+  background: var(--accent-primary);
+  filter: brightness(0.9);
 }
 
-/* ── Danger：危险文本 + 40% alpha 描边 ── */
+/* ── 7.2 功能按钮：白底 + 主题色边框 ──
+   用于上传、下载、导入、导出、提交、新增等。 */
+.btn-outline {
+  background: var(--bg-elevated);
+  color: var(--accent-text);
+  border-color: var(--accent-primary);
+}
+.btn-outline:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent-primary);
+  font-weight: 400;
+}
+
+/* ── 7.4 危险按钮：实色 #C71A1A 背景 + 白字（规范原文）──
+   不走 --danger-bg/-text：那是各主题的「浅底深字」语义档，形状不同。 */
 .btn-danger {
-  color: var(--danger-text);
-  border-color: color-mix(in srgb, var(--danger-text) 40%, transparent);
+  background: var(--color-danger);
+  color: var(--color-on-danger);
+  border-color: var(--color-danger);
 }
 .btn-danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--danger-text) 8%, transparent);
+  filter: brightness(1.1);
+  font-weight: 400;
+}
+.btn-danger:active:not(:disabled) {
+  filter: brightness(0.88);
+}
+.btn-danger:focus-visible {
+  outline: 2px solid var(--color-danger);
+  outline-offset: 2px;
 }
 
-/* ── Ghost：次级文本，无描边 ──
+/* ── Ghost：次级文字，无描边 ──
    比中性 .btn 再弱一档，用在取消/跳过/非模态辅助格。 */
 .btn-ghost {
   color: var(--text-secondary);
@@ -83,10 +120,37 @@
   color: var(--text-primary);
 }
 
-/* ── 紧凑尺寸：表格行、折叠条、记忆抽屉 ── */
+/* ── 紧凑尺寸：28px（规范小按钮） ──
+   用于表格行、折叠条、记忆抽屉等紧凑场景。 */
 .btn-sm {
-  height: 20px;
-  padding: 0 var(--spacing-8);
-  font-size: 0.8462rem;
+  height: var(--control-h-sm);
+  padding: 0 var(--spacing);
+  font-size: 13px;
   border-radius: var(--radius-sm);
+}
+
+/* ── 超紧凑尺寸：24px ──
+   用于步骤排序、行内操作等极紧凑场景。 */
+.btn-xs {
+  height: 24px;
+  padding: 0 var(--spacing-6);
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+}
+
+/* ── 断点按钮尺寸（规范 7.1/7.2）──
+   高度由 spec-tokens.css 的 --control-h 断点档统一给（lg 及以下 28px / xl 32px），
+   这里不再重定义高度，只保留**字号与横向内边距**的断点差 —— 那两项规范没写，
+   是本项目自己的两档。.btn-sm / .btn-xs 是显式紧凑档，不受断点影响。 */
+@media (max-width: 1919px) {
+  .btn:not(.btn-sm):not(.btn-xs) {
+    padding: 0 var(--spacing);
+    font-size: 13px;
+  }
+}
+@media (min-width: 1920px) {
+  .btn:not(.btn-sm):not(.btn-xs) {
+    padding: 0 var(--padding);
+    font-size: 14px;
+  }
 }

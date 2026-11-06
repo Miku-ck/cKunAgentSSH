@@ -1213,27 +1213,6 @@ watch(scopeKey, () => {
 .search input { background: transparent; border: none; color: var(--text-primary); font-size: 0.9231rem; font-family: var(--font-sans); flex: 1; min-width: 0; outline: none; }
 .search input::placeholder { color: var(--text-tertiary); }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-6);
-  height: 26px;
-  padding: 0 var(--spacing-10);
-  border: 1px solid var(--border-default);
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 0.9231rem;
-  font-family: var(--font-sans);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.btn:hover:not(:disabled) { background: var(--bg-hover); }
-.btn:disabled { opacity: .45; cursor: default; }
-.btn.btn-primary { background: var(--accent-primary); border-color: var(--accent-primary); color: var(--accent-on); }
-.btn.btn-primary:hover:not(:disabled) { filter: brightness(1.15); }
-.btn.btn-sm { height: 22px; padding: 0 var(--spacing-8); font-size: 0.8462rem; }
-
 /* ── 错误带 / 加载带 / 空态（对齐 Docker） ── */
 .err-band {
   display: flex;
@@ -1546,7 +1525,7 @@ watch(scopeKey, () => {
   gap: var(--spacing-10);
   padding: var(--spacing-12);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-base) 45%, transparent);
 }
 

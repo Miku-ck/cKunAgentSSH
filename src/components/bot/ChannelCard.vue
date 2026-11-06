@@ -378,29 +378,35 @@ async function remove() {
 .channel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-16); flex-wrap: wrap; }
 .channel-identity { display: flex; align-items: center; gap: var(--spacing-10); min-width: 0; }
 .channel-titles { min-width: 0; }
-.channel-identity h3 { margin: 0 0 var(--spacing-2); font-size: 1.0769rem; overflow-wrap: anywhere; }
-.channel-identity small { color: var(--text-tertiary); font-size: 0.8462rem; }
+.channel-identity h3 { margin: 0 0 var(--spacing-2); font-family: var(--font-spec); font-size: 16px; overflow-wrap: anywhere; }
+.channel-identity small { color: var(--text-tertiary); font-family: var(--font-spec); font-size: 0.8462rem; }
 .status-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--text-tertiary); }
 .status-dot.online { background: var(--status-success-text); box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-success-text) 18%, transparent); }
 .status-dot.connecting, .status-dot.reconnecting { background: var(--status-warn-text); }
 .status-dot.error { background: var(--danger-text); }
 .channel-actions { display: flex; align-items: center; gap: var(--spacing-8); flex-wrap: wrap; }
-.channel-status { color: var(--text-secondary); font-size: 0.9231rem; }
+.channel-status { color: var(--text-secondary); font-family: var(--font-spec); font-size: 14px; }
 .channel-status.online { color: var(--status-success-text); }
 .channel-status.connecting, .channel-status.reconnecting { color: var(--status-warn-text); }
 .channel-status.error { color: var(--danger-text); }
-.channel-detail { margin: 0; padding: var(--spacing-8) var(--spacing-10); border-radius: var(--radius-sm); background: var(--bg-hover); color: var(--danger-text); font-size: 0.9231rem; line-height: 1.6; overflow-wrap: anywhere; }
+.channel-detail { margin: 0; padding: var(--spacing-8) var(--padding); border-radius: var(--radius-sm); background: var(--bg-hover); color: var(--danger-text); font-family: var(--font-spec); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
 .channel-form { display: flex; flex-direction: column; gap: var(--spacing-14); padding-top: var(--spacing-12); border-top: 1px solid var(--border-subtle); }
-.field { display: flex; flex-direction: column; gap: 7px; color: var(--text-secondary); font-size: 0.9231rem; }
-.field input, .field select { width: 100%; box-sizing: border-box; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 9px var(--spacing-10); font: inherit; }
-.field input:focus, .field select:focus { border-color: var(--accent-primary); outline: none; }
+.field { display: flex; flex-direction: column; gap: var(--spacing-6); color: var(--text-secondary); font-family: var(--font-spec); font-size: 14px; }
+.field input, .field select { width: 100%; box-sizing: border-box; height: var(--control-h); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); padding: 0 var(--padding); font-family: var(--font-spec); font-size: 14px; }
+/* 焦点态与 bot 其他表单（PersonaEditor / display-field）同口径：
+   只改 1px 边框对低对比主题与色盲用户不够，一律配 3px/16% 泛光 */
+.field input:focus, .field select:focus {
+  border-color: var(--accent-primary);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent);
+}
 .field input:disabled, .field select:disabled { opacity: .6; cursor: not-allowed; }
 .webhook-block { display: flex; flex-direction: column; gap: var(--spacing-12); padding: var(--spacing-12); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-base); }
 .copy-row { display: flex; gap: var(--spacing-8); }
-.copy-row input { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.8462rem; }
-.webhook-steps { margin: 0; padding-left: 1.3em; color: var(--text-tertiary); font-size: 0.9231rem; line-height: 1.7; }
-.webhook-warning { margin: 0; color: var(--status-warn-text); font-size: 0.9231rem; line-height: 1.7; }
-.form-note, .privacy-note { margin: 0; color: var(--text-tertiary); font-size: 0.9231rem; line-height: 1.7; }
-.form-error { margin: 0; color: var(--danger-text); font-size: 0.9231rem; }
+.copy-row input { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 0.8462rem; }
+.webhook-steps { margin: 0; padding-left: 1.3em; color: var(--text-tertiary); font-family: var(--font-spec); font-size: 14px; line-height: 1.7; }
+.webhook-warning { margin: 0; color: var(--status-warn-text); font-family: var(--font-spec); font-size: 14px; line-height: 1.7; }
+.form-note, .privacy-note { margin: 0; color: var(--text-tertiary); font-family: var(--font-spec); font-size: 14px; line-height: 1.7; }
+.form-error { margin: 0; color: var(--danger-text); font-family: var(--font-spec); font-size: 14px; }
 .channel-form-actions { display: flex; gap: var(--spacing-8); flex-wrap: wrap; }
 </style>

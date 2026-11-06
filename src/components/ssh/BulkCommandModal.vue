@@ -409,7 +409,7 @@ watch(remoteSessions, (sessions) => {
   flex-direction: column;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-lg);
   padding: var(--spacing-16) 18px;
   /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的控件 */
   outline: none;

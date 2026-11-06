@@ -68,19 +68,22 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(view).not.toContain('QqRecords')
   })
 
-  it('远程会话可直接删除：与本地会话同一口径，不弹确认', () => {
-    const view = read('src/components/bot/CkunBotView.vue')
-    const start = view.indexOf('v-for="c in g.items"')
-    const end = view.indexOf('v-if="store.remoteError"')
-    expect(start).toBeGreaterThan(-1)
-    expect(end).toBeGreaterThan(start)
-    const rows = view.slice(start, end)
-    expect(rows).toContain('@click="removeRemote(c.id)"')
-    expect(rows).toContain('title="删除会话"')
-    const fn = view.match(/async function removeRemote[\s\S]*?\n}/)?.[0] || ''
-    expect(fn).toContain('store.deleteRemoteConversation(id)')
-    expect(fn).not.toContain('confirm(')
-  })
+it('远程会话删除：与本地同一口径，都走二次确认', () => {
+const view = read('src/components/bot/CkunBotView.vue')
+const start = view.indexOf('v-for="c in g.items"')
+const end = view.indexOf('v-if="store.remoteError"')
+expect(start).toBeGreaterThan(-1)
+expect(end).toBeGreaterThan(start)
+const rows = view.slice(start, end)
+expect(rows).toContain('@click="removeRemote(c.id)"')
+expect(rows).toContain('title="删除会话"')
+const fn = view.match(/async function removeRemote[\s\S]*?\n}/)?.[0] || ''
+expect(fn).toContain('store.deleteRemoteConversation(id)')
+// 远端记录删的也是后端记录（与本地同一个 deleteConversation 接口），不可逆：
+// 必须二次确认。入口是 hover 才浮现的小 ×，与旁边的 ⋯ 相邻，误触风险高。
+expect(fn).toContain('confirm(')
+expect(fn).toContain('danger: true')
+})
 
   it('QQ 与微信渠道每 5 秒刷新，贴底才自动滚动', () => {
     const view = read('src/components/bot/CkunBotView.vue')
@@ -154,23 +157,28 @@ describe('cKunBot 页面注册与关键交互', () => {
     }
   })
 
-  it('只读侧的「试一句」：不等窗口真发一句，结果只落回显条', () => {
-    const view = read('src/components/bot/CkunBotView.vue')
-    const store = read('src/stores/bot.ts')
-    const api = read('src/api/bot.ts')
-    expect(api).toContain("request<ProactiveProbeResult>('/bot/proactive/probe'")
-    expect(view).toContain('试一句')
-    expect(view).toContain('store.probeProactive(store.remoteActiveId)')
-    expect(view).toContain(':disabled="store.probing"')
-    // 微信没有主动发送通道：按钮只能在 QQ 上挂（后端会当场拒）
-    expect(view).toMatch(/v-if="store\.channel === 'qq'"[\s\S]{0,200}?store\.probeProactive/)
-    expect(view).toContain('<span v-if="store.probeNote" class="probe-note">{{ store.probeNote }}</span>')
-    // 回显是会话级的：换会话/换渠道都得清空，否则旧群的原因顶在新群头上
-    expect(store).toContain('probeNote.value = \'\'')
-    expect(store.match(/probeNote\.value = ''/g)?.length).toBeGreaterThanOrEqual(2)
-    // 探口不往消息列表里写东西：群主动那句本来就不落本地库，伪造一条就是假记录
-    expect(store).not.toMatch(/probeProactive[\s\S]{0,600}?remoteMessages\.value\.push/)
-  })
+it('只读侧的「试一句」：不等窗口真发一句，但对外发声必须先确认', () => {
+const view = read('src/components/bot/CkunBotView.vue')
+const store = read('src/stores/bot.ts')
+const api = read('src/api/bot.ts')
+expect(api).toContain("request<ProactiveProbeResult>('/bot/proactive/probe'")
+expect(view).toContain('试一句')
+// 它以 bot 身份往真实 QQ 会话发声，QQ 无撤回通道、且照常占 12 小时间隔与配额
+// —— 误点就发出去一条，必须二次确认（DESIGN.md 破坏性操作走 ConfirmDialog）。
+expect(view).toContain('@click="probeOnce"')
+expect(view).toContain(':disabled="store.probing"')
+expect(view).toContain('store.probeProactive(id)')
+const fn = view.match(/async function probeOnce[\s\S]*?\n}/)?.[0] || ''
+expect(fn).toContain('confirm(')
+// 微信没有主动发送通道：按钮只能在 QQ 上挂（后端会当场拒）
+expect(view).toMatch(/v-if="store\.channel === 'qq'"[\s\S]{0,200}?probeOnce/)
+expect(view).toContain('<span v-if="store.probeNote" class="probe-note">{{ store.probeNote }}</span>')
+// 回显是会话级的：换会话/换渠道都得清空，否则旧群的原因顶在新群头上
+expect(store).toContain('probeNote.value = \'\'')
+expect(store.match(/probeNote\.value = ''/g)?.length).toBeGreaterThanOrEqual(2)
+// 探口不往消息列表里写东西：群主动那句本来就不落本地库，伪造一条就是假记录
+expect(store).not.toMatch(/probeProactive[\s\S]{0,600}?remoteMessages\.value\.push/)
+})
 
   it('群回复不 @ 人：人格开关默认开，旧记录缺字段也照旧 @', () => {
     const editor = read('src/components/bot/PersonaEditor.vue')
@@ -307,14 +315,15 @@ describe('cKunBot 页面注册与关键交互', () => {
     expect(resolver).toContain('display_avatar')
   })
 
-  it('本地会话删除直接执行，不二次确认', () => {
-    const view = read('src/components/bot/CkunBotView.vue')
-    const fn = view.match(/async function removeConversation[\s\S]*?\n}/)?.[0] || ''
-    expect(fn).toContain('store.deleteConversation(id)')
-    expect(fn).not.toContain('confirm(')
-    // 人格删除仍留确认：它连带动一批会话与记录，不在这次的口径里
-    expect(view).toContain('删除人格「')
-  })
+it('本地会话删除走二次确认（不可逆：后端连聊天记录一起删）', () => {
+const view = read('src/components/bot/CkunBotView.vue')
+const fn = view.match(/async function removeConversation[\s\S]*?\n}/)?.[0] || ''
+expect(fn).toContain('store.deleteConversation(id)')
+expect(fn).toContain('confirm(')
+expect(fn).toContain('danger: true')
+// 人格删除仍留确认：它连带动一批会话与记录，不在这次的口径里
+expect(view).toContain('删除人格「')
+})
 
   it('默认人格不可删除：卡片标「默认」，删除按钮只出现在普通人格上', () => {
     const view = read('src/components/bot/CkunBotView.vue')

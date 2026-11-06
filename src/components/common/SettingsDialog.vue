@@ -239,13 +239,13 @@ defineExpose({ open, close })
      只是把整窗统一到它上面；浮起关系仍由 border + box-shadow 负责。 */
   background: var(--canvas-bg);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   color: var(--text-primary);
-  font-family: var(--font-sans);
+  font-family: var(--font-spec);
   -webkit-app-region: drag;
 }
 
@@ -256,7 +256,7 @@ defineExpose({ open, close })
 
 .settings-header {
   height: 48px;
-  padding: 0 var(--spacing-16);
+  padding: 0 var(--padding);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -308,17 +308,17 @@ defineExpose({ open, close })
      两处各画一次 --canvas-bg 在手记里会露馅 —— 纸纹的光斑按元素自己的盒子
      取样，侧栏与内容区就成了两张对不齐的纸。 */
   border-right: 1px solid var(--border-subtle);
-  padding: var(--spacing-12) var(--spacing-8);
+  padding: var(--spacing) var(--spacing-8);
   overflow-y: auto;
 }
 
 .nav-item {
   width: 100%;
-  height: 34px;
-  padding: 0 var(--spacing-12);
+  height: var(--control-h);
+  padding: 0 var(--spacing);
   display: flex;
   align-items: center;
-  gap: var(--spacing-10);
+  gap: var(--spacing);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -359,7 +359,7 @@ defineExpose({ open, close })
 .settings-content {
   flex: 1;
   overflow-y: auto;
-  padding: var(--spacing-24) 28px;
+  padding: var(--padding) var(--padding);
 }
 
 /* 过渡动画 */

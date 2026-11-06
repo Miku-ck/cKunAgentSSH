@@ -33,6 +33,9 @@
   background: none; border: none; color: var(--accent-text);
   cursor: pointer; font-size: 0.8846rem; font-family: inherit; padding: 0; text-decoration: underline;
 }
+/* 规范 7.3：文字链接悬停加粗 */
+.link-btn:hover:not(:disabled) { font-weight: 600; }
+.link-btn:disabled { color: var(--text-tertiary); cursor: not-allowed; }
 
 .tool-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 

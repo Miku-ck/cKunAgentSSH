@@ -232,7 +232,7 @@ watch(() => props.focusSeq, () => {
   padding: var(--spacing-10) var(--spacing-12);
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 .art-filters select,
 .art-filters input {
@@ -253,7 +253,7 @@ watch(() => props.focusSeq, () => {
   min-height: 0;
   overflow: auto;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   margin: var(--spacing-12) var(--spacing-16) 0;
   background: var(--bg-elevated);
 }

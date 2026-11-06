@@ -570,8 +570,6 @@ onUnmounted(() => {
 .step-row { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: var(--spacing-8); display: flex; flex-direction: column; gap: var(--spacing-6); }
 .step-row-head { display: flex; align-items: center; justify-content: space-between; font-size: 0.9231rem; color: var(--text-secondary); }
 .step-ops { display: flex; gap: var(--spacing-4); }
-.btn-xs { padding: 1px var(--spacing-6); font-size: 0.8462rem; }
-
 .form-err { color: var(--accent-red); font-size: 0.9231rem; }
 
 .history-load-error {
