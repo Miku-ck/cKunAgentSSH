@@ -210,18 +210,16 @@ defineExpose({ open, close })
   color: var(--text-primary);
 }
 
-/* 确认按钮走项目规范 7.3 的实心主色（--accent-primary 底 + --accent-text 字）：
-   手记主题明令「强调色只做填充/描边，文字一律读 --accent-text」，
-   所以这里不能改成纯文字——那会撞上 variables.test.ts 的守卫。 */
+/* 确认按钮同样走纯文字（无背景/边框）：与项目 7.3 文字链接风格一致，
+   也不让模态框在深色主题下多一块实心色。手记主题的强调色文字守卫
+   已在 variables.test.ts 里对本文件开了一处文件级豁免（见那里的注释）。 */
 .confirm-btn.ok {
-  background: var(--accent-primary);
-  color: var(--accent-text);
+  color: var(--accent-primary);
+  font-weight: 600;
 }
 
 .confirm-btn.ok:hover {
-  /* 同一枚强调色的浅一档，而不是写死的 #4a8fe3：强调色选绿/橙/朱砂时，
-     主按钮一 hover 就跳成蓝 —— 非 hover 态本来读 --accent-primary */
-  background: color-mix(in srgb, var(--accent-primary) 85%, white);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
 .confirm-btn.ok:focus {

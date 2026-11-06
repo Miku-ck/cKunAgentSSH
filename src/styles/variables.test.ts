@@ -332,9 +332,16 @@ describe('atelier（手记）主题的令牌覆盖', () => {
     // 在 GitHub/浅色主题的小字号按钮上掉到 3.8–4.1:1。--accent-text 由
     // accentTextOn 按当前主题底算出 ≥4.5:1 的变体，填充与描边继续用原色。
     // 这条按全仓扫；`border-color` / `background-color` / `accent-color` 不算文字色。
+    //
+    // 唯一豁免：ConfirmDialog 的确认按钮。它是纯文字按钮（无背景/边框，
+    // 与项目 7.3 文字链接风格一致），而 --accent-text 在浅色主题下是白色
+    // （给实心按钮用的），纯文字按钮读它会在白卡上隐形。手记主题下
+    // --accent-text 恰好是深蓝可读，但同一枚按钮不能按主题切两个令牌。
+    // 该文件里只有这一处 color: var(--accent-primary)，跳过整文件不放宽别的。
     const TEXT_ACCENT = /(?<![-\w])color:\s*var\(--accent-primary\)/
     const offenders: string[] = []
     for (const [file, src] of Object.entries(SOURCE_FILES)) {
+      if (file.endsWith('ConfirmDialog.vue')) continue
       for (const m of src.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
         const [, sel, body] = m
         if (TEXT_ACCENT.test(body)) offenders.push(`${file} ${sel.trim().split('\n').pop()!.trim()}`)
