@@ -1,7 +1,7 @@
 """S7-11 回归 — PATCH 不许绕开 POST 的入库上限，两条写入口同一组数字。
 
 `ScheduleIn.name` 有 min/max，而 `SchedulePatch.name` 原是裸 `Optional[str]`；
-`_drop_nulls` 只丢 `None` ⇒ `{"name": ""}` 与超长名都能从 PATCH 进库。同族漏洞在
+`drop_nulls` 只丢 `None` ⇒ `{"name": ""}` 与超长名都能从 PATCH 进库。同族漏洞在
 `task_prompt` 上更明显：POST/PATCH/`schedule_op create` 三处都没上限，而这条工具
 入口根本不经 pydantic —— 一条 500KB 的 task 会每次触发都整份进无头 run 的上下文。
 """

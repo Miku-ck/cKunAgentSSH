@@ -9,8 +9,8 @@ GET    /api/runbooks/{id}/runs — 执行历史（limit 夹取）
 DELETE /api/runbooks/{id}/runs — 清空执行历史（保留剧本；执行中 409）
 
 结构完全镜像 routes/schedules.py：Pydantic 上限 + 手工 _validate 式校验（400 而非
-422，错误文案可读）、PATCH 的 exclude_unset + _drop_nulls 防御、桥探活前置
-（schedules.py:164-173 先例）、执行中 409（schedules.py:174-178 先例）。
+422，错误文案可读）、PATCH 的 exclude_unset + drop_nulls 防御、桥探活前置
+（两处共用 routes._patch_common）、执行中 409（schedules.py 先例）。
 """
 import asyncio
 from typing import Optional
@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import runbook_store as rstore
+from routes._patch_common import drop_nulls, require_bridge_or_503
 
 router = APIRouter(tags=["runbooks"])
 
@@ -59,11 +60,6 @@ class RunbookPatch(BaseModel):
     target_host: Optional[str] = Field(default=None, max_length=_TARGET_HOST_MAX_LEN)
     steps: Optional[list[RunbookStepIn]] = None
     enabled: Optional[bool] = None
-
-
-def _drop_nulls(patch: dict) -> dict:
-    """PATCH 中显式 null 与「未提供」等价，一律丢弃（routes/schedules.py:71-78 同款）。"""
-    return {k: v for k, v in patch.items() if v is not None}
 
 
 def _validate_steps(steps: list[RunbookStepIn]) -> list[dict]:
@@ -140,7 +136,7 @@ async def update_runbook(runbook_id: str, req: RunbookPatch):
     existing = await asyncio.to_thread(rstore.get_runbook, runbook_id)
     if not existing:
         raise HTTPException(status_code=404, detail="剧本不存在")
-    patch = _drop_nulls(req.model_dump(exclude_unset=True))
+    patch = drop_nulls(req.model_dump(exclude_unset=True))
     if "name" in patch:
         patch["name"] = (patch.get("name") or "").strip()
         if not patch["name"]:
@@ -187,18 +183,10 @@ async def run_runbook(runbook_id: str):
     runbook = await asyncio.to_thread(rstore.get_runbook, runbook_id)
     if not runbook:
         raise HTTPException(status_code=404, detail="剧本不存在")
-    # 桥探活前置（routes/schedules.py:164-173 同款）：桥断开时触发注定失败的
-    # 无头 run 等于谎报「已触发」，探活预算换用户当场看到原因码
+    # 桥探活前置（两处共用 routes._patch_common.require_bridge_or_503）：桥断开时
+    # 触发注定失败的无头 run 等于谎报「已触发」，探活预算换用户当场看到原因码
     if (runbook.get("target_host") or "").strip():
-        from agent.electron_bridge import ElectronBridge
-
-        bridge_err = await ElectronBridge().probe()
-        if bridge_err is not None:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Electron 桥当前不可达（{bridge_err.value}），本次未触发；"
-                       "请确认主进程在运行后重试",
-            )
+        await require_bridge_or_503()
     from runbook_engine import get_runbook_engine
     rrb_id = await get_runbook_engine().trigger(runbook)
     if not rrb_id:

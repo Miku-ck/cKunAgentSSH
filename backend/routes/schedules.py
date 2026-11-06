@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import database as db
+from routes._patch_common import drop_nulls, require_bridge_or_503
 
 router = APIRouter(tags=["schedules"])
 
@@ -50,7 +51,7 @@ class ScheduleIn(BaseModel):
 class SchedulePatch(BaseModel):
     """PATCH 局部更新：只更新显式传入的字段（exclude_unset）。"""
     # S7-11：这里的约束必须与 ScheduleIn 逐字对齐。原先 name 是裸 Optional[str]，
-    # 而 _drop_nulls 只丢 None ⇒ {"name": ""} 和超长名都能从 PATCH 进库：POST 挡住的
+    # 而 drop_nulls 只丢 None ⇒ {"name": ""} 和超长名都能从 PATCH 进库：POST 挡住的
     # 空名/长名，改个名字就绕过了（models_config 的 PATCH 早就带了同一组 min/max）。
     name: Optional[str] = Field(default=None, min_length=1, max_length=_NAME_MAX_LEN)
     # spec 2026-10-27-schedule-task-type：类型创建后不可变，此字段仅用于拒绝变更（见 update_schedule）
@@ -71,16 +72,6 @@ _SCHEDULE_KEYS = {
     "schedule_type", "interval_minutes", "time_hour", "time_minute",
     "weekday", "day_of_month",
 }
-
-
-def _drop_nulls(patch: dict) -> dict:
-    """PATCH 中显式 null 与"未提供"等价，一律丢弃。
-
-    这些字段在库里 NOT NULL 且参与 compute_next_run/_validate_fields 的 int()，
-    原样透传会让 {"interval_minutes": null} 变成 int(None) 的 500，
-    或把 NULL 写进调度列导致任务永不触发。
-    """
-    return {k: v for k, v in patch.items() if v is not None}
 
 
 @router.get("/schedules")
@@ -124,7 +115,7 @@ async def update_schedule(schedule_id: str, req: SchedulePatch):
     existing = await asyncio.to_thread(db.get_schedule, schedule_id)
     if not existing:
         raise HTTPException(status_code=404, detail="任务不存在")
-    patch = _drop_nulls(req.model_dump(exclude_unset=True))
+    patch = drop_nulls(req.model_dump(exclude_unset=True))
     # spec 2026-10-27-schedule-task-type：类型创建后不可变。显式传入与原值不同 → 422；
     # 相同值也一律从 patch 剔除（db.update_schedule 的 allowed 本就不含 task_type，此处双保险）。
     explicit_type = req.model_dump(exclude_unset=True).get("task_type")
@@ -178,15 +169,7 @@ async def run_schedule_now(schedule_id: str):
     # 真实结局要么 30s 轮询后落到卡片状态，要么主动去翻历史。需要远程会话的任务
     # 在触发前先探一次活（探活预算 1s），失败就地给原因码，不启动注定失败的 run。
     if (sched.get("target_host") or "").strip():
-        from agent.electron_bridge import ElectronBridge
-
-        bridge_err = await ElectronBridge().probe()
-        if bridge_err is not None:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Electron 桥当前不可达（{bridge_err.value}），本次未触发；"
-                       "请确认主进程在运行后重试",
-            )
+        await require_bridge_or_503()
     started = await engine.trigger(sched, manual=True)
     if not started:
         # 上一次还没跑完：trigger 会静默丢弃本次触发，此时回 ok:true 等于
