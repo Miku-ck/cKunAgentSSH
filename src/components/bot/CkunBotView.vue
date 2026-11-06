@@ -727,8 +727,8 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: var(--page-title-size); letter-spac
 .channel-switch button { flex: 1; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-secondary); padding: 5px 0; font-family: var(--font-spec); font-size: 14px; cursor: pointer; transition: color var(--transition-fast), background var(--transition-fast); }
 .channel-switch button:hover { color: var(--text-primary); }
 .channel-switch button.active { background: var(--bg-elevated); color: var(--text-primary); box-shadow: var(--shadow-sm); }
-.new-chat { width: 100%; height: 30px; margin: 0 0 var(--spacing-16); justify-content: center; border-color: transparent; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-text); font-family: var(--font-spec); font-size: 14px; }
-.new-chat:hover:not(:disabled) { border-color: transparent; background: color-mix(in srgb, var(--accent-primary) 20%, transparent); color: var(--accent-text); }
+.new-chat { width: 100%; margin: 0 0 var(--spacing-16); justify-content: center; border-radius: var(--radius-pill); }
+.new-chat:hover:not(:disabled) { border-color: var(--accent-primary); }
 /* 与 .conversation-main 的水平 padding 对齐：标签和它下方列表项的文字左缘同一垂线，
    各抄 6px 时标签会比列表项更靠左 6px。 */
 .history-label { padding: 0 var(--spacing-12) var(--spacing-8); color: var(--text-tertiary); font-family: var(--font-spec); font-size: 13px; }

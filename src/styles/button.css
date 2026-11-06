@@ -81,7 +81,8 @@
 }
 
 /* ── 新增类按钮：唯一保留实色背景的按钮 ──
-   用于「新增 XX」操作，以实色背景突出其主操作地位。 */
+   用于「新增 XX」操作，以实色背景突出其主操作地位。
+   尺寸与字体跟随 .btn 底座（含断点档），悬停加粗与底座一致。 */
 .btn-new {
   background: var(--accent-primary);
   color: var(--accent-on);
@@ -91,7 +92,7 @@
   background: var(--accent-primary);
   filter: brightness(1.1);
   border-color: var(--accent-primary);
-  font-weight: 400;
+  font-weight: 600;
 }
 .btn-new:active:not(:disabled) {
   background: var(--accent-primary);
