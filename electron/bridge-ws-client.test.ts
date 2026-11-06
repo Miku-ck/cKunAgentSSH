@@ -109,3 +109,92 @@ describe('res 投递失败的补偿（S0-05）', () => {
     expect(p.sendJson({ type: 'res' })).toBe(true)
   })
 })
+
+/** 半开连接收口：hello 投递失败不该再干等 5s 的 hello-ack 超时 */
+describe('hello 投递失败与统一收口', () => {
+  function fakeSocket(sendThrows = false) {
+    return {
+      readyState: 1,
+      send: vi.fn(() => { if (sendThrows) throw new Error('socket closed') }),
+      close: vi.fn(),
+      onopen: null as null | (() => void),
+      onmessage: null as null | (() => void),
+      onclose: null as null | (() => void),
+      onerror: null as null | (() => void),
+    }
+  }
+
+  it('hello 没发出去：立即收口且只调度一次重连，不装配 hello-ack / ping 定时器', () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const socket = fakeSocket(true)
+      vi.stubGlobal('WebSocket', vi.fn(function () { return socket }))
+      const { c, p } = client(vi.fn())
+      c.setTarget(7777, 'tok')
+
+      socket.onopen!()
+
+      expect(socket.onclose).toBeNull()
+      expect(socket.onopen).toBeNull()
+      expect(socket.onmessage).toBeNull()
+      expect(socket.onerror).toBeNull()
+      expect(socket.close).toHaveBeenCalledWith(1000)
+      expect(c.isOpen()).toBe(false)
+      expect(p.ws).toBeNull()
+      // 只剩 reconnect 一个定时器：hello-ack(5s) 与 ping(30s) 都不该被装配，
+      // 也不允许迟到的 onclose 再调度第二次（退避被双重翻倍 4×）
+      expect(vi.getTimerCount()).toBe(1)
+    } finally {
+      warn.mockRestore()
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
+  })
+
+  it('hello-ack 超时仍走同一收口（共享方法没把原路径改坏）', () => {
+    vi.useFakeTimers()
+    try {
+      const socket = fakeSocket()
+      const { p } = client(vi.fn())
+      // 直接调私有方法时客户端还没 setTarget，仍是 stopped=true；
+      // scheduleReconnect 会按设计直接返回，夹具要先把它置为已启动。
+      ;(p as unknown as { stopped: boolean }).stopped = false
+      p.ws = socket
+      ;(p as unknown as { armHelloAckTimeout: (ws: unknown) => void }).armHelloAckTimeout(socket)
+      expect(vi.getTimerCount()).toBe(1)
+
+      vi.advanceTimersByTime(5_000)
+
+      expect(socket.onclose).toBeNull()
+      expect(socket.close).toHaveBeenCalledWith(1000)
+      expect(p.ws).toBeNull()
+      expect(vi.getTimerCount()).toBe(1) // 老的 hello-ack 已消耗，只剩 reconnect
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('心跳连续失联也走同一收口，不产生双重重连', () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const socket = fakeSocket(true)
+      const { p } = client(vi.fn())
+      ;(p as unknown as { stopped: boolean }).stopped = false
+      p.ws = socket
+      ;(p as unknown as { startPing: () => void }).startPing()
+      expect(vi.getTimerCount()).toBe(1) // ping interval
+
+      vi.advanceTimersByTime(30_000 * 2)
+
+      expect(socket.onclose).toBeNull()
+      expect(socket.close).toHaveBeenCalledWith(1000)
+      expect(p.ws).toBeNull()
+      expect(vi.getTimerCount()).toBe(1) // 只剩 reconnect
+    } finally {
+      warn.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+})

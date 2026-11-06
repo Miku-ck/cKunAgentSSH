@@ -114,7 +114,12 @@ export class BridgeWsClient {
       this.reconnectDelay = RECONNECT_BASE_MS
       this.missedPongs = 0
 
-      this.sendJson({ type: 'hello', token: this.token })
+      // hello 没投递出去就没必要再等 5s 的 hello-ack 超时：sendJson 返回 false
+      // 说明 socket 已死或 send 抛错，此刻立即按半开连接收口、只调度一次重连。
+      if (!this.sendJson({ type: 'hello', token: this.token })) {
+        this.abandonAndReconnect(ws)
+        return
+      }
       this.armHelloAckTimeout(ws)
       this.startPing()
     }
@@ -198,6 +203,33 @@ export class BridgeWsClient {
     }
   }
 
+  /**
+   * 丢弃当前连接并调度**一次**重连：hello 投递失败 / hello-ack 超时 / 心跳连续
+   * 失联三条半开连接路径共用同一份收口。
+   *
+   * 先摘除四个事件句柄再 close，抑制 socket 迟到的 close 事件二次调度重连
+   * （否则退避被双重翻倍 4×）——与 closeCurrent 的契约一致；区别只在末尾是否
+   * scheduleReconnect：closeCurrent 用于 stop/setTarget，由调用方决定下一步。
+   * 在途请求的 fail-closed 由 relay 侧保证，这里只处理连接生命周期，绝不重发。
+   */
+  private abandonAndReconnect(ws: WsSocket): void {
+    if (this.ws !== ws) return // 已被 closeCurrent/setTarget 换掉，别碰新连接
+    ws.onopen = null
+    ws.onmessage = null
+    ws.onclose = null
+    ws.onerror = null
+    this.stopPing()
+    this.disarmHelloAckTimeout()
+    this.connecting = false
+    this.ws = null
+    try {
+      ws.close(1000)
+    } catch {
+      /* 忽略 */
+    }
+    this.scheduleReconnect()
+  }
+
   // ── hello-ack 超时判定（半开连接检测）──────────────
 
   /**
@@ -209,22 +241,7 @@ export class BridgeWsClient {
     this.disarmHelloAckTimeout()
     this.helloAckTimer = setTimeout(() => {
       this.helloAckTimer = null
-      if (this.ws !== ws) return // 已被 closeCurrent/setTarget 换掉
-
-      // 摘除事件句柄再关闭：抑制 socket 迟到的 close 事件二次调度重连
-      // （否则退避被双重翻倍 4×），与 closeCurrent 的契约一致
-      ws.onopen = null
-      ws.onmessage = null
-      ws.onclose = null
-      ws.onerror = null
-      this.stopPing()
-      this.ws = null
-      try {
-        ws.close(1000)
-      } catch {
-        /* 忽略 */
-      }
-      this.scheduleReconnect()
+      this.abandonAndReconnect(ws)
     }, HELLO_ACK_TIMEOUT_MS)
     this.helloAckTimer.unref?.()
   }
@@ -245,22 +262,7 @@ export class BridgeWsClient {
       if (!ws || ws.readyState !== WS_STATE_OPEN) return
       this.missedPongs += 1
       if (this.missedPongs >= MAX_MISSED_PONGS) {
-
-        this.stopPing()
-        this.ws = null
-        // 摘除事件句柄再关闭：本分支已自行 scheduleReconnect，若不 null onclose，
-        // socket 迟到的 close 事件会再调度一次重连（退避被双重翻倍 4×）——与
-        // armHelloAckTimeout / closeCurrent 的契约一致。
-        ws.onopen = null
-        ws.onmessage = null
-        ws.onclose = null
-        ws.onerror = null
-        try {
-          ws.close(1000)
-        } catch {
-          /* 忽略 */
-        }
-        this.scheduleReconnect()
+        this.abandonAndReconnect(ws)
         return
       }
       this.sendJson({ type: 'ping' })
