@@ -184,12 +184,16 @@ defineExpose({ open, close })
   background: color-mix(in srgb, var(--bg-base) 20%, transparent);
 }
 
+/* 按钮统一走项目规范 7.3 的文字链接风格（无边框/背景，颜色即语义），
+   与 .btn / .btn-danger 同源；实心背景在浅主题下会糊成一块粉，
+   深色主题下又和遮罩抢层次。 */
 .confirm-btn {
   height: 30px;
   min-width: 72px;
   padding: 0 var(--spacing-14);
-  border: 1px solid var(--border-default);
+  border: none;
   border-radius: var(--radius-sm);
+  background: transparent;
   font-size: 0.9231rem;
   font-family: inherit;
   cursor: pointer;
@@ -198,48 +202,40 @@ defineExpose({ open, close })
 }
 
 .confirm-btn.cancel {
-  background: transparent;
   color: var(--text-secondary);
 }
 
 .confirm-btn.cancel:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: var(--border-default);
 }
 
 .confirm-btn.ok {
-  background: var(--accent-primary);
-  color: var(--accent-on);
-  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  font-weight: 600;
 }
 
 .confirm-btn.ok:hover {
-  /* 同一枚强调色的浅一档，而不是写死的 #4a8fe3：强调色选绿/橙/朱砂时，
-     主按钮一 hover 就跳成蓝 —— 非 hover 态本来读 --accent-primary */
-  background: color-mix(in srgb, var(--accent-primary) 85%, white);
-  border-color: color-mix(in srgb, var(--accent-primary) 85%, white);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
 .confirm-btn.ok:focus {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 40%, transparent);
 }
 
-/* 危险档沿用审批卡的三件套（--danger-bg/-border/-text）：这套令牌在浅色与手记
-   都有转浅档，写死 #f85149 时白字压在浅主题的红上只有 2.4:1 */
+/* 危险档用规范 7.4 的危险实色 --color-danger（与 .btn-danger 同源），
+   不再走审批卡的 --danger-bg 浅粉底 —— 那档是为「风险徽章」设计的，
+   当按钮底在白卡上几乎读不出危险 */
 .confirm-btn.ok.danger {
-  background: var(--danger-bg);
-  color: var(--danger-text);
-  border-color: var(--danger-border);
+  color: var(--color-danger);
 }
 
 .confirm-btn.ok.danger:hover {
-  background: var(--danger-border);
-  border-color: var(--danger-border);
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
 }
 
 .confirm-btn.ok.danger:focus {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger-text) 40%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-danger) 40%, transparent);
 }
 
 /* 过渡动画 */

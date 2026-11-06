@@ -243,7 +243,8 @@ export const useAgentStore = defineStore('agent', () => {
     !!intentionInfo.value
     || warnings.value.length > 0
     || hasHumanHelpRequest.value
-    || !!errorMessage.value
+    // 错误只在运行中由本面板显示；结束后已固化进消息流（"错误: …"），再挂空面板就是冗余
+    || (isRunning.value && !!errorMessage.value)
   )
 
   // ── 单一焦点审批队列 ──

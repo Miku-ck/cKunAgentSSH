@@ -108,8 +108,9 @@ const latestHelp = computed(() =>
 
     <!-- 权限审批与终端交付都不在这里渲染：唯一决策位是输入区上方的 ApprovalDock。 -->
 
-    <!-- 错误 -->
-    <div class="error-section" v-if="agentStore.errorMessage">
+    <!-- 错误：仅运行中显示。运行结束后 errorMessage 已由 finalize-agent-message
+         固化进 AI 消息气泡（"错误: …"），再挂一份就是同一句话显示两次 -->
+    <div class="error-section" v-if="agentStore.isRunning && agentStore.errorMessage">
       <div class="ap-error">
         {{ agentStore.errorMessage }}
       </div>
