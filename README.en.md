@@ -102,7 +102,7 @@ The app has no separate "chat mode". Conversations and executions in the task co
 
 ### cKunBot personal bot
 
-The virtual companion persona subsystem opened by the "Bot" entry (`Ctrl+Shift+9`) in the title bar, fully isolated from the ops Agent: it does not execute commands or call tools; it is only a "person" with personality, memory, and boundaries in chat. Architecture and decisions are documented in [docs/ckunbot.md](docs/ckunbot.md).
+The virtual companion persona subsystem opened by the "Bot" entry (`Ctrl+Shift+9`) in the title bar, fully isolated from the ops Agent: it does not execute commands or call tools; it is only a "person" with personality, memory, and boundaries in chat. Terminology is pinned in [CONTEXT.md](CONTEXT.md); the implementation lives in `backend/bot/` and `backend/routes/bot*.py`.
 
 **Persona and expression**
 
@@ -159,7 +159,7 @@ The virtual companion persona subsystem opened by the "Bot" entry (`Ctrl+Shift+9
 - **Keyboard-first**: command palette (`Ctrl+Shift+P`), direct page access (`Ctrl+Shift+1..9`), and terminal tab shortcuts.
 - **Appearance system**: 9 themes × 10 accent colors, with gradient mode and direction configuration.
 - **Markdown rendering pipeline**: messages and execution history render uniformly through marked + highlight.js + DOMPurify; highlight.js imports selected languages on demand to control bundle size, languages marked but not registered render as plain text, and render failures fall back to sanitized plain text.
-- **CI gates**: backend pytest, frontend type checking, frontend unit tests, electron-vite build, and gateway byte-drift self-check.
+- **CI gates**: backend pytest, backend lint (ruff `F,E9`), frontend type checking, frontend unit tests, electron-vite build, and gateway byte-drift self-check; see "Common commands" below for the full order.
 
 ## Tech stack
 
@@ -237,7 +237,7 @@ cKunAgentSSH/
 ├── gateway/               # TLS access gateway (single file, zero deps, deployed independently)
 ├── scripts/               # dev / package / clean / ci-check / rebuild-native / prepare-runtime / deploy
 ├── resources/             # App and tray icons
-├── docs/                  # Design and implementation specs (not shipped)
+├── docs/                  # Design/implementation specs (currently empty, retired; not shipped)
 ├── designs/               # UI concept mockups (local artifacts, ignored by .gitignore)
 ├── runtime/               # Embedded Python runtime (prepared locally, ignored by .gitignore)
 ├── electron.vite.config.ts
@@ -341,7 +341,7 @@ Local preparation takes one command:
 npm run prepare:runtime
 ```
 
-It fetches the relocatable `install_only_stripped` CPython from python-build-standalone, unpacks it into `runtime/`, installs `backend/requirements.txt`, and precompiles site-packages bytecode as `checked-hash` (otherwise electron-builder copying and rewriting mtimes would invalidate all `.pyc` files and force recompilation on the target machine at first launch). The CI step "Prepare embedded Python runtime" calls the same script, so local and pipeline runs share one definition. Re-running is idempotent: if the interpreter exists, only dependencies and bytecode are rerun; `-- -Force` redownloads and re-unpacks.
+It fetches the relocatable `install_only_stripped` CPython from python-build-standalone, unpacks it into `runtime/`, installs dependencies from `backend/requirements.lock` (falling back to the range-based `backend/requirements.txt` when the lock file is absent), and precompiles site-packages bytecode as `checked-hash` (otherwise electron-builder copying and rewriting mtimes would invalidate all `.pyc` files and force recompilation on the target machine at first launch). The CI step "Prepare embedded Python runtime" calls the same script, so local and pipeline runs share one definition. Re-running is idempotent: if the interpreter exists, only dependencies and bytecode are rerun; `-- -Force` redownloads and re-unpacks.
 
 When GitHub direct access is unstable (a typical error is `curl: (56) schannel: server closed abruptly`), there are two options: `npm run prepare:runtime -- -AssetUrl <mirror or proxy URL>`, or obtain the asset yourself and run `npm run prepare:runtime -- -Archive <local tar.gz>`. Downloads use `curl -C -`, so rerunning after a failure resumes. For dependencies installed in mainland China, point `PIP_INDEX_URL` at a mirror.
 

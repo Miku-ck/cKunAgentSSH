@@ -99,8 +99,9 @@ pytest-cache-files-*/
 # 故障隔离文件（CONTEXT.md 定义的 .corrupt-<ts>.bak，损坏文件改名留证）
 .corrupt-*
 
-# uv pip compile 生成的依赖锁：只在本地生成（编译命令里钉了本机解释器路径，
-# 换台机器就是另一份），不进版本库。制备内嵌运行时用 requirements.txt 区间版即可
+# 依赖锁只在本地生成（内容钉了本机解释器与已装包，换台机器就是另一份），不进版本库。
+# scripts/prepare-runtime.ps1 优先用 backend/requirements.lock 完全钉版，缺失时才回退
+# 到区间版 requirements.txt；这里忽略的只是本地产物，不改变脚本选清单的口径。
 backend/requirements*.lock
 backend/tests/_tmp/
 backend/_tmp/

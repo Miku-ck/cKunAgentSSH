@@ -102,7 +102,7 @@ SSH 智能运维终端，将连接管理、远程 / 本地终端、SFTP、Docker
 
 ### cKunBot 个人机器人
 
-标题栏「Bot」入口（`Ctrl+Shift+9`）打开的虚拟陪伴角色子系统，与运维 Agent 完全隔离：它不执行命令、不调用工具，只在聊天里做一个有性格、有记性、有分寸的「人」。架构与决策详见 [docs/ckunbot.md](docs/ckunbot.md)。
+标题栏「Bot」入口（`Ctrl+Shift+9`）打开的虚拟陪伴角色子系统，与运维 Agent 完全隔离：它不执行命令、不调用工具，只在聊天里做一个有性格、有记性、有分寸的「人」。术语口径见 [CONTEXT.md](CONTEXT.md)，实现见 `backend/bot/` 与 `backend/routes/bot*.py`。
 
 **人格与表达**
 
@@ -159,7 +159,7 @@ SSH 智能运维终端，将连接管理、远程 / 本地终端、SFTP、Docker
 - **键盘优先**：命令面板（`Ctrl+Shift+P`）、页面直达（`Ctrl+Shift+1..9`）与终端标签快捷键。
 - **外观体系**：9 档主题 × 10 套强调色，支持渐变模式与方向配置。
 - **Markdown 渲染管道**：消息与执行历史统一经 marked + highlight.js + DOMPurify 渲染；highlight.js 按需引入精选语言控制包体，已标注但未注册的语言按纯文本渲染，渲染失败降级为净化纯文本。
-- **CI 门禁**：后端 pytest、前端类型检查、前端单测、electron-vite 构建与网关字节漂移自检。
+- **CI 门禁**：后端 pytest、后端 lint（ruff `F,E9`）、前端类型检查、前端单测、electron-vite 构建与网关字节漂移自检；完整顺序见下方「常用命令」。
 
 ## 技术栈
 
@@ -236,7 +236,7 @@ cKunAgentSSH/
 ├── gateway/               # TLS 接入网关（单文件、零依赖、独立部署）
 ├── scripts/               # dev / package / clean / ci-check / rebuild-native / prepare-runtime / deploy
 ├── resources/             # 应用与托盘图标
-├── docs/                  # 设计与实施 spec（不进发行包）
+├── docs/                  # 设计与实施 spec（当前为空，历史 spec 已退役；不进发行包）
 ├── designs/               # UI 概念稿（本地产物，已被 .gitignore 忽略）
 ├── runtime/               # 内嵌 Python 运行时（本地制备，已被 .gitignore 忽略）
 ├── electron.vite.config.ts
@@ -340,7 +340,7 @@ npm run package
 npm run prepare:runtime
 ```
 
-它从 python-build-standalone 取 `install_only_stripped` 的可重定位 CPython、解压到 `runtime/`、装 `backend/requirements.txt` 并把 site-packages 字节码预编译成 `checked-hash`（否则 electron-builder 拷贝重写 mtime 会让 `.pyc` 整批失效，目标机首启重新编译）。CI 的 `Prepare embedded Python runtime` 一步调的就是同一个脚本，本地与流水线不会出现两套口径。重复执行是幂等的：解释器已在则只重跑依赖与字节码，`-- -Force` 才会重新下载解压。
+它从 python-build-standalone 取 `install_only_stripped` 的可重定位 CPython、解压到 `runtime/`，按 `backend/requirements.lock` 安装依赖（锁文件不存在时回退到区间版 `backend/requirements.txt`），并把 site-packages 字节码预编译成 `checked-hash`（否则 electron-builder 拷贝重写 mtime 会让 `.pyc` 整批失效，目标机首启重新编译）。CI 的 `Prepare embedded Python runtime` 一步调的就是同一个脚本，本地与流水线不会出现两套口径。重复执行是幂等的：解释器已在则只重跑依赖与字节码，`-- -Force` 才会重新下载解压。
 
 GitHub 直连不稳（典型报错 `curl: (56) schannel: server closed abruptly`）时有两种走法：`npm run prepare:runtime -- -AssetUrl <镜像或代理地址>`，或先自己拿到资产再 `npm run prepare:runtime -- -Archive <本地 tar.gz>`。下载走 `curl -C -`，失败后直接重跑会接着续传。国内装的依赖可用 `PIP_INDEX_URL` 指向镜像。
 
