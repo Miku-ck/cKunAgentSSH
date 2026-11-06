@@ -27,7 +27,7 @@
         <button class="pane-btn" title="刷新" @click="refresh">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
         </button>
-        <button class="pane-btn" title="新建文件夹" @click="openMkdirDialog">
+        <button class="pane-btn" title="新增文件夹" @click="openMkdirDialog">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
         </button>
       </div>
@@ -128,10 +128,10 @@
       </div>
     </div>
 
-    <!-- 新建文件夹对话框（F-2 修复：替代 Electron 下恒返回 null 的 window.prompt） -->
+    <!-- 新增文件夹对话框（F-2 修复：替代 Electron 下恒返回 null 的 window.prompt） -->
     <div v-if="showMkdirDialog" class="mkdir-overlay" @click.self="cancelMkdir">
       <div class="mkdir-dialog">
-        <div class="mkdir-title">新建文件夹</div>
+        <div class="mkdir-title">新增文件夹</div>
         <input
           ref="mkdirInputRef"
           v-model="mkdirName"
@@ -360,8 +360,8 @@ function onPathInputBlur(): void {
   }
 }
 
-// ─── 新建文件夹对话框（F-2 修复） ──────────────────
-// Electron 的 window.prompt() 恒返回 null，"新建文件夹"按钮完全无反应；
+// ─── 新增文件夹对话框（F-2 修复） ──────────────────
+// Electron 的 window.prompt() 恒返回 null，"新增文件夹"按钮完全无反应；
 // 改为组件内小模态输入框（Enter 确认 / Esc 取消）
 const showMkdirDialog = ref(false)
 const mkdirName = ref('')
@@ -719,7 +719,7 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   border-top: 1px dashed var(--border-subtle);
 }
 
-/* 新建文件夹对话框（风格与 SftpView 的 rename 对话框一致） */
+/* 新增文件夹对话框（风格与 SftpView 的 rename 对话框一致） */
 .mkdir-overlay {
   position: fixed; inset: 0;
   background: var(--scrim);

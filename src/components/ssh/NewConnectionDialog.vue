@@ -1,9 +1,9 @@
 <template>
   <Teleport to="body">
     <div class="nc-overlay">
-      <div ref="dialogRef" class="nc-dialog" role="dialog" aria-modal="true" aria-label="新建连接" tabindex="-1">
+      <div ref="dialogRef" class="nc-dialog" role="dialog" aria-modal="true" aria-label="新增连接" tabindex="-1">
         <div class="nc-head">
-          <h2>新建连接</h2>
+          <h2>新增连接</h2>
           <button class="nc-x" aria-label="关闭" @click="requestClose">✕</button>
         </div>
         <div class="nc-tabs" role="tablist" aria-label="连接类型">

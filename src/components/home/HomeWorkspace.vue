@@ -1,7 +1,7 @@
 <template>
   <div class="home-workspace">
     <!-- 左上角会话入口：钉在视口角落的页面级操作（不随消息流滚动）。
-         历史开居中弹窗，新建会话就地开始空白任务 —— 按钮只在首页可见，无需跳转。 -->
+         历史开居中弹窗，新增会话就地开始空白任务 —— 按钮只在首页可见，无需跳转。 -->
     <div class="home-corner">
       <button
         ref="historyBtn"
@@ -19,8 +19,8 @@
         type="button"
         class="corner-btn"
         :disabled="agentStore.isRunning"
-        :title="agentStore.isRunning ? '运行中不可新建会话' : '新建会话'"
-        aria-label="新建会话"
+        :title="agentStore.isRunning ? '运行中不可新增会话' : '新增会话'"
+        aria-label="新增会话"
         @click="startNewTask"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M11 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-6"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>
@@ -118,7 +118,7 @@ const toast = useToastStore()
 
 const scrollRef = ref<HTMLElement | null>(null)
 
-// ── 历史弹窗与新建会话（左上角入口的状态自留地）──
+// ── 历史弹窗与新增会话（左上角入口的状态自留地）──
 const historyOpen = ref(false)
 const historyBtn = ref<HTMLButtonElement | null>(null)
 
@@ -129,7 +129,7 @@ function closeHistory() {
   void nextTick(() => historyBtn.value?.focus())
 }
 
-/** 「新建会话」：就地开始空白任务，不提前产生历史条目（首条消息发出才入历史）。
+/** 「新增会话」：就地开始空白任务，不提前产生历史条目（首条消息发出才入历史）。
  *  beginNewTask 在运行中返回 false —— 按钮禁用之外再挡一道。 */
 function startNewTask() {
   if (!sshAi.beginNewTask()) {

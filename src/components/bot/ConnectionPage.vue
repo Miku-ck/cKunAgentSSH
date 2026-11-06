@@ -3,7 +3,7 @@
     <section class="connection-group" aria-labelledby="connection-channels">
       <div class="group-head">
         <h3 id="connection-channels">渠道</h3>
-        <button v-if="!draftOpen" class="btn btn-sm btn-primary" type="button" @click="draftOpen = true">
+        <button v-if="!draftOpen" class="btn btn-sm btn-new" type="button" @click="draftOpen = true">
           新增机器人
         </button>
       </div>

@@ -5,8 +5,8 @@
  * 所有面板/页面无需逐个改模板，即获得规范按钮外观。
  *
  * 规范对齐：
- *   7.1 主色按钮：主色背景 + 白字 + 图标，4px 圆角，12px 间距
- *   7.2 功能按钮：白底 + 主题色边框，4px 圆角
+ *   7.1 主色按钮：主色文字，无背景
+ *   7.2 功能按钮：白底 + 主题色边框
  *   7.3 文字链接：主题色/危险色/禁用色，悬停加粗
  *   7.4 状态：常规/悬停/危险 #C71A1A/禁用
  *
@@ -15,8 +15,9 @@
  *
  * 语义：
  *   .btn         次级/中性操作（文字链接风格，悬停浮起）
- *   .btn-primary 业务主操作（实色主色背景 + 白字）
- *   .btn-danger  不可逆操作（实色危险色背景 + 白字）
+ *   .btn-primary 业务主操作（主色文字，无背景）
+ *   .btn-new     新增类操作（实色主色背景 + 白字，唯一保留背景色的按钮）
+ *   .btn-danger  不可逆操作（危险色文字，无背景）
  *   .btn-ghost   比次级更弱的按钮（取消/跳过/非模态辅助）
  *   .btn-sm      紧凑场景（表格内、折叠条、记忆抽屉）
  *   .btn-xs      超紧凑场景（步骤排序、行内操作）
@@ -61,19 +62,38 @@
   outline-offset: 2px;
 }
 
-/* ── 7.1 主色按钮：实色主色背景 + 白字 ── */
+/* ── 7.1 主色按钮：主色文字，无背景 ── */
 .btn-primary {
+  background: transparent;
+  color: var(--accent-text);
+  border-color: transparent;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--accent-text);
+  filter: none;
+  border-color: transparent;
+  font-weight: 600;
+}
+.btn-primary:active:not(:disabled) {
+  background: var(--bg-active);
+  filter: none;
+}
+
+/* ── 新增类按钮：唯一保留实色背景的按钮 ──
+   用于「新增 XX」操作，以实色背景突出其主操作地位。 */
+.btn-new {
   background: var(--accent-primary);
   color: var(--accent-on);
   border-color: var(--accent-primary);
 }
-.btn-primary:hover:not(:disabled) {
+.btn-new:hover:not(:disabled) {
   background: var(--accent-primary);
   filter: brightness(1.1);
   border-color: var(--accent-primary);
   font-weight: 400;
 }
-.btn-primary:active:not(:disabled) {
+.btn-new:active:not(:disabled) {
   background: var(--accent-primary);
   filter: brightness(0.9);
 }
@@ -91,19 +111,20 @@
   font-weight: 400;
 }
 
-/* ── 7.4 危险按钮：实色 #C71A1A 背景 + 白字（规范原文）──
-   不走 --danger-bg/-text：那是各主题的「浅底深字」语义档，形状不同。 */
+/* ── 7.4 危险按钮：危险色文字，无背景 ── */
 .btn-danger {
-  background: var(--color-danger);
-  color: var(--color-on-danger);
-  border-color: var(--color-danger);
+  background: transparent;
+  color: var(--color-danger);
+  border-color: transparent;
 }
 .btn-danger:hover:not(:disabled) {
-  filter: brightness(1.1);
-  font-weight: 400;
+  background: var(--bg-hover);
+  filter: none;
+  font-weight: 600;
 }
 .btn-danger:active:not(:disabled) {
-  filter: brightness(0.88);
+  background: var(--bg-active);
+  filter: none;
 }
 .btn-danger:focus-visible {
   outline: 2px solid var(--color-danger);

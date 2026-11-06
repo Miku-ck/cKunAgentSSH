@@ -186,7 +186,7 @@ import { isPort, PORT_MAX } from '../../../shared/port-core'
 
 const props = defineProps<{
   editData?: SSHConnection
-  /** 嵌入统一新建弹窗：不渲染遮罩/标题栏，Esc 交给宿主 */
+  /** 嵌入统一新增弹窗：不渲染遮罩/标题栏，Esc 交给宿主 */
   embedded?: boolean
 }>()
 
@@ -219,7 +219,7 @@ const form = reactive({
   // 备注(单条字符串,最多 10 个字). 兼容旧数据:读法走 connNote 单一来源（note 优先、tags[0] 兜底）
   note: props.editData ? connNote(props.editData) : '',
   // 目标环境标记:生产环境危险命令将被强制要求预授权 allowlist
-  // 新建时取「设置 → Agent 治理 → 运维策略」的默认环境（E4）；编辑已有连接
+  // 新增时取「设置 → Agent 治理 → 运维策略」的默认环境（E4）；编辑已有连接
   // 仍以该条已存的标记为准，否则改默认值会静默重写历史归类。
   environment: (props.editData?.environment || settingsStore.settings.agent.defaultEnvironment) as 'test' | 'prod',
   // 回显用 != null 而非真值判断：已存的 0（关闭心跳）不能被显示成默认 10，
@@ -261,7 +261,7 @@ function handleOverlayClose() {
 }
 
 const dialogRef = ref<HTMLElement | null>(null)
-// 嵌入统一新建弹窗时不接管：Tab 环形与 Esc 都归宿主（NewConnectionDialog）
+// 嵌入统一新增弹窗时不接管：Tab 环形与 Esc 都归宿主（NewConnectionDialog）
 const { activate, deactivate } = useModalFocusTrap(dialogRef)
 
 // Escape 键关闭弹窗
@@ -320,7 +320,7 @@ function buildPayload() {
     readyTimeout: sanitizeMs(form.readyTimeout),
     // 心跳必须 allowZero：输入框 min=0 且 0 = 关闭心跳（见上方回显注释）。
     // 不传的话 sanitizeMs 把 0 当「未填」返回 undefined → JSON 序列化时键消失 →
-    // 新建连接拿主进程默认 10s，编辑时「10 → 0」也退回旧值：用户按下关闭心跳
+    // 新增连接拿主进程默认 10s，编辑时「10 → 0」也退回旧值：用户按下关闭心跳
     // 却毫无效果，且界面上看不出差别。readyTimeout 的 min=1，不存在这个问题。
     keepaliveInterval: sanitizeMs(form.keepaliveInterval, true),
   }
@@ -390,7 +390,7 @@ async function handleSave() {
 
   if (!form.host.trim()) { errorMsg.value = '请输入主机地址'; return }
   if (!form.username.trim()) { errorMsg.value = '请输入用户名'; return }
-  // 私钥方式必填（新建/编辑皆然）；密码仅新建时强制，编辑允许留空沿用原值
+  // 私钥方式必填（新增/编辑皆然）；密码仅新增时强制，编辑允许留空沿用原值
   if (!isEdit && form.authType === 'password' && !form.password) { errorMsg.value = '请输入密码'; return }
   if (form.authType === 'privateKey' && !form.privateKeyPath) { errorMsg.value = '请选择私钥文件'; return }
 
@@ -451,7 +451,7 @@ async function handleSave() {
   outline: none;
 }
 
-/* 嵌入统一新建弹窗：骨架由宿主提供，这里只留可滚动正文与页脚 */
+/* 嵌入统一新增弹窗：骨架由宿主提供，这里只留可滚动正文与页脚 */
 .embed-root {
   display: flex;
   flex-direction: column;

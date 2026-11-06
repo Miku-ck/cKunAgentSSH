@@ -240,7 +240,7 @@
           </div>
           <div class="dc-list">
             <div v-if="sshStore.connections.length === 0" class="dc-empty">
-              暂无 SSH 连接配置，请先在「远程管理」中新建连接
+              暂无 SSH 连接配置，请先在「远程管理」中新增连接
             </div>
             <div
               v-for="conn in sshStore.connections"

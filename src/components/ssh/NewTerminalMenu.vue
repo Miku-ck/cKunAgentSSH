@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 标签条 ＋ 菜单 —— 新建终端的唯一入口（spec 外壳标签态）
+ * 标签条 ＋ 菜单 —— 新增终端的唯一入口（spec 外壳标签态）
  *
  * 取代原 Quick Start 的搜索 + 两组卡片：启动器不该占一整屏，但它提供的
  * 能力（按名字找一个本地 shell / 一台已配好的连接）必须原样还在，所以
@@ -92,8 +92,8 @@ function pickRemote(conn: SSHConnection) {
       ref="btn"
       type="button"
       class="ntm-btn"
-      title="新建终端"
-      aria-label="新建终端"
+      title="新增终端"
+      aria-label="新增终端"
       :aria-expanded="open"
       @click.stop="toggle"
     >

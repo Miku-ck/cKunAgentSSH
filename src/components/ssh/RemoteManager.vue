@@ -9,7 +9,7 @@
         <button v-if="remoteSessionCount > 1" class="btn btn-outline" @click="showBulkModal = true" title="对当前活动远程会话批量下发命令并对比结果">
           批量下发（{{ remoteSessionCount }} 台）
         </button>
-        <button class="btn btn-primary" @click="showNewDialog = true">新建连接</button>
+        <button class="btn btn-new" @click="showNewDialog = true">新增连接</button>
       </div>
     </div>
 
@@ -78,7 +78,7 @@
         />
       </template>
 
-      <!-- 空状态：一句话双向居中（对齐 Docker 页 .empty 的做法）。新建连接在头部一直有，
+      <!-- 空状态：一句话双向居中（对齐 Docker 页 .empty 的做法）。新增连接在头部一直有，
            这里不放重复按钮；标题/说明拆两个 div 属冗余，压平成单行。 -->
       <div v-if="filteredRows.length === 0" class="rm-empty">
         {{ emptyText }}
@@ -136,7 +136,7 @@
     <!-- 多节点批量下发（F 阶段） -->
     <BulkCommandModal v-if="showBulkModal" @close="showBulkModal = false" />
 
-    <!-- 新建连接：SSH / TLS 两套表单在同一弹窗内用页签切换 -->
+    <!-- 新增连接：SSH / TLS 两套表单在同一弹窗内用页签切换 -->
     <NewConnectionDialog
       v-if="showNewDialog"
       @close="showNewDialog = false"

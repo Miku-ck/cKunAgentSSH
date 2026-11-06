@@ -88,7 +88,7 @@ const portErrText = portRangeError()
 
 const props = defineProps<{
   rec?: GatewayRecord
-  /** 嵌入统一新建弹窗：不渲染遮罩/标题栏与类型页签，Esc 交给宿主 */
+  /** 嵌入统一新增弹窗：不渲染遮罩/标题栏与类型页签，Esc 交给宿主 */
   embedded?: boolean
 }>()
 const emit = defineEmits<{ close: []; saved: [rec: GatewayRecord, submittedPassword: boolean] }>()
@@ -188,7 +188,7 @@ async function save(): Promise<void> {
   box-shadow: var(--shadow-lg);
 }
 
-/* 嵌入统一新建弹窗：骨架交给宿主，正文滚动、页脚固定 */
+/* 嵌入统一新增弹窗：骨架交给宿主，正文滚动、页脚固定 */
 .embed-root {
   display: flex;
   flex-direction: column;

@@ -121,7 +121,7 @@
       <section class="section">
         <h4 class="section-title">实时告警监控</h4>
         <p class="hint">
-          告警诊断不再默认开启。必须先在此显式新建「监控任务」并指定主机，应用才会在该主机
+          告警诊断不再默认开启。必须先在此显式新增「监控任务」并指定主机，应用才会在该主机
           内存/CPU/磁盘持续越限时自动发起只读诊断；没有任何任务时，监控会话完全不会触发告警。
         </p>
 
@@ -142,7 +142,7 @@
             placeholder="名称（可选）"
             @keydown.enter.prevent="createTask()"
           />
-          <button class="btn" :disabled="!canCreate" @click="createTask()">从模板新建</button>
+          <button class="btn" :disabled="!canCreate" @click="createTask()">从模板新增</button>
         </div>
         <p v-if="hostExists" class="hint warn">该主机已有监控任务，请勿重复创建。</p>
 
@@ -174,7 +174,7 @@
             </div>
           </div>
         </div>
-        <p v-else class="hint">暂无告警监控任务。新建后才会对指定主机生效。</p>
+        <p v-else class="hint">暂无告警监控任务。新增后才会对指定主机生效。</p>
       </section>
 
       <section class="section">

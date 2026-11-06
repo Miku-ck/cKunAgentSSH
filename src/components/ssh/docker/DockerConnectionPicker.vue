@@ -6,7 +6,7 @@
         <button class="dk-close" aria-label="关闭" @click="emit('close')">×</button>
       </div>
       <div class="dk-list">
-        <div v-if="!connections.length" class="dk-empty">暂无 SSH 连接配置，请先在「远程管理」中新建连接</div>
+        <div v-if="!connections.length" class="dk-empty">暂无 SSH 连接配置，请先在「远程管理」中新增连接</div>
         <div
           v-for="conn in connections"
           :key="conn.id"

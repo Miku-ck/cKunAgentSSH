@@ -66,7 +66,7 @@
                标签那一版把首页整屏换掉，于是"看过程"和"下一条指令"变成互斥的两屏
                —— 而下达之后人两样都要。 -->
 
-          <!-- 新建终端（本地 shell / 已配好的远程连接） -->
+          <!-- 新增终端（本地 shell / 已配好的远程连接） -->
           <NewTerminalMenu @open-local="openLocalShell" @open-remote="connectRemote" />
         </div>
 

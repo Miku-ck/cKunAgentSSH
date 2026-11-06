@@ -185,7 +185,7 @@
 
           <div class="ops-toggle-row">
             <div class="ops-info">
-              <span class="runtime-label">新建连接默认环境</span>
+              <span class="runtime-label">新增连接默认环境</span>
               <span class="runtime-desc">
                 只决定「添加连接」表单的初值，仍可逐条改；编辑已有连接时保留它原本的标记，不会被这里重写
               </span>

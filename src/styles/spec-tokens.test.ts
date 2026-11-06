@@ -64,8 +64,6 @@ describe('spec-tokens.css 规范令牌层', () => {
 
   it('规范画布无关档与 24 栅格规则逐字对应', () => {
     expect(specTokens).toMatch(/--color-danger:\s*#c71a1a/)
-    // 危险档前景是规范 7.4 原文（压在 #C71A1A 上的白字）
-    expect(specTokens).toMatch(/--color-on-danger:\s*#ffffff/)
   })
 
   it('规范层不另立主色：主色只有一条 --accent-primary 事实源', () => {
@@ -146,9 +144,9 @@ describe('spec-tokens.css 规范令牌层', () => {
     expect(buttonCss).toMatch(/font-family:\s*var\(--font-spec\)/)
   })
 
-  it('规范 7.4 的危险实色/危险前景在 button.css 有消费方', () => {
-    expect(buttonCss).toMatch(/background:\s*var\(--color-danger\)/)
-    expect(buttonCss).toMatch(/color:\s*var\(--color-on-danger\)/)
+  it('规范 7.4 的危险实色在 button.css 有消费方', () => {
+    // .btn-danger 改为无背景色后，--color-danger 作为文字色与焦点描边消费
+    expect(buttonCss).toMatch(/color:\s*var\(--color-danger\)/)
   })
 
   it('控件高度 xl 断点档写在同一处（规范 7.1/7.2）', () => {

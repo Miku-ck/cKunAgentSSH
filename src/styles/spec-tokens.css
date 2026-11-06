@@ -23,10 +23,9 @@
 
 :root {
   /* ── 规范色板（画布无关档，全主题同一值）──
-     规范 7.4 危险实色 / 禁用底与字。主色与中性色不在这里 ——
+     规范 7.4 危险实色。主色与中性色不在这里 ——
      主色走 --accent-primary（随强调色变），中性色随主题走 --text-* / --border-*。 */
   --color-danger: #c71a1a;
-  --color-on-danger: #ffffff;      /* 压在 #C71A1A 上的前景（4.68:1） */
 
   /* ── 栅格间距（规范原文）──
      规范原文：Gutter 12 / Margin 16 / Padding 16 / Spacing 12。

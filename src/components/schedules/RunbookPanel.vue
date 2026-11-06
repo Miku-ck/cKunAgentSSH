@@ -8,7 +8,7 @@
       </div>
       <div class="rb-actions">
         <button class="btn btn-ghost" @click="load()" :disabled="loading">刷新</button>
-        <button class="btn btn-primary" @click="openCreate">新建剧本</button>
+        <button class="btn btn-new" @click="openCreate">新增剧本</button>
       </div>
     </div>
 
@@ -83,8 +83,8 @@
       </template>
     </BaseModal>
 
-    <!-- 新建/编辑 Modal（v1 保留：不提供编辑 modal 就无法定义剧本） -->
-    <BaseModal v-if="editing" wide :title="editing.id ? '编辑剧本' : '新建运维剧本'" @close="editing = null">
+    <!-- 新增/编辑 Modal（v1 保留：不提供编辑 modal 就无法定义剧本） -->
+    <BaseModal v-if="editing" wide :title="editing.id ? '编辑剧本' : '新增运维剧本'" @close="editing = null">
       <label class="field">
         <span>剧本名称 *</span>
         <input v-model="form.name" maxlength="100" placeholder="例如：nginx 502 恢复" />

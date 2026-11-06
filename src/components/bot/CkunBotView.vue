@@ -40,7 +40,7 @@
           <button role="tab" :aria-selected="store.channel === 'wechat'" :class="{ active: store.channel === 'wechat' }" @click="store.selectChannel('wechat')">微信</button>
         </div>
         <template v-if="store.channel === 'local'">
-          <button class="btn new-chat" :disabled="!store.activePersonaId || store.streaming" @click="createChat">新建会话</button>
+          <button class="btn btn-new new-chat" :disabled="!store.activePersonaId || store.streaming" @click="createChat">新增会话</button>
           <div class="history-label">陪聊记录</div>
           <div class="conversation-list">
             <div v-for="c in store.filteredConversations" :key="c.id" class="conversation" :class="{ active: c.id === store.activeConversationId }">
@@ -53,7 +53,7 @@
                  空容器会让人把「还没读到」误认为「真的没有」。 -->
             <p v-if="store.loading" class="sidebar-empty">正在读取会话…</p>
             <p v-else-if="store.error && !store.filteredConversations.length" class="sidebar-error">{{ store.error }}</p>
-            <p v-else-if="!store.filteredConversations.length" class="sidebar-empty">还没有会话。点「新建会话」开始第一段。</p>
+            <p v-else-if="!store.filteredConversations.length" class="sidebar-empty">还没有会话。点「新增会话」开始第一段。</p>
           </div>
         </template>
         <template v-else>
@@ -111,7 +111,7 @@
             </template>
             <template v-else>
               <h2>今天想聊点什么？</h2>
-              <p>到「人格」页挑一位，新建一段只属于你们的会话。</p>
+              <p>到「人格」页挑一位，新增一段只属于你们的会话。</p>
             </template>
           </div>
           <!-- 主区不重复侧栏的渠道级提示（remoteEmptyHint 已在侧栏说过「在 QQ 里 @ 一下」）：
@@ -260,7 +260,7 @@
     </div>
 
     <div v-else-if="tab === 'personas'" class="persona-page">
-      <div class="section-heading"><h3>人格</h3><button class="btn btn-primary" @click="openPersona()">新增人格</button></div>
+      <div class="section-heading"><h3>人格</h3><button class="btn btn-new" @click="openPersona()">新增人格</button></div>
       <!-- 空状态独立成 flex:1 的居中容器：与列表拆成两个同级空壳，否则平分高度把居中顶偏。
            加载中、加载失败、真空三态分开说：网络慢时不能说「还没有人格」，用户会当真。 -->
       <div v-if="!store.personas.length" class="persona-empty">
@@ -281,7 +281,7 @@
           <p class="personality">{{ p.personality || '还没有写下性格描述。' }}</p>
           <p class="persona-greeting">“{{ p.greeting }}”</p>
           <div class="persona-actions">
-            <button class="btn btn-sm btn-primary" @click="chatWith(p.id)">用此人格聊天</button>
+            <button class="btn btn-sm btn-primary" @click="chatWith(p.id)">聊天</button>
             <button class="btn btn-sm" @click="openPersona(p)">编辑</button>
             <button class="btn btn-sm" @click="copyPersona(p.id)">复制</button>
             <button v-if="!p.is_builtin" class="btn btn-sm btn-danger" @click="removePersona(p)">删除</button>
@@ -362,7 +362,7 @@ function onComposerKeydown(e: KeyboardEvent) {
 }
 watch(draft, () => { void nextTick(growComposer) })
 
-// 窄屏抽屉：选会话/新建后收起，正文区回到聊天
+// 窄屏抽屉：选会话/新增后收起，正文区回到聊天
 const sidebarOpen = ref(false)
 function selectLocal(id: string) {
   sidebarOpen.value = false
@@ -370,7 +370,7 @@ function selectLocal(id: string) {
 }
 async function createChat() {
   sidebarOpen.value = false
-  try { await store.createConversation() } catch (e) { toast.error(toFriendlyMessage(e, '新建会话失败')) }
+  try { await store.createConversation() } catch (e) { toast.error(toFriendlyMessage(e, '新增会话失败')) }
 }
 async function send() {
   const text = draft.value

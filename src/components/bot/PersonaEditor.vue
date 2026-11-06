@@ -291,7 +291,7 @@ const form = reactive({
 const pristine = JSON.stringify({ ...form })
 const dirty = computed(() => JSON.stringify({ ...form }) !== pristine)
 
-// 只有新建才强制先传头像：内置 cKunBot 等已有人格常为空头像，拦住就一个字段都改不了
+// 只有新增才强制先传头像：内置 cKunBot 等已有人格常为空头像，拦住就一个字段都改不了
 const needsAvatar = computed(() => !source && !isImageAvatar(form.avatar))
 
 function setDna(key: (typeof dnaKeys)[number], value: string) {

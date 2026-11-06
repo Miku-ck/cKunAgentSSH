@@ -3,7 +3,7 @@
     <div class="tunnel-overlay" @click.self="emit('close')">
       <div ref="dialogRef" class="modal" role="dialog" aria-modal="true" aria-labelledby="tunnel-modal-title" tabindex="-1">
         <button class="modal-close" @click="emit('close')" aria-label="关闭">✕</button>
-        <h2 id="tunnel-modal-title">{{ isEdit ? '编辑隧道' : '新建隧道' }}</h2>
+        <h2 id="tunnel-modal-title">{{ isEdit ? '编辑隧道' : '新增隧道' }}</h2>
 
         <div class="field">
           <label>类型</label>
@@ -148,7 +148,7 @@ onUnmounted(() => {
   deactivate()
 })
 
-// 编辑弹窗预填时对已合法字段先做一次静默校验，避免打开即红框（新建时留空交给提交前校验）
+// 编辑弹窗预填时对已合法字段先做一次静默校验，避免打开即红框（新增时留空交给提交前校验）
 function validateSilently(): void {
   if (form.type !== 'remote') validatePort('listenPort')
   if (form.type !== 'dynamic') { validatePort('dstPort'); dstHostErr.value = form.dstHost.trim() ? '' : '必须填写目标主机' }

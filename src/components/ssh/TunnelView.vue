@@ -5,7 +5,7 @@
         <span>隧道</span>
       </div>
       <span class="head-spacer"></span>
-      <button class="btn btn-primary" :disabled="!hasConnections" :title="hasConnections ? '' : '请先在远程终端页创建连接'" @click="openCreate">新建隧道</button>
+      <button class="btn btn-new" :disabled="!hasConnections" :title="hasConnections ? '' : '请先在远程终端页创建连接'" @click="openCreate">新增隧道</button>
     </div>
 
     <!-- 正文：头部钉住，仅此处滚动 -->

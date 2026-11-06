@@ -14,7 +14,7 @@
       </div>
       <div class="schedules-actions">
         <button class="btn btn-ghost" @click="load()" :disabled="loading">刷新</button>
-        <button class="btn btn-primary" @click="openCreate">新建任务</button>
+        <button class="btn btn-new" @click="openCreate">新增任务</button>
       </div>
     </div>
 
@@ -80,8 +80,8 @@
       </template>
     </BaseModal>
 
-    <!-- 新建/编辑 Modal -->
-    <BaseModal v-if="editing" :title="editing.id ? '编辑任务' : '新建定时任务'" @close="editing = null">
+    <!-- 新增/编辑 Modal -->
+    <BaseModal v-if="editing" :title="editing.id ? '编辑任务' : '新增定时任务'" @close="editing = null">
       <template #head-right>
         <div class="type-switch" :class="{ disabled: !!editing.id }" :title="editing.id ? '任务类型创建后不可修改' : '任务类型'">
           <button class="sched-option" :class="{ active: form.task_type === 'ops' }"
@@ -90,7 +90,7 @@
             :disabled="!!editing.id" @click="switchType('daily')">日常</button>
         </div>
       </template>
-          <!-- 模板选择（仅新建时显示） -->
+          <!-- 模板选择（仅新增时显示） -->
           <div v-if="!editing.id" class="field">
             <span>选择模板</span>
             <div class="template-list">
@@ -289,7 +289,7 @@ interface ScheduleForm {
   enabled: boolean
 }
 // 初始值只有一份：原先 reactive 的初值与 openCreate 的清空各抄一遍 10 个字段，
-// 新增字段必然漏掉其中一处（新建表单带着上一个任务的字段值提交）。
+// 新增字段必然漏掉其中一处（新增表单带着上一个任务的字段值提交）。
 const FORM_DEFAULTS: ScheduleForm = {
   name: '',
   task_type: 'ops',
@@ -309,7 +309,7 @@ function resetForm(): void {
   Object.assign(form, FORM_DEFAULTS)
 }
 
-// 新建时切换类型：只换模板集、清模板选中态，不重置已填字段；编辑态锁定不可改
+// 新增时切换类型：只换模板集、清模板选中态，不重置已填字段；编辑态锁定不可改
 function switchType(t: TaskType): void {
   if (editing.value?.id) return
   if (form.task_type === t) return
@@ -542,7 +542,7 @@ let formBaseline: ScheduleForm = { ...FORM_DEFAULTS }
 
 /** 编辑已有任务：把记录回填到表单并进入编辑态（模板选择在编辑态隐藏） */
 function openEdit(s: ScheduleRecord) {
-  // 缺省值取 FORM_DEFAULTS：原样字面量是第三份默认值副本，改一处就与新建表单分叉
+  // 缺省值取 FORM_DEFAULTS：原样字面量是第三份默认值副本，改一处就与新增表单分叉
   form.name = s.name
   form.task_type = s.task_type ?? 'ops'
   form.schedule_type = s.schedule_type

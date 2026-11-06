@@ -78,7 +78,7 @@
         </div>
         <div class="conn-list">
           <div v-if="sshStore.connections.length === 0" class="conn-empty">
-            暂无 SSH 连接配置,请先在"远程管理"中新建连接
+            暂无 SSH 连接配置,请先在"远程管理"中新增连接
           </div>
           <div
             v-for="conn in sshStore.connections"
@@ -124,7 +124,7 @@
       </div>
       <div class="ctx-sep"></div>
       <div class="ctx-item" @click="handleCtxAction('newFolder')">
-        新建文件夹
+        新增文件夹
       </div>
       <template v-if="ctxMenu.entry">
         <div class="ctx-sep"></div>
@@ -147,11 +147,11 @@
       </template>
     </div>
 
-    <!-- 重命名/新建对话框 -->
+    <!-- 重命名/新增对话框 -->
     <Teleport to="body">
     <div v-if="renameDialog.visible" class="rename-overlay" @click.self="renameDialog.visible = false">
       <div ref="renameRef" class="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="sftp-rename-title" tabindex="-1">
-        <div id="sftp-rename-title" class="rename-title">{{ renameDialog.isNew ? '新建文件夹' : '重命名' }}</div>
+        <div id="sftp-rename-title" class="rename-title">{{ renameDialog.isNew ? '新增文件夹' : '重命名' }}</div>
         <input
           ref="renameInput"
           v-model="renameDialog.name"
@@ -634,7 +634,7 @@ function getCtxPaths(side: 'local' | 'remote', entry: AnyEntry): string[] {
   return [entry.path]
 }
 
-// ─── 重命名/新建 ──────────────────────
+// ─── 重命名/新增 ──────────────────────
 const renameDialog = reactive({
   visible: false,
   name: '',
@@ -939,7 +939,7 @@ async function onFileSaved(): Promise<void> {
 .ctx-item.danger:hover { background: color-mix(in srgb, var(--accent-red) 15%, transparent); color: var(--accent-red); }
 .ctx-sep { height: 1px; margin: var(--spacing-4) 0; background: var(--border-subtle); }
 
-/* 重命名/新建对话框 */
+/* 重命名/新增对话框 */
 .rename-overlay {
   position: fixed; inset: 0;
   background: var(--scrim);

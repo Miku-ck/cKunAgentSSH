@@ -262,7 +262,7 @@
                          而不勾「工具调用」的模型照样收到全量工具 schema。库里那三列保留
                          （seed 与旧数据仍回填卡片徽标），但不再给一个「看起来能管」的开关。 -->
                     <div v-if="!isEditing" class="capability-row">
-                      <!-- 仅新建时可勾选。编辑时的"切换默认"由卡片上的独立入口负责 -->
+                      <!-- 仅新增时可勾选。编辑时的"切换默认"由卡片上的独立入口负责 -->
                       <label class="capability-item">
                         <input type="checkbox" v-model="form.is_default_ssh" class="form-checkbox" />
                         <span>设为 SSH 默认模型</span>
@@ -285,7 +285,7 @@
                       </div>
                     </div>
 
-                    <!-- 核采样：后端 Field(ge=0, le=1)，此前只有新建时发过 0.9，
+                    <!-- 核采样：后端 Field(ge=0, le=1)，此前只有新增时发过 0.9，
                          编辑表单从不提交，用户改不动也看不见 -->
                     <div class="form-group">
                       <label class="form-label">Top P（核采样）</label>
@@ -409,12 +409,12 @@ const PROVIDERS: ProviderDef[] = [
 
 // 上下文窗口默认值必须与后端一致：models_config.max_tokens 列默认 16384，
 // 消费方（routes/agent.py 的 max_context_tokens、schedule_engine）也都是 16384。
-// 面板这里若用 4096，新建模型会把窗口悄悄缩到 1/4（safe_max_tokens 随之压低输出
+// 面板这里若用 4096，新增模型会把窗口悄悄缩到 1/4（safe_max_tokens 随之压低输出
 // 预算、历史被更早截断），编辑一条 max_tokens 为 NULL 的旧行更会把 4096 落库。
 const DEFAULT_CONTEXT_TOKENS = 16384
 const DEFAULT_OUTPUT_TOKENS = 4096
 // 与后端 CreateModelRequest.reasoning_tokens 的默认值同口径（routes/settings.py）。
-// 面板此前不提供这一项，所有模型都被钉在建表默认上；提供后新建默认仍取该值。
+// 面板此前不提供这一项，所有模型都被钉在建表默认上；提供后新增默认仍取该值。
 const DEFAULT_REASONING_TOKENS = 8192
 const DEFAULT_TOP_P = 0.9
 
@@ -470,7 +470,7 @@ const keyRequired = computed(() => !!selectedProvider.value && !isLocalProvider.
 const canSave = computed(() => {
   if (!form.name || !form.base_url || !form.provider) return false
   if (keyRequired.value) {
-    // 新建时必须填 key；编辑时 key 不能为空（除非和原脱敏值一样表示保留原值）
+    // 新增时必须填 key；编辑时 key 不能为空（除非和原脱敏值一样表示保留原值）
     const key = (form.api_key || '').trim()
     if (!isEditing.value && !key) return false
     if (isEditing.value && !key && !hasExistingKey.value) return false
@@ -635,7 +635,7 @@ async function doSave() {
     }
   }
   let result: ModelConfig | null
-  // 会话号与"这一轮到底是编辑还是新建"都必须在 await 之前定死（见 dialogSeq 注）
+  // 会话号与"这一轮到底是编辑还是新增"都必须在 await 之前定死（见 dialogSeq 注）
   const mySeq = dialogSeq
   const wasEditing = isEditing.value
   const wasEditingId = editingId.value
