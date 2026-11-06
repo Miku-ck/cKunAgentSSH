@@ -13,7 +13,7 @@
  * 分支，本文件都要变红。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { streamAgentRun } from './sse'
+import { postToolResult, streamAgentRun } from './sse'
 
 interface ReadResult { done: boolean; value?: Uint8Array }
 
@@ -206,5 +206,48 @@ describe('streamAgentRun 连接停滞看门狗', () => {
     expect(errors).toEqual([])
     expect(doneCount).toBe(1)
     expect(events.map(e => e.type)).toEqual(['state'])
+  })
+})
+
+/** fetch 永远 pending，只在 signal 中止时按 WHATWG 语义 reject —— 模拟黑洞连接 */
+function pendingFetch() {
+  return vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    const signal = init.signal as AbortSignal
+    if (signal.aborted) reject(signal.reason)
+    else signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+  }))
+}
+
+/**
+ * 90s 看门狗是在 `await fetch()` 之后才装配的：连不上 / headers 迟迟不回时它根本
+ * 没机会跑，run 会永久停在 running。这组用例钉住「连接阶段」这最后一段缺口。
+ */
+describe('连接/首字节超时（看门狗装配之前）', () => {
+  it('fetch 不返回：28s 到点报连接超时，不走 onDone，也不留定时器', async () => {
+    vi.stubGlobal('fetch', pendingFetch())
+    const onError = vi.fn()
+    const onDone = vi.fn()
+    streamAgentRun({
+      task: 't', conversationId: 'c1', modelId: 'm1',
+      onEvent: () => {}, onError, onDone,
+    })
+
+    // 先让 ensureApiToken → fetch 真正发出，再把连接定时器推到 28s
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(28_000)
+
+    expect(onError).toHaveBeenCalledWith('连接超时，请检查网络后重试')
+    expect(onDone).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('postToolResult 带上超时 signal，fetch 失败照常向上抛且不残留定时器', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('network down'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(postToolResult('t1', 'out', true, 0)).rejects.toThrow('network down')
+
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

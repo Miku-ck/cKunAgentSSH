@@ -214,9 +214,33 @@ export interface StreamAgentOptions {
 const STALL_TIMEOUT_MS = 90_000
 /** 看门狗巡检步长：停滞判定粒度 = 90s + 至多一个巡检周期，约 95s 内必报 */
 const STALL_CHECK_INTERVAL_MS = 5_000
+/**
+ * 连接/首字节超时：上面的看门狗在 `await fetch()` 之后才装配，覆盖不到「连不上、
+ * headers 迟迟不回」这一段 —— 那时 read 都还没开始，90s 判停根本没机会跑。
+ * 只管 fetch 返回 headers 之前，返回后立刻 clearTimeout：绝不能拿它限制整条 SSE
+ * 流时长，长回答仍由后端 15s 心跳 + 90s 看门狗按原口径照看。28s 给后端留足首字节
+ * 时间，又不让用户无限等；与心跳周期、桥 hello-ack 是彼此独立的口径。
+ */
+const CONNECT_TIMEOUT_MS = 28_000
 
 export function streamAgentRun(options: StreamAgentOptions): () => void {
   const abortController = new AbortController()
+
+  // 连接阶段超时：复用同一个 controller，到点以可识别的 TimeoutError 中止 fetch；
+  // fetch 返回 headers 后立刻清掉定时器，之后仍由调用方拿到的 abort() 控制整条流。
+  // 用自建 timer 而非 AbortSignal.timeout() 挂 signal，正是为了不限制流的时长。
+  let connectTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    connectTimer = null
+    const err = new Error('连接超时')
+    err.name = 'TimeoutError'
+    abortController.abort(err)
+  }, CONNECT_TIMEOUT_MS)
+  const clearConnectTimer = (): void => {
+    if (connectTimer !== null) {
+      clearTimeout(connectTimer)
+      connectTimer = null
+    }
+  }
 
   const run = async () => {
     try {
@@ -389,12 +413,19 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
       if (e instanceof Error && e.name !== 'AbortError') {
         // H13 修复：用 toFriendlyMessage 转换网络错误，避免直接显示 "Failed to fetch"
         // H15 包裹 onError 回调，防止回调自身抛异常导致 unhandled promise rejection
+        // connect 超时是已知的失败姿态，单独给可操作的文案，不混进通用网络错误。
+        const message = e.name === 'TimeoutError'
+          ? '连接超时，请检查网络后重试'
+          : toFriendlyMessage(e, 'AI 运行失败，请稍后重试')
         try {
-          options.onError(toFriendlyMessage(e, 'AI 运行失败，请稍后重试'))
+          options.onError(message)
         } catch (cbErr) {
           console.error('[streamAgentRun] onError callback threw:', cbErr)
         }
       }
+    } finally {
+      // fetch 成功 / 失败 / 提前 return 都必须清掉连接定时器，否则它会留在事件循环里。
+      clearConnectTimer()
     }
   }
 
@@ -420,21 +451,36 @@ export async function postToolResult(
   await ensureApiToken()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   const url = `${getBaseUrl()}/agent/tool-result`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: withApiToken(headers),
-    // S1-03：run_id 让服务端能认出「认领对了但越权」的回传；confirmed 是对
-    // requires_confirm 交付的显式主张（后端拒绝未经确认的闭合）
-    body: JSON.stringify({
-      tool_id: toolId,
-      output,
-      success,
-      exit_code: exitCode,
-      rejected,
-      run_id: runId ?? null,
-      confirmed,
-    }),
-  })
+  // 非流式回传也不能让 fetch 永久 pending（后端挂起时交付确认会一直转）。
+  // 自建 controller + 显式 clearTimeout：拿到响应就撤掉超时，且单测的 fake timers
+  // 能驱动这条失败路径（AbortSignal.timeout 的内部定时器不受 fake timers 控制）。
+  const connectController = new AbortController()
+  const connectTimer = setTimeout(() => {
+    const err = new Error('连接超时')
+    err.name = 'TimeoutError'
+    connectController.abort(err)
+  }, CONNECT_TIMEOUT_MS)
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: withApiToken(headers),
+      signal: connectController.signal,
+      // S1-03：run_id 让服务端能认出「认领对了但越权」的回传；confirmed 是对
+      // requires_confirm 交付的显式主张（后端拒绝未经确认的闭合）
+      body: JSON.stringify({
+        tool_id: toolId,
+        output,
+        success,
+        exit_code: exitCode,
+        rejected,
+        run_id: runId ?? null,
+        confirmed,
+      }),
+    })
+  } finally {
+    clearTimeout(connectTimer)
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(backendErrorDetail(err) || res.statusText)
