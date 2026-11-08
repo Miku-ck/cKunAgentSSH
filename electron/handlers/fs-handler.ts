@@ -12,6 +12,7 @@
  * 而 main.ts 在模块顶层就要拿到 setupFSIPC —— 循环会让其中一侧拿到 undefined。
  */
 import { BrowserWindow, dialog, shell, nativeImage } from 'electron'
+import { safeSend } from '../utils/safe-send'
 import { join, basename, extname, dirname } from 'path'
 import { readdir, readFile, writeFile, stat, lstat, mkdir, rename, rm, realpath, copyFile } from 'fs/promises'
 import { existsSync } from 'fs'
@@ -501,10 +502,7 @@ export function setupFSIPC(deps: FsHandlerDeps): void {
       let transferred = 0
       let lastReport = 0
       const safeSendProgress = (data: unknown): void => {
-        const win = getMainWindow()
-        if (win && !win.isDestroyed()) {
-          try { win.webContents.send('sftp:progress', data) } catch { /* 窗口已销毁等场景忽略 */ }
-        }
+        safeSend(getMainWindow(), 'sftp:progress', data)
       }
       const report = () => {
         const now = Date.now()

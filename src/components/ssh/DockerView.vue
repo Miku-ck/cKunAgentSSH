@@ -275,6 +275,7 @@ import DockerImageTransferModal from './docker/DockerImageTransferModal.vue'
 import IconDocker from '@/components/icons/IconDocker.vue'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
+import { runWithActionToast } from '@/utils/toast-action'
 import { useConfirm } from '@/composables/useConfirm'
 import {
   AUDIT_ACTION_DOCKER,
@@ -548,13 +549,13 @@ function selectTab(key: TabKey): void {
 
 // 容器动作只重跑 docker ps（镜像/卷/网络不受容器启停影响），避免每次动作全量刷新 4 条命令。
 function doStart(c: ContainerRow) { return withBusy(c, async () => {
-  try { await actionExec(startCmd(c.name)); toast.success(`已启动 ${c.name}`); await containerList.reload() } catch (e) { toastErr(e) }
+  await runWithActionToast({ toast, action: () => actionExec(startCmd(c.name)), success: `已启动 ${c.name}`, onError: toastErr, afterSuccess: () => containerList.reload() })
 }) }
 function doStop(c: ContainerRow) { return withBusy(c, async () => {
-  try { await actionExec(stopCmd(c.name)); toast.info(`已停止 ${c.name}`); await containerList.reload() } catch (e) { toastErr(e) }
+  await runWithActionToast({ toast, action: () => actionExec(stopCmd(c.name)), success: `已停止 ${c.name}`, successLevel: 'info', onError: toastErr, afterSuccess: () => containerList.reload() })
 }) }
 function doRestart(c: ContainerRow) { return withBusy(c, async () => {
-  try { await actionExec(restartCmd(c.name)); toast.success(`已重启 ${c.name}`); await containerList.reload() } catch (e) { toastErr(e) }
+  await runWithActionToast({ toast, action: () => actionExec(restartCmd(c.name)), success: `已重启 ${c.name}`, onError: toastErr, afterSuccess: () => containerList.reload() })
 }) }
 
 async function doRemove(c: ContainerRow) {
@@ -566,7 +567,7 @@ async function doRemove(c: ContainerRow) {
   })
   if (!ok) return
   await withBusy(c, async () => {
-    try { await actionExec(rmCmd(c.name)); toast.success(`已删除 ${c.name}`); await containerList.reload() } catch (e) { toastErr(e) }
+    await runWithActionToast({ toast, action: () => actionExec(rmCmd(c.name)), success: `已删除 ${c.name}`, onError: toastErr, afterSuccess: () => containerList.reload() })
   })
 }
 
@@ -583,7 +584,7 @@ async function doRemoveImage(im: ImageRow) {
   })
   if (!ok) return
   await withBusyKey(ref, async () => {
-    try { await actionExec(rmiCmd(ref)); toast.success(`已删除镜像 ${ref}`); await imageList.reload() } catch (e) { toastErr(e) }
+    await runWithActionToast({ toast, action: () => actionExec(rmiCmd(ref)), success: `已删除镜像 ${ref}`, onError: toastErr, afterSuccess: () => imageList.reload() })
   })
 }
 

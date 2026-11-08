@@ -3,6 +3,7 @@
  * 在 Electron 主进程中运行
  */
 import type * as PtyNamespace from 'node-pty'
+import { safeSend as sendToWindow } from './utils/safe-send'
 import { BrowserWindow } from 'electron'
 import { homedir } from 'os'
 import { promises as fsPromises } from 'fs'
@@ -136,9 +137,7 @@ export class PtyManager {
 
   /** 安全发送 IPC 消息（窗口已销毁时跳过） */
   private safeSend(channel: string, data: unknown): void {
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      try { this.mainWindow.webContents.send(channel, data) } catch { /* EPIPE */ }
-    }
+    sendToWindow(this.mainWindow, channel, data)
   }
 
   /** 检测当前平台的默认 shell */

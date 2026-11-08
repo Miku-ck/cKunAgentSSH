@@ -3,6 +3,7 @@
  * 左栏(本地)走现有 fs* IPC,右栏(远程)走 sftp:* IPC
  */
 import { defineStore } from 'pinia'
+import { runWithActionToast } from '@/utils/toast-action'
 import { ref, computed } from 'vue'
 import { useToastStore } from './toast'
 import { toFriendlyMessage, unwrapIpcErrorEnvelope } from '@/api/client'
@@ -1135,15 +1136,15 @@ async function remoteRefresh(): Promise<void> {
   async function zipLocal(localPaths: string[], zipName: string): Promise<void> {
     if (!localPaths.length) return
     const zipPath = await getApi().fsPathJoin(localCwd.value, zipName)
-    toast.info(`正在压缩: ${zipName}…`)
-    try {
-      await getApi().fsZipLocal(localPaths, zipPath)
-      toast.success(`已压缩: ${zipName}`)
-      await localRefresh()
-    } catch (err: any) {
-      toast.error(toFriendlyMessage(err, '压缩失败'))
-      throw err
-    }
+    await runWithActionToast({
+      toast,
+      action: () => getApi().fsZipLocal(localPaths, zipPath),
+      pending: `正在压缩: ${zipName}…`,
+      success: `已压缩: ${zipName}`,
+      failure: (err) => toFriendlyMessage(err, '压缩失败'),
+      afterSuccess: localRefresh,
+      rethrow: true,
+    })
   }
 
   /**
@@ -1153,15 +1154,15 @@ async function remoteRefresh(): Promise<void> {
    */
   async function unzipLocal(localZipPath: string, destDirName: string): Promise<void> {
     const destDir = await getApi().fsPathJoin(localCwd.value, destDirName)
-    toast.info(`正在解压: ${destDirName}…`)
-    try {
-      await getApi().fsUnzipLocal(localZipPath, destDir)
-      toast.success(`已解压: ${destDirName}`)
-      await localRefresh()
-    } catch (err: any) {
-      toast.error(toFriendlyMessage(err, '解压失败'))
-      throw err
-    }
+    await runWithActionToast({
+      toast,
+      action: () => getApi().fsUnzipLocal(localZipPath, destDir),
+      pending: `正在解压: ${destDirName}…`,
+      success: `已解压: ${destDirName}`,
+      failure: (err) => toFriendlyMessage(err, '解压失败'),
+      afterSuccess: localRefresh,
+      rethrow: true,
+    })
   }
 
   /**
@@ -1187,15 +1188,15 @@ async function remoteRefresh(): Promise<void> {
         : p
       return rel || p
     })
-    toast.info(`正在远程压缩: ${zipName}…`)
-    try {
-      await getApi().sftpZipRemote(sshSessionId.value, sources, remoteZipPath, remoteCwd.value)
-      toast.success(`已压缩: ${zipName}`)
-      await remoteRefresh()
-    } catch (err: any) {
-      toast.error(toFriendlyMessage(err, '远程压缩失败'))
-      throw err
-    }
+    await runWithActionToast({
+      toast,
+      action: () => getApi().sftpZipRemote(sshSessionId.value, sources, remoteZipPath, remoteCwd.value),
+      pending: `正在远程压缩: ${zipName}…`,
+      success: `已压缩: ${zipName}`,
+      failure: (err) => toFriendlyMessage(err, '远程压缩失败'),
+      afterSuccess: remoteRefresh,
+      rethrow: true,
+    })
   }
 
   /**
@@ -1206,15 +1207,15 @@ async function remoteRefresh(): Promise<void> {
   async function unzipRemote(remoteZipPath: string, destDirName: string): Promise<void> {
     if (!sshSessionId.value || !online.value) return
     const destDir = remoteCwd.value === '/' ? '/' + destDirName : remoteCwd.value + '/' + destDirName
-    toast.info(`正在远程解压: ${destDirName}…`)
-    try {
-      await getApi().sftpUnzipRemote(sshSessionId.value, remoteZipPath, destDir)
-      toast.success(`已解压: ${destDirName}`)
-      await remoteRefresh()
-    } catch (err: any) {
-      toast.error(toFriendlyMessage(err, '远程解压失败'))
-      throw err
-    }
+    await runWithActionToast({
+      toast,
+      action: () => getApi().sftpUnzipRemote(sshSessionId.value, remoteZipPath, destDir),
+      pending: `正在远程解压: ${destDirName}…`,
+      success: `已解压: ${destDirName}`,
+      failure: (err) => toFriendlyMessage(err, '远程解压失败'),
+      afterSuccess: remoteRefresh,
+      rethrow: true,
+    })
   }
 
   // ─── 路径辅助（用于 ZIP 覆盖确认等场景） ────────

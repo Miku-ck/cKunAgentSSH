@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, session, nativeImage } from 'electron'
+import { safeSend } from './utils/safe-send'
 import { join, resolve as pathResolve, dirname, basename } from 'path'
 import { pathToFileURL } from 'url'
 import { readdir } from 'fs/promises'
@@ -641,22 +642,16 @@ function setupSSHIPC(): void {
   gitRepos = new GitReposService()
   ghDownload.setSender((data) => {
     // 窗口销毁后 webContents.send 会抛，加守卫（与 gateway:status 同一口径）
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      try { mainWindow.webContents.send('ghaccel:download', data) } catch { /* 窗口已销毁 */ }
-    }
+    safeSend(mainWindow, 'ghaccel:download', data)
   })
   // 镜像巡检：主进程持有定时器与网络探测，渲染层只订阅结果（标题栏红点不依赖页面挂载）
   githubAccel.startHealthWatch((status) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      try { mainWindow.webContents.send('ghaccel:health', status) } catch { /* 窗口已销毁 */ }
-    }
+    safeSend(mainWindow, 'ghaccel:health', status)
   })
   gatewayStore = new GatewayStore()
   gatewayManager = new GatewayManager(gatewayStore, (channel, data) => {
     // 窗口销毁后 webContents.send 会抛，加守卫（与 sftp:progress 同一口径）
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      try { mainWindow.webContents.send(channel, data) } catch { /* 窗口已销毁 */ }
-    }
+    safeSend(mainWindow, channel, data)
   })
   // 网关被主动断开 / 删除时联动停掉挂在它上面的隧道（被动断开由 onDead 拆，见 tunnel-manager）
   gatewayManager.setOnGatewayDown((id) => tunnelManager?.stopByGateway(id))
