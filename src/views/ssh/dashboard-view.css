@@ -1,0 +1,602 @@
+.dashboard-view {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  /* 整页结构画布：走 --canvas-bg（默认=--bg-base；现仅手记 atelier 把它换成纸面复合底）。 */
+  background: var(--canvas-bg);
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+}
+
+/* ── 连接状态条（仿 SFTP） ── */
+.dash-conn-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--page-head-h);
+  padding: 0 var(--padding);
+  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--spacing);
+}
+
+.conn-left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  min-width: 0;
+}
+
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.conn-dot.online { background: var(--metric-cool); }
+.conn-dot.offline { background: var(--text-tertiary); }
+
+.conn-name {
+  /* 页面标题：与统一头部规范及 SFTP .session-name 对齐 */
+  font-size: var(--page-title-size);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conn-host {
+  font-size: 0.9231rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.conn-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-10);
+  flex-shrink: 0;
+}
+
+.conn-stopped {
+  font-size: 0.8462rem;
+  color: var(--accent-red);
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conn-stopped-hint {
+  color: var(--text-tertiary);
+}
+
+/* ── 空态 ── */
+.dash-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-8);
+  color: var(--text-secondary);
+  font-size: 1rem;
+}
+
+.dash-empty-err {
+  color: var(--accent-red);
+}
+
+.dash-empty-sub {
+  font-size: 0.9231rem;
+  color: var(--text-tertiary);
+  max-width: 420px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.dash-empty-sub-hint {
+  color: var(--text-secondary);
+}
+
+.dash-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--padding);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  /* 内容滚动画布：同整页根走 --canvas-bg，连接后不再用实心 --bg-base 重新盖住渐变 */
+  background: var(--canvas-bg);
+}
+
+.dash-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--gutter);
+}
+
+.card {
+  padding: var(--spacing) var(--padding);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-6);
+}
+
+.card-label {
+  font-size: 0.8462rem;
+  color: var(--text-tertiary);
+  letter-spacing: 0.4px;
+}
+
+.card-val {
+  font-size: 1.5385rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.card.tone-cool .card-val { color: var(--metric-cool); }
+.card.tone-warn .card-val { color: var(--metric-warm); }
+.card.tone-danger .card-val { color: var(--metric-hot); }
+
+.card-sub {
+  margin-top: var(--spacing-4);
+  font-size: 0.8462rem;
+  color: var(--text-tertiary);
+}
+
+.sparkline-lg {
+  display: block;
+}
+
+:deep(.sparkline-lg-path) { stroke: var(--accent-primary); }
+:deep(.spark-baseline) { stroke: var(--border-subtle); stroke-width: 1; }
+
+.dash-section {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  padding: var(--spacing) var(--padding);
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.9231rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-10);
+}
+
+.section-empty {
+  font-size: 0.9231rem;
+  color: var(--text-tertiary);
+}
+
+/* ── 磁盘 ── */
+.disk-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+}
+
+.disk-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-10);
+  font-size: 0.9231rem;
+}
+
+.disk-mount {
+  width: 120px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.disk-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.disk-bar-fill {
+  height: 100%;
+  border-radius: var(--radius-sm);
+  background: var(--metric-cool);
+  transition: width 0.4s ease;
+}
+
+.disk-bar-fill.tone-cool { background: var(--metric-cool); }
+.disk-bar-fill.tone-warn { background: var(--metric-warm); }
+.disk-bar-fill.tone-danger { background: var(--metric-hot); }
+
+.disk-pct {
+  width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.section-sub {
+  font-size: 0.7692rem;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  margin-left: var(--spacing-6);
+}
+
+.disk-pct.tone-cool { color: var(--metric-cool); }
+.disk-pct.tone-warn { color: var(--metric-warm); }
+.disk-pct.tone-danger { color: var(--metric-hot); }
+
+.disk-size {
+  width: 120px;
+  text-align: right;
+  font-size: 0.8462rem;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── GPU ── */
+.gpu-embed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+}
+
+.gpu-embed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--spacing-2);
+  font-size: 0.9231rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* ── 进程表 ── */
+.proc-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed; /* 钉死列宽：分页切换时浏览器不再按内容重排，防抖动 */
+  font-size: 0.9231rem;
+}
+
+.proc-table th {
+  /* 字段居中：表头与单元格同轴，数值列视觉对齐（用户指定） */
+  text-align: center;
+  padding: var(--spacing-4) var(--spacing-8);
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-size: 0.8462rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.proc-table td {
+  text-align: center;
+  padding: var(--spacing-4) var(--spacing-8);
+  border-bottom: 1px solid var(--border-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.proc-table tr:last-child td {
+  border-bottom: none;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.proc-name {
+  /* flex 让内层 span 块化，ellipsis 才生效；居中由 justify-content 负责
+     （text-align 对 flex 容器无效）。列宽自适应：不设 max-width，由 table-layout auto 按内容分配 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.proc-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* 列宽：短名列按内容需要收窄，省下的宽度给名称列（它是唯一放两行的列） */
+.proc-table .col-pid   { width: 9%; }
+.proc-table .col-name  { width: 30%; }
+.proc-table .col-user  { width: 9%; }
+.proc-table .col-cpu   { width: 9%; }
+.proc-table .col-mem   { width: 10%; }
+.proc-table .col-etime { width: 12%; }
+.proc-table .col-stat  { width: 8%; }
+
+/* 名称双行：主行 comm（短、好扫）、副行命令行（分认同名进程）。
+   table-layout 已固定，列宽不因长命令行撑开，超长一律省略号，全文看 title */
+.proc-name-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.proc-cmd {
+  max-width: 100%;
+  font-size: 0.7692rem;
+  line-height: 1.25;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hot {
+  color: var(--accent-red);
+  font-weight: 600;
+}
+
+.proc-etime {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.proc-stat {
+  display: inline-block;
+  padding: 1px var(--spacing-6);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-size: 0.8462rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  cursor: help;
+}
+
+.proc-act {
+  width: 56px;
+  text-align: center;
+}
+
+.proc-kill {
+  padding: var(--spacing-2) var(--spacing-8);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent-red);
+  font-size: 0.8462rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition-fast), background var(--transition-fast);
+}
+
+.proc-table tr:hover .proc-kill {
+  opacity: 1;
+}
+
+.proc-kill:hover,
+.proc-kill:focus-visible {
+  background: var(--bg-hover);
+}
+
+/* 键盘可达：不能只靠 hover 显形，否则 Tab 到按钮上也隐形 */
+.proc-table tr:focus-within .proc-kill,
+.proc-kill:focus {
+  opacity: 1;
+}
+
+/* ── 端口表：与 proc-table 同构（同 th/td 节奏），进程列带 PID 关联 ── */
+.port-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed; /* 钉死列宽：数据/分页切换时浏览器不再按内容重排，防抖动 */
+  font-size: 0.9231rem;
+}
+
+.port-table th {
+  /* 字段居中：与 proc-table 同规则，表头与单元格同轴 */
+  text-align: center;
+  padding: var(--spacing-4) var(--spacing-8);
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-size: 0.8462rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.port-table td {
+  text-align: center;
+  padding: var(--spacing-4) var(--spacing-8);
+  border-bottom: 1px solid var(--border-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.port-table tr:last-child td {
+  border-bottom: none;
+}
+
+.port-num {
+  color: var(--text-primary);
+}
+
+.port-addr {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.port-proto-tag {
+  display: inline-block;
+  padding: 1px var(--spacing-6);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-size: 0.7692rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.port-proto-tag.udp {
+  color: var(--metric-warm);
+}
+
+.port-proc-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.port-pid {
+  margin-left: var(--spacing-8);
+  font-size: 0.7692rem;
+  color: var(--text-tertiary);
+}
+
+.port-proc-none {
+  color: var(--text-tertiary);
+}
+
+.port-act {
+  width: 56px;
+  text-align: center;
+}
+
+/* ── 端口扩展列：Backlog / Recv / 接口 / 属主 ── */
+.port-backlog,
+.port-recvq,
+.port-iface,
+.port-user {
+  white-space: nowrap;
+}
+.port-backlog,
+.port-recvq {
+  width: 56px;
+  text-align: right;
+}
+.port-iface {
+  width: 52px;
+}
+.port-user {
+  width: 72px;
+}
+.port-recvq-warn {
+  /* 告警前景用 status 令牌：dark/light/atelier 三档均有实值，随主题切换；
+     不得写 var(--color-warn, #hex) 这种未定义令牌 + 字面兑底（守卫测试钉表面） */
+  color: var(--status-warn-text);
+  font-weight: 600;
+}
+
+.port-svc {
+  margin-left: var(--spacing-6);
+  font-size: 0.7692rem;
+  font-family: var(--font-sans);
+  color: var(--text-tertiary);
+}
+
+/* ── 端口双栈标记 ⇄：通配地址折叠后提示存在备选地址（IPv4/IPv6） ── */
+.port-alt-hint {
+  margin-left: var(--spacing-4);
+  font-size: 0.7692rem;
+  color: var(--text-tertiary);
+  cursor: help;
+  vertical-align: middle;
+  opacity: 0.7;
+  transition: opacity var(--transition-fast);
+}
+.port-alt-hint:hover {
+  opacity: 1;
+  color: var(--text-secondary);
+}
+
+/* ── 端口分页器：嵌在 section-title 行右侧，轻量 ‹ x/y ›，不引整块分页组件 ── */
+.port-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-4);
+}
+
+.port-page-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 1.0769rem;
+  line-height: 1;
+  padding: 1px var(--spacing-6);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.port-page-btn:hover:not(:disabled) {
+  color: var(--accent-indigo);
+  background: var(--bg-hover);
+}
+
+.port-page-btn:disabled {
+  color: var(--text-tertiary);
+  cursor: default;
+}
+
+.port-page-ind {
+  font-family: var(--font-mono);
+  font-size: 0.7692rem;
+  color: var(--text-tertiary);
+  min-width: 30px;
+  text-align: center;
+}
+
+/* ── 窄窗口 ── */
+@media (max-width: 760px) {
+  .dash-body { padding: var(--spacing); gap: var(--spacing); }
+  .conn-stopped { max-width: 220px; }
+  .dash-section { padding: var(--spacing-10) var(--spacing); }
+  .disk-row { gap: var(--spacing-6); }
+  .disk-mount { width: 76px; font-size: 0.8462rem; }
+  .disk-size { width: 84px; font-size: 0.7692rem; }
+  /* 原来这里封 .proc-name 110px 防溢出；列宽改按比例后固定布局自己会缩，
+     封顶反而白丢名称列的宽度（副行更需要它） */
+}
+
+/* ── xl 断点（≥1920px）：规范补充条款 2 —— 不出滚动条 ──
+   内容区 overflow:hidden + 内部区块 fr 自适应高度，卡片内部不裁切。 */
+@media (min-width: 1920px) {
+  .dash-body {
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    gap: var(--spacing);
+  }
+  .dash-cards {
+    grid-row: 1;
+  }
+  .dash-section {
+    min-height: 0;
+    overflow: hidden;
+  }
+}
+
+/* ===============================================================
+   连接选择弹窗。注意：scoped 属性进不到 Teleport 到 body 的元素，
+   所以弹窗样式写在末尾非 scoped 的 <style> 块里。
+   =============================================================== */

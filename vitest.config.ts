@@ -39,6 +39,9 @@ export default defineConfig({
         // （spec-button.css 曾与 button.css 平行，已删除——它的断言并入 button.css）
         /spec-tokens\.css/,
         /grid\.css/,
+        // 批次3：SFC 内联 <style> 外提为同目录 .css。这些规则原先在 .vue 里被 ?raw
+        // 读到，外提后必须一并放行，否则「令牌消费方 / 空串」类守卫会静默失效。
+        /(?:dashboard-view(?:-global)?|git-repo-detail-panel|models-panel|git-accel-panel|git-repos-panel|gpu-nvtop-panel|ssh-view|connection-modal)\.css/,
       ],
     },
   },

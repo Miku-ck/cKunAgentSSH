@@ -39,13 +39,13 @@ describe('浮层遮罩走令牌', () => {
       'components/common/CommandPalette.vue',
       'components/ssh/AccessModal.vue',
       'components/ssh/BulkCommandModal.vue',
-      'components/ssh/ConnectionModal.vue',
+      'components/ssh/connection-modal.css',
       'components/ssh/GatewayDialogs.vue',
       'components/ssh/NewConnectionDialog.vue',
       'components/ssh/SftpConflictDialog.vue',
       'components/ssh/SftpImagePreview.vue',
       'components/ssh/SftpTransferDialog.vue',
-      'components/settings/panels/ModelsPanel.vue',
+      'components/settings/panels/models-panel.css',
       'styles/docker-modal.css',
     ]
     for (const rel of known) {

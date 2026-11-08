@@ -27,11 +27,11 @@ const LAYERS = [
   'components/common/ConfirmDialog.vue',
   'components/common/SettingsDialog.vue',
   'components/common/CommandPalette.vue',
-  'components/settings/panels/ModelsPanel.vue',
+  'components/settings/panels/models-panel.css',
   'components/ssh/QuickCommandBar.vue',
   'components/ssh/RemoteManager.vue',
   'components/ssh/SftpView.vue',
-  'views/ssh/SshView.vue',
+  'views/ssh/ssh-view.css',
   'styles/docker-modal.css',
 ]
 

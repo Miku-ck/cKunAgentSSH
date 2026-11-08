@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import rawVariables from './variables.css?raw'
 import rawGlobal from './global.css?raw'
 import rawSshView from '../views/ssh/SshView.vue?raw'
+import rawSshViewCss from '../views/ssh/ssh-view.css?raw'
 import rawQuickCommandBar from '../components/ssh/QuickCommandBar.vue?raw'
 import rawTitleBar from '../layouts/TitleBar.vue?raw'
 import rawApprovalDock from '../components/agent/ApprovalDock.vue?raw'
@@ -32,7 +33,7 @@ const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/<!--[\s
 
 const css = strip(rawVariables)
 const globalCss = strip(rawGlobal)
-const sshView = strip(rawSshView)
+const sshView = strip(rawSshView) + '\n' + strip(rawSshViewCss)
 const quickCommandBar = strip(rawQuickCommandBar)
 const titleBar = strip(rawTitleBar)
 const approvalDock = strip(rawApprovalDock)

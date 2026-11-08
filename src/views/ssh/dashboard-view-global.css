@@ -1,0 +1,232 @@
+.dc-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+}
+
+.dc-dialog {
+  width: min(420px, 100vw - 48px);
+  max-height: min(460px, 100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated-solid);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的按钮 */
+  outline: none;
+}
+
+.dc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-14) 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 1.0769rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.dc-close {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 1.3846rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--transition-fast);
+}
+
+.dc-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.dc-list {
+  overflow-y: auto;
+  padding: var(--spacing-8);
+}
+
+.dc-empty {
+  padding: 28px 18px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 1rem;
+}
+
+.dc-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-10);
+  padding: var(--spacing-10) var(--spacing-12);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.dc-item:hover {
+  background: var(--bg-hover);
+}
+
+.dc-item.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.dc-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.dc-name {
+  font-size: 1rem;
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-host {
+  font-size: 0.8462rem;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 快连卡片上的备注：跟在主机行后，同为次级信息但用正文字族（备注多为中文） */
+.dc-note {
+  margin-left: var(--spacing-6);
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+}
+
+.dc-spinner {
+  width: 16px;
+  height: 16px;
+  animation: dc-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes dc-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* ── 终止进程确认弹窗 ── */
+.dc-dialog-sm {
+  width: min(360px, 100vw - 48px);
+}
+
+.dc-kill-body {
+  padding: var(--spacing-16) 18px;
+}
+
+.dc-kill-line {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+  margin: 0 0 var(--spacing-8);
+  font-size: 1rem;
+}
+
+.dc-kill-label {
+  width: 40px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  text-align: right;
+  font-size: 0.9231rem;
+}
+
+.dc-kill-val {
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.dc-kill-hint {
+  margin: var(--spacing-14) 0 0;
+  padding-top: var(--spacing-12);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.8462rem;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+}
+
+.dc-kill-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-8);
+  padding: var(--spacing-12) 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.dc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-6);
+  padding: var(--spacing-6) var(--spacing-14);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.9231rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.dc-btn:hover:not(:disabled) {
+  border-color: var(--accent-indigo);
+  color: var(--accent-indigo);
+}
+
+.dc-btn-danger {
+  background: var(--accent-red);
+  border-color: var(--accent-red);
+  /* 实色底 + 对比前景，与兄弟 .dc-btn-warn 同惯例：深色主题 --bg-base 为黑，
+     红底黑字避开白字落在浅鲑红上的对比不足；不写字面量，守色板令牌纪律 */
+  color: var(--bg-base);
+}
+
+.dc-btn-danger:hover:not(:disabled) {
+  filter: brightness(1.1);
+  color: var(--bg-base);
+}
+
+.dc-btn-warn {
+  background: var(--metric-warm);
+  border-color: var(--metric-warm);
+  color: var(--bg-base);
+}
+
+.dc-btn-warn:hover:not(:disabled) {
+  filter: brightness(1.1);
+  color: var(--bg-base);
+}
+
+.dc-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dc-btn-spin {
+  width: 12px;
+  height: 12px;
+  animation: dc-spin 0.8s linear infinite;
+}

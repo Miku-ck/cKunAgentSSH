@@ -20,7 +20,7 @@ const DIALOGS = [
   'components/common/CommandPalette.vue',
   'components/common/ConfirmDialog.vue',
   'components/common/SettingsDialog.vue',
-  'components/settings/panels/ModelsPanel.vue',
+  'components/settings/panels/models-panel.css',
   'components/ssh/AccessModal.vue',
   'components/ssh/QuickCommandEditor.vue',
   'components/ssh/SftpConflictDialog.vue',

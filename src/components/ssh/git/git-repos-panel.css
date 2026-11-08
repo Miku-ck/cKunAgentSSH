@@ -1,0 +1,410 @@
+.git-repos {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: var(--font-sans);
+}
+
+/* ── 工具条（DockerView 同款形态） ── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-10);
+  padding: var(--spacing-10) var(--spacing-16);
+  border-bottom: 1px solid var(--divider-primary);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.search {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 var(--spacing-10);
+  width: 100px;
+  max-width: 40vw;
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  cursor: text;
+  transition: width var(--transition-fast);
+}
+/* 静置省地、聚焦展开：输入时回到全宽，长过滤词不用挤着看 */
+.search:focus-within { width: 210px; }
+.search input { background: transparent; border: none; color: var(--text-primary); font-size: 0.9231rem; font-family: var(--font-sans); flex: 1; min-width: 0; outline: none; }
+.search input::placeholder { color: var(--text-tertiary); }
+
+/* ── 错误带 / 加载带 / 空态（对齐 Docker） ── */
+.err-band {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-10);
+  margin: var(--spacing-12) var(--spacing-16);
+  padding: var(--spacing-12) var(--spacing-14);
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--status-error-text) 8%, var(--bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--status-error-text) 28%, transparent);
+  border-radius: var(--radius-md);
+}
+.err-band .eb-text { flex: 1; min-width: 0; }
+.err-band .eb-msg { font-size: 1rem; color: var(--text-primary); line-height: 1.5; }
+.err-band .eb-hint { font-size: 0.9231rem; color: var(--text-secondary); margin-top: var(--spacing-4); line-height: 1.5; }
+
+.load-band {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-8);
+  flex: 1;
+  color: var(--text-tertiary);
+  font-size: 0.9231rem;
+}
+.spinner { width: 14px; height: 14px; animation: gi-rot 1s linear infinite; }
+@keyframes gi-rot { to { transform: rotate(360deg); } }
+
+.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-12);
+  color: var(--text-tertiary);
+  font-size: 1rem;
+}
+.empty-actions { display: flex; gap: var(--spacing-8); }
+
+/* ── 双栏主体：左 = 状态分组列表（粘性组头），右 = 详情面板 ── */
+.body { flex: 1; min-height: 0; display: flex; }
+.vlist {
+  width: 300px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--divider-primary);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.vlist-scroll { flex: 1; overflow-y: auto; padding-bottom: var(--spacing-8); }
+.vgroup {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-6);
+  padding: 7px var(--spacing-10) 3px var(--spacing-10);
+  font-size: 0.8462rem;
+  color: var(--text-tertiary);
+  background: var(--bg-base);
+}
+.vgroup.g-needs { color: var(--status-warn-text); }
+.vrow {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 7px var(--spacing-10);
+  border: none;
+  border-left: 2px solid transparent;
+  background: transparent;
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.vrow:hover { background: var(--bg-hover); }
+.vrow.sel { background: var(--bg-active); border-left-color: var(--accent-primary); }
+.vr-l1 { display: flex; align-items: center; gap: var(--spacing-6); min-width: 0; }
+.vr-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9231rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vr-acc {
+  flex-shrink: 0;
+  font-size: 0.7692rem;
+  color: var(--accent-green);
+  border: 1px solid color-mix(in srgb, var(--accent-green) 35%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--spacing-4);
+  white-space: nowrap;
+}
+.vr-l2 { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 0.8462rem; }
+.vr-branch {
+  font-family: var(--font-mono);
+  color: var(--accent-cyan);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vr-dirty { color: var(--status-warn-text); white-space: nowrap; }
+.vr-err {
+  font-size: 0.8462rem;
+  color: var(--status-error-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 巡检失败带：比取数失败轻一档（列表照常可用，只是缺远端那一层） */
+.probe-band {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-10);
+  margin: var(--spacing-8) var(--spacing-16) 0;
+  padding: var(--spacing-8) var(--spacing-12);
+  flex-shrink: 0;
+  font-size: 0.9231rem;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--status-warn-text) 10%, var(--bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--status-warn-text) 30%, transparent);
+  border-radius: var(--radius-md);
+}
+.probe-band .pb-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vlist-empty { padding: 28px var(--spacing-12); text-align: center; color: var(--text-tertiary); font-size: 0.9231rem; }
+
+/* 详情未选中空态：双向居中（DESIGN.md 空状态规范） */
+.vdetail-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-6);
+  color: var(--text-tertiary);
+  font-size: 1rem;
+}
+.vdetail-sub { font-size: 0.8462rem; }
+
+/* ── 登记远程路径弹窗 ── */
+.arm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-24);
+}
+.arm-dialog {
+  width: min(420px, 100%);
+  background: var(--bg-elevated-solid);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  /* 容器只是初始焦点落点（tabindex=-1），描边交给里面的输入框 */
+  outline: none;
+  padding: var(--spacing-16) 18px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-10);
+}
+.arm-title { font-size: 1.0769rem; font-weight: 600; color: var(--text-primary); }
+.arm-sub { font-size: 0.9231rem; color: var(--text-secondary); line-height: 1.5; }
+.arm-input {
+  height: 28px;
+  padding: 0 var(--spacing-10);
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 0.9231rem;
+  outline: none;
+}
+.arm-input:focus { border-color: var(--accent-primary); }
+.arm-foot { display: flex; gap: var(--spacing-8); justify-content: flex-end; }
+
+/* ── 私人令牌弹窗（宽版 arm-dialog；列表卡片化 + 表单浅底容器，颜色全部走主题令牌） ── */
+.arm-dialog.wide { width: min(680px, 100%); }
+
+.arm-title-row { display: flex; align-items: center; gap: var(--spacing-8); }
+.arm-title-row .grow { flex: 1; }
+
+.token-count {
+  font-size: 0.7692rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--spacing-8);
+}
+
+/* 列表：有边框容器 + 行分隔线 + hover 反馈（同步子页远端卡同款形态） */
+.token-list {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow-y: auto;
+  max-height: 280px;
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-10);
+  padding: var(--spacing-8) var(--spacing-12);
+  transition: background 0.12s ease;
+}
+.token-row + .token-row { border-top: 1px solid var(--divider-primary); }
+.token-row:hover { background: var(--bg-hover); }
+
+/* 平台章：状态 tag 同源令牌；custom 域名走 indigo 区分 */
+.token-provider {
+  flex-shrink: 0;
+  min-width: 60px;
+  text-align: center;
+  font-size: 0.7692rem;
+  font-weight: 500;
+  color: var(--status-tag-text);
+  background: var(--status-tag-bg);
+  border: 1px solid var(--status-tag-border);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--spacing-8);
+  line-height: 18px;
+}
+.token-provider.custom {
+  color: var(--accent-indigo);
+  background: var(--accent-indigo-bg);
+  border-color: color-mix(in srgb, var(--accent-indigo) 32%, transparent);
+}
+
+/* host 是身份、label 是别名（默认与平台名重复时不重复展示） */
+.token-id { display: flex; align-items: baseline; gap: var(--spacing-8); flex: 0 1 auto; min-width: 0; }
+.token-host {
+  font-size: 0.8462rem;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.token-title {
+  flex-shrink: 1;
+  font-size: 0.7692rem;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 脱敏值：mono 胶囊（bg-input 底），不抢视觉 */
+.token-value {
+  flex: 1;
+  min-width: 120px;
+  font-size: 0.8462rem;
+  color: var(--text-tertiary);
+  background: var(--bg-input);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--spacing-10);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态：点 + 文案，替代原来的描边小签（降噪） */
+.token-status {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-6);
+  font-size: 0.7692rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.token-status.on { color: var(--status-success-text); }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); opacity: .45; }
+.token-status.on .status-dot { background: var(--status-success-text); opacity: 1; }
+
+.token-acts { display: flex; gap: var(--spacing-4); flex-shrink: 0; }
+
+/* 空态：锁图标 + 主句 + 副句，居中留白 */
+.token-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-6);
+  padding: var(--spacing-24) var(--spacing-16);
+  text-align: center;
+}
+.token-empty-icon { width: 28px; height: 28px; color: var(--text-tertiary); opacity: .7; }
+.token-empty-title { font-size: 0.9231rem; color: var(--text-secondary); }
+.token-empty-sub {
+  font-size: 0.8462rem;
+  color: var(--text-tertiary);
+  line-height: 1.6;
+  max-width: 360px;
+}
+
+/* 表单：浅底卡片化容器，与列表容器同圆角 */
+.token-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-10);
+  padding: var(--spacing-12);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-base) 45%, transparent);
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-10);
+  min-height: 30px;
+}
+
+.form-label {
+  flex: 0 0 56px;
+  font-size: 0.8462rem;
+  color: var(--text-secondary);
+}
+
+.form-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--spacing-8); }
+.form-field .arm-input { flex: 1; min-width: 0; width: auto; }
+.form-field select.arm-input { font-family: var(--font-sans); }
+.field-note { flex-shrink: 0; font-size: 0.7692rem; color: var(--text-tertiary); }
+
+.token-input-wrap { flex: 1; display: flex; align-items: center; gap: var(--spacing-6); min-width: 0; }
+.token-input-wrap .arm-input { flex: 1; min-width: 0; }
+
+.form-hint {
+  font-size: 0.7692rem;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  padding-left: calc(56px + var(--spacing-10));
+}
+
+/* 校验错误：danger 令牌色带（替代裸文本） */
+.token-error {
+  padding: var(--spacing-6) var(--spacing-10);
+  border: 1px solid var(--danger-border);
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm);
+  font-size: 0.8462rem;
+  color: var(--danger-text);
+  line-height: 1.5;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-8);
+}
+
+/* 底栏：顶部分隔线 + 左侧说明 + 右侧关闭（只作用于令牌弹窗，不碰登记远程路径弹窗） */
+.arm-dialog.wide .arm-foot {
+  align-items: center;
+  padding-top: var(--spacing-10);
+  border-top: 1px solid var(--divider-primary);
+}
+.arm-dialog.wide .arm-foot .grow { flex: 1; }
+.foot-note { font-size: 0.7692rem; color: var(--text-tertiary); }
+
+.mono { font-family: var(--font-mono); }
