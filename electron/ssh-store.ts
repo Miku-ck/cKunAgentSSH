@@ -6,31 +6,7 @@ import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { JsonFileStore } from './utils/json-file-store'
 
-export interface SSHConnectionRecord {
-  id: string
-  name: string
-  host: string
-  port: number
-  username: string
-  authType: 'password' | 'privateKey' | 'agent'
-  password?: string
-  privateKeyPath?: string
-  passphrase?: string
-  /** 备注(单行文字,最多 10 字). 旧数据可能没有此字段 */
-  note?: string
-  tags: string[]
-  readyTimeout?: number
-  keepaliveInterval?: number
-  lastConnectedAt?: number
-  createdAt: number
-  updatedAt: number
-  /** 目标环境标记('test' | 'prod'). 驱动生产环境高风险命令的审计与审批强化. 旧数据默认 'test' */
-  environment?: 'test' | 'prod'
-  /** S4-03：保存结果里的凭据告警。'encryption-unavailable' = 系统密钥环不可用，
-   *  本次提交的 password/passphrase 没有落盘（encrypt() 拒绝写明文）。
-   *  随 IPC 回传给渲染层提示用户 —— 此前这个事实只存在于主进程 console.warn。 */
-  credentialNotice?: 'encryption-unavailable'
-}
+export type SSHConnectionRecord = import('../shared/ipc-types').SSHConnectionRecord
 
 /**
  * 磁盘上的形态：只有两个敏感字段改名并加密，其余与内存形态逐字段相同。

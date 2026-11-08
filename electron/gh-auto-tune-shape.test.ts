@@ -8,6 +8,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { INVOKE_CHANNELS } from '../shared/ipc-contract'
 
 const read = (rel: string): string =>
   readFileSync(new URL(rel, import.meta.url), 'utf-8').replace(/\r\n/g, '\n')
@@ -48,7 +49,8 @@ describe('一键懒人模式链路', () => {
   it('IPC 三层齐全：main 注册 / preload 暴露 / env.d.ts 声明', () => {
     expect(main).toContain("handleTrusted('ghaccel:autoTune'")
     expect(main).toContain('githubAccel!.autoTune()')
-    expect(preload).toContain("ghaccelAutoTune: () => ipcRenderer.invoke('ghaccel:autoTune')")
+    expect(preload).toContain('ghaccelAutoTune: () => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelAutoTune)')
+    expect(INVOKE_CHANNELS.ghaccelAutoTune).toBe('ghaccel:autoTune')
     expect(envDts).toContain('ghaccelAutoTune: () => Promise<{')
   })
 

@@ -16,34 +16,7 @@ export type TunnelType = 'local' | 'remote' | 'dynamic'
 /** 数据面：借 SSH 通道，或走自家 TLS 网关。缺省视为 'ssh'，所以存量规则零迁移。 */
 export type TunnelVia = 'ssh' | 'gateway'
 
-export interface TunnelRule {
-  id: string
-  /** 展示名，可空（UI 显示自动名「L 8080 → db:5432」式） */
-  name: string
-  /** 引用 SSHConnectionRecord.id（弱引用：连接被删 → 启动报 config-missing） */
-  connectionId: string
-  /** 引用 GatewayRecord.id（仅 via='gateway'） */
-  gatewayId?: string
-  via?: TunnelVia
-  type: TunnelType
-  /**
-   * local:   本机 listenPort → ( SSH) → dstHost:dstPort
-   * remote:  远端 bindPort   → ( SSH回) → 本机 dstHost:dstPort
-   * dynamic: 本机 listenPort 起 SOCKS5，目标由客户端 CONNECT 指定
-   */
-  /** 默认 127.0.0.1，仅 local 可自定义；dynamic 强制 127.0.0.1（安全边界：不对局域网开放） */
-  listenHost?: string
-  listenPort?: number
-  /** 默认 127.0.0.1，仅 remote；0.0.0.0 需 UI 显式确认风险 */
-  remoteBindHost?: string
-  bindPort?: number
-  dstHost?: string
-  dstPort?: number
-  /** 应用启动后自动拉起（V1 默认 false，字段先留） */
-  autoStart: boolean
-  createdAt: number
-  updatedAt: number
-}
+export type TunnelRule = import('../shared/ipc-types').TunnelRule
 
 function getStorePath(): string {
   return join(app.getPath('userData'), 'tunnels.json')

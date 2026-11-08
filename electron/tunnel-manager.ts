@@ -19,22 +19,15 @@
  *   「网关回来就自动重启隧道」是没做的产品决定，不是这里的实现细节。
  */
 import * as net from 'net'
+import { safeSend as sendToWindow } from './utils/safe-send'
 import type { Duplex } from 'stream'
 import type { BrowserWindow } from 'electron'
 import type { RemoteBind, TunnelTransport } from './tunnel-transport'
 import type { TunnelRule } from './tunnel-store'
 import { isPort, portRangeError } from '../shared/port-core'
 
-/** 运行状态（主进程 → 渲染层推送，不持久化）。渲染层副本见 src/env.d.ts */
-export interface TunnelStatus {
-  id: string
-  state: 'starting' | 'active' | 'error' | 'stopped'
-  /** error 时给人看的失败原因 */
-  message?: string
-  /** 当前活动转发通道数 */
-  connections?: number
-  startedAt?: number
-}
+/** 隧道运行状态（主进程 → 渲染层推送，不持久化）；权威定义在 shared/ipc-types.ts */
+export type TunnelStatus = import('../shared/ipc-types').TunnelStatus
 
 interface TunnelSession {
   rule: TunnelRule
@@ -102,9 +95,7 @@ export class TunnelManager {
   }
 
   private safeSend(channel: string, data: unknown): void {
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      try { this.mainWindow.webContents.send(channel, data) } catch { /* EPIPE */ }
-    }
+    sendToWindow(this.mainWindow, channel, data)
   }
 
   private pushSession(s: TunnelSession): void {

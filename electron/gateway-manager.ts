@@ -23,33 +23,11 @@ import type { HelloOkPayload } from '../shared/gateway-mux'
 
 export type GatewayState = 'idle' | 'connecting' | 'online' | 'reconnecting' | 'error'
 
-export interface GatewayStatus {
-  id: string
-  name: string
-  host: string
-  port: number
-  state: GatewayState
-  message?: string
-  /** 当前活动转发通道数 */
-  channels?: number
-  /** 网关协商的心跳间隔（秒），未连接时为空 */
-  heartbeatSec?: number
-  role?: string
-  sessionId?: string
-  spki?: string
-  sinceAt?: number
-  /** 第几次重连（0 = 未断过） */
-  attempt?: number
-}
+/** 网关会话状态（主进程 → 渲染层推送，不持久化）；权威定义在 shared/ipc-types.ts */
+export type GatewayStatus = import('../shared/ipc-types').GatewayStatus
 
 /** 首次见到网关证书时推给 UI 的确认事件（与 ssh:host-key-new 同一形状） */
-export interface GatewayHostKeyEvent {
-  id: string
-  name: string
-  host: string
-  port: number
-  spki: string
-}
+export type GatewayHostKeyEvent = import('../shared/ipc-types').GatewayHostKeyEvent
 
 interface Entry {
   rec: GatewayRecord

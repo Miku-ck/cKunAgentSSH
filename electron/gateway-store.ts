@@ -15,21 +15,7 @@ import { join } from 'path'
 import { JsonFileStore } from './utils/json-file-store'
 import { isPort, portRangeError } from '../shared/port-core'
 
-export interface GatewayRecord {
-  id: string
-  name: string
-  host: string
-  port: number
-  /** CA（PEM）。缺省时信任判定完全交给 trustedSpki */
-  caPem?: string
-  /** 已确认的服务端 SPKI 指纹（sha256/…）。缺省 = 首次连接走 TOFU */
-  trustedSpki?: string
-  user: string
-  /** 落盘为 enc:base64；list() 返回前由 strip() 抹掉 */
-  password?: string
-  createdAt: number
-  updatedAt: number
-}
+export type GatewayRecord = import('../shared/ipc-types').GatewayRecord
 
 /** 渲染层可见的形状：口令永不出主进程 */
 export type PublicGatewayRecord = Omit<GatewayRecord, 'password'>

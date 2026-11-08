@@ -3,6 +3,7 @@
  * 在 Electron 主进程中运行，管理 SSH 连接和 Shell 通道
  */
 import type { Client, ClientChannel, SFTPWrapper } from 'ssh2'
+import { safeSend as sendToWindow } from './utils/safe-send'
 import { LS_COLORS_NO_BACKGROUND } from './utils/ls-colors'
 
 // ssh2 的 require 实测 ~1.3s（纯 JS+crypto 依赖链），静态导入会串在主进程模块
@@ -321,21 +322,10 @@ export interface SSHConnectionConfig {
   keepaliveInterval?: number
 }
 
-/** 渲染层副本见 src/env.d.ts（跨 tsconfig 边界不能 import，与本模块是否导出无关） */
-interface SSHTestResult {
-  ok: boolean
-  message: string
-  latencyMs: number
-}
+/** 权威定义在 shared/ipc-types.ts（渲染层 env.d.ts 同源派生） */
+type SSHTestResult = import('../shared/ipc-types').SSHTestResult
 
-interface SftpEntry {
-  name: string
-  path: string
-  isDirectory: boolean
-  size: number
-  modified: number
-  mode: string
-}
+type SftpEntry = import('../shared/ipc-types').SftpEntry
 
 interface SSHSession {
   id: string
@@ -389,30 +379,8 @@ function reconnectDelayMs(attempt: number): number {
   return Math.min(1000 * Math.pow(3, attempt - 1), RECONNECT_MAX_DELAY_MS)
 }
 
-/**
- * 重连状态变化事件（主进程 → 渲染层，channel: ssh:reconnect）。
- * 渲染层类型副本见 src/env.d.ts（两个 tsconfig 程序互不包含，沿用
- * SSHConnectionRecord 的跨上下文复制模式）
- */
-export interface SshReconnectStatus {
-  id: string
-  /** reconnecting=首轮排程（断开后自动/手动点击后）| retry=上一次失败后的重试排程 | success=重连成功 | gave-up=放弃 */
-  phase: 'reconnecting' | 'retry' | 'success' | 'gave-up'
-  /** 当前（reconnecting/retry）或最后一次（success/gave-up）尝试序号，1 起；gave-up + cancelled 时为 0（哨兵值） */
-  attempt: number
-  maxAttempts: number
-  /** reconnecting/retry 阶段：下一次尝试前的退避等待（ms） */
-  delayMs?: number
-  /** gave-up 阶段：exhausted=RECONNECT_MAX_ATTEMPTS 次均失败 | config-missing=连接配置已删除 | cancelled=重连被取消（如断开后连接配置被删除，tab 仍在）| not-retryable=确定性失败，重连窗口直接收摊（S4-04） */
-  reason?: 'exhausted' | 'config-missing' | 'cancelled' | 'not-retryable'
-  /**
-   * gave-up 阶段带上最后一次失败的分类结果（S0-18：此前 12 次尝试跑完就把已分类的
-   * SSHError 丢掉，UI 只能恒说「自动重连失败」，用户看不出是口令错、主机密钥变了
-   * 还是会话数超限）。
-   */
-  errorCode?: string
-  errorMessage?: string
-}
+/** 重连状态变化事件（主进程 → 渲染层，channel: ssh:reconnect）；权威定义在 shared/ipc-types.ts */
+export type SshReconnectStatus = import('../shared/ipc-types').SshReconnectStatus
 
 /**
  * 独立传输连接（每传输一条专用 SSH 连接）。
@@ -733,9 +701,7 @@ export class SSHManager {
 
   /** 安全发送 IPC 消息（窗口已销毁时跳过） */
   private safeSend(channel: string, data: unknown): void {
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      try { this.mainWindow.webContents.send(channel, data) } catch { /* EPIPE */ }
-    }
+    sendToWindow(this.mainWindow, channel, data)
   }
 
   /**

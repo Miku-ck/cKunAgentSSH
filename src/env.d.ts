@@ -14,52 +14,11 @@ interface FileEntry {
   modified: number
 }
 
-/** SFTP 远程目录条目 */
-interface SftpEntry {
-  name: string
-  path: string
-  isDirectory: boolean
-  size: number
-  modified: number
-  mode: string
-}
+type SftpEntry = import('../shared/ipc-types').SftpEntry
 
-/** SSH 连接配置(渲染进程与主进程共用形态) */
-interface SSHConnectionRecord {
-  id: string
-  name: string
-  host: string
-  port: number
-  username: string
-  authType: 'password' | 'privateKey' | 'agent'
-  password?: string
-  privateKeyPath?: string
-  passphrase?: string
-  /** 主进程列表接口附带的布尔标志（不含凭据内容）：是否已保存密码/passphrase，
-   *  供编辑弹窗提示"留空则保持原值"，避免误触"请输入密码"或误以为凭据丢失 */
-  hasPassword?: boolean
-  hasPassphrase?: boolean
-  /** 备注(单行文字,最多 10 字). 旧数据可能没有此字段,但 tags 数组可作为兜底 */
-  note?: string
-  /** 目标环境标记('test' | 'prod'). 驱动生产环境高风险命令的审计与审批强化. 旧数据默认 'test' */
-  environment?: 'test' | 'prod'
-  /** S4-03：主进程保存时附上来的凭据告警 —— 'encryption-unavailable' 表示系统密钥环
-   *  不可用，本次提交的密码/passphrase 没有落盘（不落明文）。渲染层据此提示用户，
-   *  否则「保存成功」是假信号，下次连接才暴露成认证失败。 */
-  credentialNotice?: 'encryption-unavailable'
-  tags: string[]
-  readyTimeout?: number       // 毫秒
-  keepaliveInterval?: number  // 毫秒
-  lastConnectedAt?: number
-  createdAt: number
-  updatedAt: number
-}
+type SSHConnectionRecord = import('../shared/ipc-types').SSHConnectionRecord
 
-interface SSHTestResult {
-  ok: boolean
-  message: string
-  latencyMs: number
-}
+type SSHTestResult = import('../shared/ipc-types').SSHTestResult
 
 /** 弹窗编辑器读取文件返回结构 */
 interface EditorFileContent {
@@ -68,61 +27,11 @@ interface EditorFileContent {
   readOnly: boolean
 }
 
-/**
- * SSH 重连状态变化事件（主进程 → 渲染层，channel: ssh:reconnect）。
- * 主进程类型定义见 electron/ssh-manager.ts（两个 tsconfig 程序互不包含，
- * 此处为渲染层副本）
- */
-interface SshReconnectStatus {
-  id: string
-  /** reconnecting=首轮排程（断开后自动/手动点击后）| retry=上一次失败后的重试排程 | success=重连成功 | gave-up=放弃 */
-  phase: 'reconnecting' | 'retry' | 'success' | 'gave-up'
-  /** 当前（reconnecting/retry）或最后一次（success/gave-up）尝试序号，1 起；gave-up + cancelled 时为 0（哨兵值） */
-  attempt: number
-  maxAttempts: number
-  /** reconnecting/retry 阶段：下一次尝试前的退避等待（ms） */
-  delayMs?: number
-  /** gave-up 阶段：exhausted=RECONNECT_MAX_ATTEMPTS 次均失败 | config-missing=连接配置已删除 | cancelled=重连被取消（如断开后连接配置被删除，tab 仍在）| not-retryable=确定性失败，重连窗口直接收摊（S4-04） */
-  reason?: 'exhausted' | 'config-missing' | 'cancelled' | 'not-retryable'
-  /** gave-up 阶段带上最后一次失败的分类结果，UI 得以说清是口令错还是主机密钥变了（S0-18） */
-  errorCode?: string
-  errorMessage?: string
-}
+type SshReconnectStatus = import('../shared/ipc-types').SshReconnectStatus
 
-/** SSH 隧道规则（主进程定义见 electron/tunnel-store.ts，此处为渲染层副本） */
-interface TunnelRule {
-  id: string
-  /** 展示名，可空（UI 显示自动名「L 8080 → db:5432」式） */
-  name: string
-  /** 引用 SSHConnectionRecord.id（弱引用：连接被删 → 启动报 config-missing） */
-  connectionId: string
-  /** 数据面：缺省视为 'ssh'（存量规则零迁移）；'gateway' 时走下面的网关会话 */
-  via?: 'ssh' | 'gateway'
-  /** 引用 GatewayRecord.id（仅 via='gateway'） */
-  gatewayId?: string
-  type: 'local' | 'remote' | 'dynamic'
-  /** 默认 127.0.0.1，仅 local 可自定义；dynamic 强制 127.0.0.1 */
-  listenHost?: string
-  listenPort?: number
-  /** 默认 127.0.0.1，仅 remote；0.0.0.0 需 UI 显式确认风险 */
-  remoteBindHost?: string
-  bindPort?: number
-  dstHost?: string
-  dstPort?: number
-  autoStart: boolean
-  createdAt: number
-  updatedAt: number
-}
+type TunnelRule = import('../shared/ipc-types').TunnelRule
 
-/** 隧道运行状态（主进程 → 渲染层推送，channel: tunnel:status；不持久化） */
-interface TunnelStatus {
-  id: string
-  state: 'starting' | 'active' | 'error' | 'stopped'
-  /** error 时给人看的失败原因 */
-  message?: string
-  connections?: number
-  startedAt?: number
-}
+type TunnelStatus = import('../shared/ipc-types').TunnelStatus
 
 /** GitHub 加速下载任务状态（主进程 → 渲染层，channel: ghaccel:download；不持久化） */
 interface GhDownloadStatus {
@@ -161,51 +70,11 @@ interface GhaccelHealthStatus {
   checkedAt: number
 }
 
-/** TLS 接入网关记录（主进程定义见 electron/gateway-store.ts；口令不出主进程） */
-interface GatewayRecord {
-  id: string
-  name: string
-  host: string
-  port: number
-  /** CA（PEM），缺省时信任判定完全交给下面的指纹 */
-  caPem?: string
-  /** 已确认的服务端 SPKI 指纹（sha256/…），缺省 = 首次连接走 TOFU */
-  trustedSpki?: string
-  user: string
-  /** 仅保存时上行；下行副本里永远没有这个字段 */
-  password?: string
-  createdAt: number
-  updatedAt: number
-}
+type GatewayRecord = import('../shared/ipc-types').GatewayRecord
 
-/** 网关会话状态（主进程 → 渲染层推送，channel: gateway:status；不持久化） */
-interface GatewayStatus {
-  id: string
-  name: string
-  host: string
-  port: number
-  state: 'idle' | 'connecting' | 'online' | 'reconnecting' | 'error'
-  message?: string
-  /** 当前活动转发通道数 */
-  channels?: number
-  /** 网关协商的心跳间隔（秒），仅在会话就绪后有值 */
-  heartbeatSec?: number
-  role?: string
-  sessionId?: string
-  spki?: string
-  sinceAt?: number
-  /** 第几次重连（0 = 未断过） */
-  attempt?: number
-}
+type GatewayStatus = import('../shared/ipc-types').GatewayStatus
 
-/** 首次见到网关证书（TOFU），UI 确认后调 gatewayTrustHostKey 落库 */
-interface GatewayHostKeyEvent {
-  id: string
-  name: string
-  host: string
-  port: number
-  spki: string
-}
+type GatewayHostKeyEvent = import('../shared/ipc-types').GatewayHostKeyEvent
 
 /** 通道表的一行（主进程定义见 electron/transports/gateway-transport.ts） */
 interface GatewayChannelRow {
