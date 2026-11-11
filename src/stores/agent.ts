@@ -181,6 +181,8 @@ export const useAgentStore = defineStore('agent', () => {
   const currentConversationId = ref('')
   // H14: 意图识别结果（用于规划列表展示）
   const intentionInfo = ref<AgentIntentionInfo | null>(null)
+  /** 运维专家建议（非阻塞 chip）：后端 expert_suggestion 事件回填，用户切换/忽略后清空 */
+  const expertSuggestion = ref<{ slug: string; name: string; reason: string; task: string } | null>(null)
   // 澄清向导状态 — clarification_needed 事件触发时填充，ClarifyingWizard 组件据此渲染
   const clarificationWizard = ref<ClarificationWizardState | null>(null)
   // H14 修复：人工介入去重标志（同一 run 只接受一次，独立于数组长度）
@@ -459,6 +461,7 @@ export const useAgentStore = defineStore('agent', () => {
     currentConversationId.value = ''
     intentionInfo.value = null
     clarificationWizard.value = null
+    expertSuggestion.value = null
     // 清理所有 pending 的向导关闭定时器，避免组件卸载后 timer 仍触发回调
     for (const timerId of pendingWizardTimers) clearTimeout(timerId)
     pendingWizardTimers.clear()
@@ -492,6 +495,11 @@ export const useAgentStore = defineStore('agent', () => {
   /** 用户忽略某次权限请求（仅关闭卡片，后端仍在等待，超时后按拒绝处理） */
   function dismissPermission(id: string) {
     permissionRequests.value = permissionRequests.value.filter(r => r.id !== id)
+  }
+
+  /** 用户切换或忽略运维专家建议后清空 chip（run 本身不受影响） */
+  function dismissExpertSuggestion() {
+    expertSuggestion.value = null
   }
 
   /**
@@ -947,6 +955,19 @@ export const useAgentStore = defineStore('agent', () => {
         break
       }
 
+      case 'expert_suggestion':
+        // 运维专家建议（非阻塞）：run 继续以当前身份跑，chip 由用户决定切换或忽略。
+        // 缺 slug 的脏事件不回填 —— 没有 slug 就找不到要切去的专家，chip 点了也是空转。
+        if (event.slug) {
+          expertSuggestion.value = {
+            slug: event.slug,
+            name: event.name || event.slug,
+            reason: event.reason || '',
+            task: event.task || '',
+          }
+        }
+        break
+
       case 'done':
         // Q-F2：迟到事件守卫 —— 同 error 分支，abort 后（idle+aborted）或已
         // completed/failed 的 run 不再接受迟到的 done 事件翻转状态
@@ -1010,6 +1031,7 @@ export const useAgentStore = defineStore('agent', () => {
     currentConversationId,
     intentionInfo,
     clarificationWizard,
+    expertSuggestion,
     awaitingClarification,
     aborted,
     scheduleRev,
@@ -1025,6 +1047,7 @@ export const useAgentStore = defineStore('agent', () => {
     snapshot,
     clearRunNotice,
     dismissHelp,
+    dismissExpertSuggestion,
     approvePermission,
     denyPermission,
     resolvePermission,

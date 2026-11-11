@@ -984,3 +984,39 @@ describe('迟到事件守卫', () => {
     expect(store.status).toBe('completed')
   })
 })
+
+describe('expert_suggestion 事件', () => {
+  beforeEach(() => {
+    runs.length = 0
+    setActivePinia(createPinia())
+  })
+
+  it('回填建议态（slug/name/reason/task）', () => {
+    const { store, push } = startRun()
+    push({ type: 'expert_suggestion', slug: 'general_ops', name: '运维专家', reason: '检测到运维任务', task: '重启 nginx' })
+    expect(store.expertSuggestion).toEqual({
+      slug: 'general_ops', name: '运维专家', reason: '检测到运维任务', task: '重启 nginx',
+    })
+  })
+
+  it('dismiss 清空建议态', () => {
+    const { store, push } = startRun()
+    push({ type: 'expert_suggestion', slug: 'general_ops', name: '运维专家', task: 't' })
+    store.dismissExpertSuggestion()
+    expect(store.expertSuggestion).toBeNull()
+  })
+
+  it('新 run 清空上一轮建议（_reset）', () => {
+    const h = startRun()
+    h.push({ type: 'expert_suggestion', slug: 'general_ops', name: '运维专家', task: 't' })
+    expect(h.store.expertSuggestion).not.toBeNull()
+    h.store.runAgent({ task: 't2', conversationId: 'c2', modelId: 'm1' })
+    expect(h.store.expertSuggestion).toBeNull()
+  })
+
+  it('缺 slug 不回填（防御脏事件）', () => {
+    const { store, push } = startRun()
+    push({ type: 'expert_suggestion', name: '运维专家' })
+    expect(store.expertSuggestion).toBeNull()
+  })
+})

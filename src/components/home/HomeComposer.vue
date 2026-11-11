@@ -626,6 +626,29 @@ async function send() {
   grow()
 }
 
+// ── 运维专家建议 chip（expert_suggestion 事件，非阻塞）──
+// 切换并重跑：选中建议的专家 → 中止当前 run → 用建议携带的 task 原样重发。
+// 忽略：只收 chip，正在跑的 run 不受影响（通用身份能力不缺，只缺方法论纪律）。
+async function acceptExpertSuggestion() {
+  const sug = agent.expertSuggestion
+  if (!sug) return
+  const expert = expertsStore.experts.find(e => e.slug === sug.slug)
+  const task = sug.task
+  agent.dismissExpertSuggestion()
+  if (!expert) {
+    toast.error(`未找到专家 ${sug.name}`)
+    return
+  }
+  sshAi.setSelectedExpert(expert.id)
+  agent.abort()
+  if (task.trim()) {
+    await sshAi.sendMessage(task)
+  }
+}
+function ignoreExpertSuggestion() {
+  agent.dismissExpertSuggestion()
+}
+
 // 草稿是 store 级共享态（sharedDraft）：预填与打字都落到这份 textarea，
 // 高度与行线要跟着重算 —— 否则内容被 overflow-y:hidden 裁掉半截。
 // 带 immediate：预填若发生在挂载之前，只守变化的 watch 就永远不补这一次高度。
@@ -668,6 +691,12 @@ onMounted(() => {
 
 <template>
   <div class="hcc">
+    <!-- 运维专家建议（非阻塞）：当前 run 继续跑，用户可切换并重跑或忽略 -->
+    <div v-if="agent.expertSuggestion" class="hcc-suggest" role="status">
+      <span class="hcc-suggest-text">{{ agent.expertSuggestion.reason }}：{{ agent.expertSuggestion.name }}</span>
+      <button type="button" class="hcc-suggest-accept" @click="acceptExpertSuggestion">切换并重跑</button>
+      <button type="button" class="hcc-suggest-ignore" @click="ignoreExpertSuggestion">忽略</button>
+    </div>
     <textarea
       ref="ta"
       v-model="draft"
@@ -1559,6 +1588,59 @@ onMounted(() => {
    回到自己说明自己：一行 placeholder，颜色用三级文字，不与正文抢。 */
 .hcc-input::placeholder {
   color: var(--text-tertiary);
+}
+/* 运维专家建议（非阻塞 chip）：坐在卡顶的一道柔和提示条。底是强调色薄薄一层
+   渍在卡面上（同 .hcc-chip 的墨渍做法，卡面什么亮度它跟着什么亮度）；上两角
+   跟着卡片内圆角收口（减 1px 边框，与 .hcc-foot 收下角同一手法）。 */
+.hcc-suggest {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  padding: var(--spacing-6) var(--spacing-12);
+  background: color-mix(in srgb, var(--accent-primary) 7%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  border-radius: calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0;
+  font-size: 0.9231rem;
+}
+/* 原因 + 专家名一行读完；超长截断，不把两枚动作挤出卡外 */
+.hcc-suggest-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+/* 切换是强调字色 + alpha 描边（与落点 chip 选中态同一外观语言，DESIGN.md 禁实心
+   CTA）；忽略是素文字按钮。两枚都不铺实底，提示条本身已经够醒目。 */
+.hcc-suggest-accept,
+.hcc-suggest-ignore {
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 var(--spacing-8);
+  border-radius: var(--radius-sm);
+  font-size: 0.8462rem;
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
+}
+.hcc-suggest-accept {
+  border: 1px solid rgba(var(--accent-primary-rgb), .4);
+  background: transparent;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.hcc-suggest-accept:hover { background: color-mix(in srgb, var(--accent-primary) 12%, transparent) }
+.hcc-suggest-ignore {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+}
+.hcc-suggest-ignore:hover { background: var(--bg-hover); color: var(--text-primary) }
+/* 焦点态用淡 glow（与 .hcc:focus-within 同源同浓度），不用硬描边 ——
+   全局 2px outline 会在卡内小按钮上盖出一道硬框，与卡片自己的焦点语言打架。 */
+.hcc-suggest-accept:focus-visible,
+.hcc-suggest-ignore:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent);
 }
 .hcc-foot {
   display: flex;
