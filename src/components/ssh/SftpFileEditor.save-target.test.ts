@@ -8,9 +8,12 @@
  */
 // ?raw 由 vite/client 声明类型：本文件在 tsconfig.web 下检查，那里没有 node 类型，
 // 读 node:fs 会让 typecheck 报错（同 src/styles/variables.test.ts 的口径）
-import src from './SftpFileEditor.vue?raw'
+import rawSrc from './SftpFileEditor.vue?raw'
 
 import { describe, expect, it } from 'vitest'
+
+// 工作区是 CRLF 检出：统一成 LF 再切片，否则 '\n}\n' 找不到函数结尾
+const src = rawSrc.replace(/\r\n/g, '\n')
 
 function sliceFunction(header: string): string {
   const start = src.indexOf(header)

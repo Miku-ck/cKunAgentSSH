@@ -484,6 +484,7 @@ export const useAgentStore = defineStore('agent', () => {
     humanHelpRequests.value = []
     permissionRequests.value = []
     clarificationWizard.value = null
+    expertSuggestion.value = null
     _helpRequestedThisRun = false
   }
 

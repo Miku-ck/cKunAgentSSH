@@ -1006,6 +1006,16 @@ describe('expert_suggestion 事件', () => {
     expect(store.expertSuggestion).toBeNull()
   })
 
+  it('clearRunNotice 清空建议态（切会话不残留）', () => {
+    const { store, push } = startRun()
+    push({ type: 'expert_suggestion', slug: 'general_ops', name: '运维专家', task: 't' })
+    // clearRunNotice 运行中不清：先收尾这一轮，再模拟切会话
+    push({ type: 'done', state: 'completed', iterations: 1, run_id: 'r1' })
+    expect(store.expertSuggestion).not.toBeNull()
+    store.clearRunNotice()
+    expect(store.expertSuggestion).toBeNull()
+  })
+
   it('新 run 清空上一轮建议（_reset）', () => {
     const h = startRun()
     h.push({ type: 'expert_suggestion', slug: 'general_ops', name: '运维专家', task: 't' })
