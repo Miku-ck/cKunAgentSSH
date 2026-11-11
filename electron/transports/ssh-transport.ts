@@ -9,7 +9,7 @@
  */
 import { Duplex } from 'node:stream'
 import type { Client } from 'ssh2'
-import type { RemoteBind, TunnelTransport } from '../tunnel-transport'
+import type { RemoteBind, TunnelTransport } from './tunnel-transport'
 
 type RejectPending = (reason: string) => void
 

@@ -9,7 +9,7 @@
 import { Duplex } from 'stream'
 import { describe, expect, it, vi } from 'vitest'
 import { GatewaySession, TunnelDeniedError } from './gateway-transport'
-import type { RemoteBind } from '../tunnel-transport'
+import type { RemoteBind } from './tunnel-transport'
 import {
   createMuxDecoder,
   encodeFrame,

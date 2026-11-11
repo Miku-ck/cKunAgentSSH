@@ -29,7 +29,7 @@ import {
   type OpenErrCode,
   type OpenPayload,
 } from '../../shared/gateway-mux'
-import type { RemoteBind, TunnelTransport } from '../tunnel-transport'
+import type { RemoteBind, TunnelTransport } from './tunnel-transport'
 
 const HIGH_WATER = 256 * 1024
 

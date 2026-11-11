@@ -259,7 +259,7 @@ cKunAgentSSH/
 
 | Object | Convention | Example |
 | --- | --- | --- |
-| Directories / TS files | kebab-case | `electron/backend-manager.ts`, `src/utils/transfer-conflict.ts` |
+| Directories / TS files | kebab-case | `electron/managers/backend-manager.ts`, `src/utils/transfer-conflict.ts` |
 | Vue component files | PascalCase | `ConnectionModal.vue`, `K8sView.vue` |
 | composable | `useXxx.ts` / `useXxx()` (established exception in that directory) | `useSshNavigation.ts` |
 | `src/stores/` and store ids | kebab-case (new code) | `server-monitor`, `ssh-ai` |

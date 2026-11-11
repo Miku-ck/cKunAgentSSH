@@ -14,10 +14,13 @@
 | 文档归属确认 | `docs/` 是有意保留的空占位（README 第 239 行、DESIGN.md 第 67 行明确说明），保持原位 | ✅ 无引用破坏 |
 | `backend/pyproject.toml` | 补包元数据（name/version/requires-python/build-system），**不重复** ruff/pytest 配置（避免优先级冲突） | ✅ tomllib 语法验证通过 |
 | 基线验证 | 前端测试 193 文件 / 2332 测试全通过；electron-vite build 成功 | ✅ 基线健康 |
+| `backend/db/` 包（2026-11-11） | P0 阶段 1-2：`_conn` / `_util` / `experts` / `plugins` 骨架与试点，函数体原样复制，`database.py` 仍是公共入口 | ✅ 冒烟校验与 database 行为一致；相关 pytest 全过 |
+| `src/stores/sftp.ts` 拆分（2026-11-12） | P1：文件面拆到 `src/composables/useSftpFiles.ts`、传输面拆到 `src/composables/useSftpTransfer.ts`，store 收敛为会话态 + 门面（1952 → 225 行），公开接口不变 | ✅ typecheck 通过；sftp 相关 66 测试全过 |
+| `electron/` 重组（2026-11-12） | P1：根级模块按 core / managers / services / stores 归位，`tunnel-transport.ts` 归入 `transports/`、`ssh-error.ts` 归入 `utils/`，测试跟随源码移动；`main.ts` / `preload.ts` / `preload-helpers.ts` 留根（构建入口不动）；测 shared 核心的 4 个测试移入 `shared/` | ✅ typecheck 清零；electron+shared 68 文件 / 678 测试全过；electron-vite build 成功 |
 
-**已知基线问题**（非本次引入）：
-- `src/stores/exec-target.test.ts:89` 类型错误（未提交修改的测试文件）
-- 系统 `python` 损坏（WindowsApps 占位符），`npm run test:backend` 无法执行；内嵌运行时不含 pytest/ruff
+**基线问题处置**（原「已知基线问题」）：
+- `exec-target.test.ts:89` 类型错误：已随专家/插件基线提交（5cc531f）修复，typecheck 全绿。
+- 系统 `python` 损坏：本机已恢复可用，全量 pytest 4043 项通过（2026-11-11）。
 
 ---
 

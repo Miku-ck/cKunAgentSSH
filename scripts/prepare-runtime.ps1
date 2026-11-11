@@ -8,7 +8,7 @@
       1. 从 astral-sh/python-build-standalone 取 install_only_stripped 的可重定位 CPython
          （自带 python.exe + Lib/，不需要像 Windows embeddable 那样手改 ._pth 再塞 pip）；
       2. 解压到 runtime/ —— 落位口径必须与两处一字不差：
-         electron/backend-manager.ts resolvePythonCommand 的 bundled 分支、scripts/package.js 的探测；
+         electron/managers/backend-manager.ts resolvePythonCommand 的 bundled 分支、scripts/package.js 的探测；
       3. pip install -r backend/requirements.lock（完全钉版，保证内嵌运行时可复现；锁不存在时回退到 requirements.txt）；
       4. 用 checked-hash 模式预编译 site-packages 字节码 —— electron-builder 拷贝会重写源文件
          mtime，mtime 模式的 .pyc 会整批失效，代价是目标机每次启动重新编译

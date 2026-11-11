@@ -258,7 +258,7 @@ cKunAgentSSH/
 
 | 对象 | 约定 | 示例 |
 | --- | --- | --- |
-| 目录 / TS 文件 | kebab-case | `electron/backend-manager.ts`、`src/utils/transfer-conflict.ts` |
+| 目录 / TS 文件 | kebab-case | `electron/managers/backend-manager.ts`、`src/utils/transfer-conflict.ts` |
 | Vue 组件文件 | PascalCase | `ConnectionModal.vue`、`K8sView.vue` |
 | composable | `useXxx.ts` / `useXxx()`（该目录的既定特例） | `useSshNavigation.ts` |
 | `src/stores/` 与 store id | kebab-case（新代码） | `server-monitor`、`ssh-ai` |

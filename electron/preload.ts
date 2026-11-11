@@ -2,9 +2,9 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { INVOKE_CHANNELS, EVENT_CHANNELS } from '../shared/ipc-contract'
 import type { ApiKey } from '../shared/ipc-contract'
 import { onEventOf } from './preload-helpers'
-import type { SshReconnectStatus } from './ssh-manager'
-import type { TunnelStatus } from './tunnel-manager'
-import type { GatewayHostKeyEvent, GatewayStatus } from './gateway-manager'
+import type { SshReconnectStatus } from './managers/ssh-manager'
+import type { TunnelStatus } from './managers/tunnel-manager'
+import type { GatewayHostKeyEvent, GatewayStatus } from './managers/gateway-manager'
 import type {
   RegisteredUploadTask,
   UploadTaskMeta,

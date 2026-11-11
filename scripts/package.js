@@ -34,7 +34,7 @@ const builderEntry = path.join(root, 'node_modules', 'electron-builder', 'cli.js
 //    有点东西」—— 一个误落进来的日志/临时文件会让构建谎报「已就绪」，把只装着杂物的
 //    resources/python-runtime/ 打进包。运行时解析侧本来就会 existsSync(python.exe) 兜底，
 //    所以错的只是这条构建日志与这次多余拷贝。
-//    ⚠️ POSIX 的路径必须与运行时解析侧一字不差：electron/backend-manager.ts 读的是
+//    ⚠️ POSIX 的路径必须与运行时解析侧一字不差：electron/managers/backend-manager.ts 读的是
 //    resources/python-runtime/bin/python3，而 from: runtime → to: python-runtime 是整目录
 //    平移，所以构建期要认的也是 runtime/bin/python3。此前这里探的是 runtime/python3，
 //    两边永远对不上 —— 探到的那次拷贝在包里没人能找到，没探到的那次又白打警告，
