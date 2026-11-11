@@ -35,6 +35,8 @@ class ScheduleIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=_NAME_MAX_LEN)
     # spec 2026-10-27-schedule-task-type：任务分类，仅影响模板与列表分区，不改执行
     task_type: Literal["ops", "daily"] = "ops"
+    # spec §6.2：任务绑定的专家 slug，新建默认通用（general）；存量迁移回填 general_ops
+    expert_slug: str = "general"
     schedule_type: str = "interval"
     # 审查修复：加范围校验 — 0/负值入库后 compute_next_run 算出 ≤now 的时间，
     # 每 30s tick 都触发无头 SSH Agent 运行，持续消耗模型调用与 SSH 连接
@@ -56,6 +58,8 @@ class SchedulePatch(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=_NAME_MAX_LEN)
     # spec 2026-10-27-schedule-task-type：类型创建后不可变，此字段仅用于拒绝变更（见 update_schedule）
     task_type: Optional[Literal["ops", "daily"]] = None
+    # spec §6.2：专家 slug 可改（与 task_type 不同，绑定关系允许后续调整）
+    expert_slug: Optional[str] = None
     schedule_type: Optional[str] = None
     # 审查修复：与 ScheduleIn 一致的范围校验
     interval_minutes: Optional[int] = Field(default=None, ge=1, le=525600)

@@ -296,6 +296,7 @@ class RunbookEngine:
                         conversation_id=f"runbook-{rid}",
                         ssh_session_id=session_id,  # 预建会话：跨步骤复用，不自建自关
                         max_iterations=_STEP_MAX_ITERATIONS,
+                        expert_slug="general_ops",  # 剧本天然运维（spec §6.2）
                         log_tag=f"runbook={rid} step={i + 1}",
                     )
                 except Exception as e:
@@ -435,6 +436,7 @@ class RunbookEngine:
                 conversation_id=f"runbook-{runbook['id']}",
                 ssh_session_id=session_id,
                 max_iterations=_STEP_MAX_ITERATIONS,
+                expert_slug="general_ops",  # 剧本天然运维（spec §6.2）
                 log_tag=f"runbook={runbook['id']} diagnose",
             )
             return (res.content or "").strip()[:_DIAGNOSIS_MAX_CHARS]

@@ -602,7 +602,14 @@ class ScheduleEngine:
             enable_intention_guide=False,
             enable_dynamic_budget=False,
         )
-        system_prompt = _build_schedule_system_prompt(sched)
+        # 专家接线：存量任务迁移时已绑 general_ops，新建默认 general（spec §6.2）
+        from agent.expert_policy import build_identity_section, resolve_expert
+        _expert_slug = (sched.get("expert_slug") or "general").strip() or "general"
+        _expert_row = await asyncio.to_thread(db.get_expert_by_slug, _expert_slug)
+        if _expert_row is None:
+            raise ValueError(f"定时任务绑定的专家不存在: {_expert_slug}")
+        _identity_section = build_identity_section(resolve_expert(_expert_row))
+        system_prompt = _build_schedule_system_prompt(sched, _identity_section)
         conversation_id = _SCHEDULE_CONVERSATION_PREFIX + (sched["id"] or "")
 
         done_content = ""
@@ -819,7 +826,7 @@ def _schedule_environment(resolution: EnvironmentResolution) -> str:
     return "prod"
 
 
-def _build_schedule_system_prompt(sched: dict) -> str:
+def _build_schedule_system_prompt(sched: dict, identity_section: str = "") -> str:
     parts = []
     # S7-02 的守卫段先落：它只读 sched，不碰 import 与时钟，所以不该被下面那段
     # 「可选上下文」的失败一起吞掉（原先整块包在一个 try/except: pass 里，
@@ -833,13 +840,16 @@ def _build_schedule_system_prompt(sched: dict) -> str:
             "完成任务，并在报告开头写明本次没有可连接的目标主机。"
         )
     try:
-        from prompts import _current_time_str, SSH_MODE_PROMPT
+        from prompts import BASE_IDENTITY_PROMPT, _current_time_str
         parts.append(f"[系统时间] 当前时间：{_current_time_str()}。")
-        parts.append(SSH_MODE_PROMPT)
+        parts.append(BASE_IDENTITY_PROMPT)
     except Exception as e:
         # 降级可以，但必须留痕：这段丢的是时区/模式上下文，出问题时该能在日志里看到
         logger.warning("定时任务系统提示词的上下文段构建失败，已降级 (schedule=%s): %s",
                        sched.get("sid") or sched.get("name") or "?", e)
+    # 专家身份段紧随中性基础身份（与交互路径同序）；空串不追加任何字节
+    if identity_section:
+        parts.append(identity_section)
     parts.append(
         "你现在以「定时任务」方式自动执行。请独立完成给定任务，"
         "并输出结构化中文报告：先给总体结论，再用 ## 二级标题分节说明发现的问题、"

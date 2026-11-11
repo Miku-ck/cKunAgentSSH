@@ -5001,16 +5001,18 @@ def create_schedule(data: dict) -> dict:
     try:
         conn.execute(
             """INSERT INTO schedules (
-                id, name, task_type, schedule_type, interval_minutes, time_hour, time_minute,
+                id, name, task_type, expert_slug, schedule_type, interval_minutes, time_hour, time_minute,
                 weekday, day_of_month, target_host, task_prompt, enabled,
                 next_run_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 sid,
                 (data.get("name") or "").strip(),
                 # spec 2026-10-27-schedule-task-type：分类缺省归运维；update_schedule 的
                 # allowed 集不含 task_type，故类型创建后不可变（即便 patch 带也被丢弃）。
                 data.get("task_type") or "ops",
+                # spec §6.2：专家绑定缺省归通用；存量旧库由迁移一次性回填 general_ops。
+                data.get("expert_slug") or "general",
                 data.get("schedule_type") or "interval",
                 int(data.get("interval_minutes") or 60),
                 # None 判定而非 `or`：0（午夜）是合法 time_hour，`0 or 9` 会把每日/每周/
@@ -5038,6 +5040,7 @@ def update_schedule(schedule_id: str, fields: dict) -> Optional[dict]:
     allowed = {
         "name", "schedule_type", "interval_minutes", "time_hour", "time_minute",
         "weekday", "day_of_month", "target_host", "task_prompt", "enabled",
+        "expert_slug",
     }
     cols, vals = [], []
     for k, v in fields.items():

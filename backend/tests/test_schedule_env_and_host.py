@@ -95,8 +95,10 @@ def _run_once(monkeypatch, resolution: EnvironmentResolution):
     monkeypatch.setattr("agent.harness.llm_client.StreamLLMClient", lambda **_kw: object())
     monkeypatch.setattr("agent.cost_tracker.CostTracker", lambda **_kw: object())
     monkeypatch.setattr(se, "ElectronBridge", _FakeBridge)
-    monkeypatch.setattr(se, "_build_schedule_system_prompt", lambda _s: "sp")
+    monkeypatch.setattr(se, "_build_schedule_system_prompt", lambda _s, _identity="": "sp")
     monkeypatch.setattr(tools_mod, "create_registry", lambda: object())
+    # 专家接线：_run_agent_once 现按 slug 查专家（本测试无 base_db），桩返回空身份通用行
+    monkeypatch.setattr(se.db, "get_expert_by_slug", lambda slug: {"slug": slug, "name": "通用"})
 
     async def _resolve(_requested, _session_id=""):
         return resolution

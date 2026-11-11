@@ -187,6 +187,7 @@ async def run_headless_once(
     connection_id: str = "",
     max_iterations: int = _DEFAULT_MAX_ITERATIONS,
     system_prompt: str = "",
+    expert_slug: str = "general",
     log_tag: str = "",
 ) -> HeadlessRunResult:
     """组装 Harness 无头运行一次，返回 HeadlessRunResult。
@@ -201,6 +202,16 @@ async def run_headless_once(
     model_cfg = await asyncio.to_thread(resolve_model)
     if not model_cfg:
         raise RuntimeError("未配置默认模型，无法执行无人值守任务")
+
+    # 专家接线（spec §6.2）：与交互路径同一套 resolve_expert / build_identity_section。
+    # slug 查不到 fail-closed 抛错，不静默降级成「无身份」。
+    from agent.expert_policy import build_identity_section, resolve_expert
+    expert_row = await asyncio.to_thread(db.get_expert_by_slug, expert_slug)
+    if expert_row is None:
+        raise ValueError(f"专家不存在: {expert_slug}")
+    _identity = build_identity_section(resolve_expert(expert_row))
+    if _identity:
+        system_prompt = (system_prompt + "\n\n" + _identity) if system_prompt else _identity
 
     model_name = model_cfg.get("model_id") or model_cfg.get("id") or ""
     ctx_limit = int(model_cfg.get("max_tokens") or 16384)

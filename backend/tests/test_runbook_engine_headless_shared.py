@@ -82,6 +82,8 @@ def wired(monkeypatch):
     monkeypatch.setattr(headless_run, "CostTracker", lambda **kw: SimpleNamespace(**kw))
     import agent.tools as tools_mod
     monkeypatch.setattr(tools_mod, "create_registry", lambda: object())
+    # 专家接线：run_headless_once 现按 slug 查专家（部分用例无 base_db），桩返回空身份通用行
+    monkeypatch.setattr(db, "get_expert_by_slug", lambda slug: {"slug": slug, "name": "通用"})
     return state
 
 
