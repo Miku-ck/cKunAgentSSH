@@ -122,6 +122,9 @@ runtime/
 # brainstorm visual companion mockups
 .superpowers/
 
+# SDD 隔离 worktree（git worktree add 的本地 checkout，勿入库）
+.worktrees/
+
 # UI 概念稿与核对截图（与 .superpowers/ 同性质的一次性产物，别混进提交）
 designs/
 
