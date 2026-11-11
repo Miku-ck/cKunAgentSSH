@@ -345,6 +345,12 @@ def classify_plan_action(
     if not tool:
         return False, "工具名为空，无法判定，按只读约束拒绝"
 
+    # 计划模式禁用全部插件工具：白名单是内置工具的静态表，插件能力不受它约束，
+    # 即便服务端声明 readOnlyHint 也不能把不可信外部进程拉进只读面。
+    from agent.plugins.mcp_tool import is_mcp_tool
+    if is_mcp_tool(tool):
+        return False, "计划模式下禁用 MCP 插件工具：外部进程能力不进入只读白名单。"
+
     if tool in _COMMAND_EXEC_TOOLS:
         cmd = command_from_args(args)
         if not cmd or not cmd.strip():

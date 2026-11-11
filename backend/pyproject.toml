@@ -1,0 +1,36 @@
+[project]
+# cKunAgentSSH 后端包元数据 — 只做「包身份 + 构建入口」，不重复工具配置。
+#
+# 工具链配置刻意分散在各自文件里，避免与 pyproject.toml 争优先级：
+#   - ruff    → ruff.toml（[lint.per-file-ignores] 等键路径与 pyproject 不通用）
+#   - pytest  → pytest.ini（norecursedirs 格式与 pyproject 有差异）
+#   - 依赖    → requirements.txt / requirements-dev.txt / requirements-optional.txt
+#
+# 生产打包仍读 requirements.txt（electron-builder.yml 的 installDeps 阶段）。
+name = "ckun-agent-backend"
+version = "0.1.0"
+description = "SSH 智能运维终端的 FastAPI 后端（AI Agent / cKunBot / MCP 插件 / 运维工具链）"
+requires-python = ">=3.11"
+# 运行时依赖刻意留空：真实约束在 requirements.txt，避免两处漂移。
+# 用 `pip install -e backend` 装开发环境时，请额外 `pip install -r requirements.txt`。
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.16,<1.0",
+]
+optional = [
+    "trafilatura>=1.12.0,<2.0",
+    "sqlite-vec>=0.1.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# 只打 backend/ 下的包（agent/ bot/ routes/ 等），不把 tests/ 与 _tmp/ 打进包。
+# 显式列出包目录，避免 hatchling 自动发现把 _tmp/ 或测试辅助包打进去。
+packages = ["agent", "bot", "routes", "skills_builtin"]

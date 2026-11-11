@@ -12,6 +12,7 @@ import { sortForRestore, toTransferItem } from './upload-task-restore'
 const rec = (over: Partial<UploadTaskRecord> = {}): UploadTaskRecord => ({
   id: 't7',
   connectionId: 'c1',
+  kind: 'upload',
   localPath: 'D:\\work\\big.bin',
   remotePath: '/srv/big.bin',
   name: 'big.bin',
@@ -48,6 +49,18 @@ describe('toTransferItem', () => {
       expect(item.status).toBe('paused')
       expect(item.interrupted).toBe(true)
     }
+  })
+
+  it('下载记录方向取反：from 是远端、to 是本地（否则续传入口派发到上传）', () => {
+    const item = toTransferItem(rec({ kind: 'download' }))
+    expect(item).toMatchObject({
+      direction: 'down',
+      kind: 'download',
+      from: '/srv/big.bin',
+      to: 'D:\\work\\big.bin',
+    })
+    // 上传侧不能被下载记录串改方向
+    expect(toTransferItem(rec()).direction).toBe('up')
   })
 
   it('终态保留状态、带 endTime、不标中断', () => {

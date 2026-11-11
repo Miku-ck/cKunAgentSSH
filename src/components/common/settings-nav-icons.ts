@@ -41,6 +41,20 @@ export const IconChat = svgIcon('IconChat', () => [
   path('M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'),
 ])
 
+/** 专家：人形徽记（身份与策略），与 Agent 的执行齿轮区分 */
+export const IconExperts = svgIcon('IconExperts', () => [
+  circle(12, 8, 3.2),
+  path('M5.5 20a6.5 6.5 0 0 1 13 0'),
+])
+
+/** 插件：拼插接口（新增可执行能力），与专家的「只改配置」区分 */
+export const IconPlugins = svgIcon('IconPlugins', () => [
+  h('rect', { x: 3, y: 3, width: 7, height: 7, rx: 1 }),
+  h('rect', { x: 14, y: 3, width: 7, height: 7, rx: 1 }),
+  h('rect', { x: 3, y: 14, width: 7, height: 7, rx: 1 }),
+  path('M14 17.5h7M17.5 14v7'),
+])
+
 export const IconAppearance = svgIcon('IconAppearance', () => [
   circle(12, 12, 5),
   line(12, 1, 12, 3),

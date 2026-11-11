@@ -56,6 +56,15 @@ class SkillRein:
                 )
                 auto_ids = {s['id'] for s in auto_matched}
 
+            # 专家技能允许集：触发词自动匹配也必须落在允许集内。
+            # 只在 routes 层收紧显式选择是不够的 —— SkillRein 会把自动匹配的
+            # 技能目录重新注入 system prompt，等于给专家开了后门。
+            allowed = ctx.metadata.get("expert_skill_ids")
+            if allowed is not None:
+                allow_set = set(allowed)
+                explicit_ids &= allow_set
+                auto_ids &= allow_set
+
             all_ids = list(explicit_ids | auto_ids)
             if not all_ids:
                 return ReinDecision()

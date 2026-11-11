@@ -193,6 +193,17 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   function removeSelectedSkill(id: string) {
     selectedSkillIds.value = selectedSkillIds.value.filter(x => x !== id)
   }
+
+  // ── 附到下一条消息的专家 ──
+  /** 与 selectedSkillIds 同层：属于「下一次发送带什么」，不是单轮 run 执行态。
+   *  空串 = 不指定专家（后端走原装配链）。刻意不在发送后清空 —— 专家与目标
+   *  chip、审批档一样是常驻选择；但每条消息都可改，所以逐条消息生效。 */
+  const selectedExpertId = ref<string>('')
+
+  function setSelectedExpert(id: string) {
+    selectedExpertId.value = id
+  }
+
   /** 已上传、待随下一条消息注入的本地附件。上传通路不在这片：
    *  uploadFiles 早已存在，/chat/upload 也是后端真读真返的那条。 */
   const pendingAttachments = ref<ChatAttachment[]>([])
@@ -871,6 +882,8 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       visibleTerminal: true,
       // 用户显式选择的技能 ID（后端 SkillRein 会与自动匹配的合并去重）
       skillIds,
+      // 专家跟随本次发送：空串不发字段，后端保持与引入前完全一致的行为
+      expertId: selectedExpertId.value || undefined,
       // 对话设置：自动技能匹配开关 + 上下文窗口条数
       autoSkillMatch: useSettingsStore().settings.chat.autoSkillMatch,
       contextWindow: useSettingsStore().settings.chat.contextWindow,
@@ -902,6 +915,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     setSelectedSkillIds,
     addSelectedSkill,
     removeSelectedSkill,
+    // ── 专家选择 ──
+    selectedExpertId,
+    setSelectedExpert,
     // ── 待发送附件 ──
     pendingAttachments,
     setPendingAttachments,

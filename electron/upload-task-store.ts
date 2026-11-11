@@ -1,9 +1,13 @@
 /**
- * UploadTaskStore — SFTP 上传记录的权威持久化（主进程）
+ * UploadTaskStore — SFTP 传输记录的权威持久化（主进程）
  *
- * 为什么由主进程写而不是渲染层：上传的真实生命周期（.part、进度、rename）全在
+ * 为什么由主进程写而不是渲染层：传输的真实生命周期（.part、进度、rename）全在
  * SSHManager，渲染进程可能重载而传输还在跑。两个写者会互相覆盖，且渲染层重启后
  * 根本不知道主进程手里的进度。记录放这里，渲染层只读展示。
+ *
+ * S5-25：同时承载上传与下载。两类记录的续传起点位置不同（上传在远端
+ * `remotePath + '.part'`、下载在本地 `localPath + '.part'`），所以 discardPart
+ * 由调用方按 kind 传入；其余状态机/写盘/恢复逻辑完全共用。
  *
  * 状态口径（与 shared/upload-task-core.ts 同一份表）：
  *   pending/running → 进程未走完，启动时归一化为 paused + interrupted（手动继续）
@@ -23,6 +27,7 @@ import {
   isValidUploadTaskRecord,
   restoredStatusOf,
   type RegisteredUploadTask,
+  type UploadTaskKind,
   type UploadTaskMeta,
   type UploadTaskRecord,
 } from '../shared/upload-task-core'
@@ -77,7 +82,7 @@ export class UploadTaskStore {
     this.file = new JsonFileStore<UploadTaskRecord>({
       path,
       logTag: '[UploadTaskStore]',
-      label: '上传任务记录',
+      label: '传输任务记录',
       isValidRecord: isValidUploadTaskRecord,
       compact: true,
     })
@@ -127,6 +132,7 @@ export class UploadTaskStore {
   async registerBatch(
     connectionId: string,
     tasks: readonly RegisteredUploadTask[],
+    defaultKind: UploadTaskKind = 'upload',
   ): Promise<void> {
     await this.init()
     const at = this.now()
@@ -136,6 +142,7 @@ export class UploadTaskStore {
       const record: UploadTaskRecord = {
         id: t.id,
         connectionId,
+        kind: t.kind ?? defaultKind,
         localPath: t.localPath,
         remotePath: t.remotePath,
         name: t.name || basenameAny(t.localPath),
@@ -175,6 +182,7 @@ export class UploadTaskStore {
       rec = {
         id,
         connectionId,
+        kind: meta?.kind ?? 'upload',
         localPath,
         remotePath,
         name: meta?.name || basenameAny(localPath),
@@ -189,6 +197,8 @@ export class UploadTaskStore {
       this.records.push(rec)
       this.byId.set(id, rec)
     } else {
+      // S5-25：方向在注册时确定；同 id 重入时以既有记录为准（同 id 重传
+      // 不该把一条下载记录悄悄改成上传，否则续传起点算错一侧）
       rec.localPath = localPath
       rec.remotePath = remotePath
       if (meta?.name) rec.name = meta.name

@@ -8,7 +8,7 @@
  * 本服务只替渲染层保管「按 connectionId 记忆的远端路径表」。
  */
 import { app } from 'electron'
-import { join, dirname } from 'path'
+import { join, dirname, basename } from 'path'
 import { readFile, writeFile, rename, mkdir, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
 import { execFile } from 'child_process'
@@ -26,12 +26,14 @@ import {
   isValidRemoteRepoPath,
   parseGitLog,
   parseGitStatusPorcelain,
+  parseWorktreeList,
   parseLsRemoteSha,
   parseRemoteConfig,
   parseRevListCount,
   pickRemote,
   type GitRawResult,
   type GitReposRegistry,
+  type GitWorktree,
   type LocalRepoStatusResult,
   type RepoSyncConfig,
   type SyncCatchupResult,
@@ -252,6 +254,60 @@ export class GitReposService {
 
   getRegistry(): Promise<GitReposRegistry> {
     return this.enqueue(() => readRegistryFromDisk())
+  }
+
+  /** 任务台「工作树」落点：枚举该仓库的全部 git worktree（含主仓与分支工作树）。
+   *  只读；路径仍须是登记的绝对路径且当下仍是 git 仓库。linked worktree 的
+   *  路径由 porcelain 原样给出，选作 cwd 前不再二次校验 —— 那份输出即权威。 */
+  async listWorktrees(path: string): Promise<GitWorktree[]> {
+    const p = assertRepoPath(path)
+    const res = await execGit(['-C', p, 'worktree', 'list', '--porcelain'])
+    if (res.code !== 0) {
+      throw new Error(
+        res.code === -1
+          ? '未检测到 git（请安装 git 或加入 PATH）'
+          : (firstLine(res.stderr) || `git worktree list 退出码 ${res.code}`),
+      )
+    }
+    return parseWorktreeList(res.stdout)
+  }
+
+  /**
+   * 新建工作树（参考 Trae 的「任务驱动」形态）：从当前 HEAD 拉出新分支并签出到
+   * 独立目录，成功即返回可直接落点的 worktree。目录建在仓库旁，名 = <仓库名>-<分支名
+   * 中的 / 换 ->（如 D:\ws\cKunMTIE + feat/ai-ab12 → D:\ws\cKunMTIE-feat-ai-ab12），
+   * 与主仓共享 .git，提交即时可见。分支查重与目标目录查重都先走一步，报错早于动手。
+   */
+  async createWorktree(path: string, branch: string): Promise<GitWorktree> {
+    const repoPath = assertRepoPath(path)
+    const name = String(branch ?? '').trim()
+    if (!isValidBranchName(name)) throw new Error(`非法分支名: ${name || '(空)'}`)
+    const dup = await execGit(['-C', repoPath, 'show-ref', '--verify', '--quiet', `refs/heads/${name}`])
+    if (dup.code === 0) throw new Error(`分支已存在: ${name}`)
+    const wtPath = join(dirname(repoPath), `${basename(repoPath)}-${name.replace(/[\\/]+/g, '-')}`)
+    if (existsSync(wtPath)) throw new Error(`目标目录已存在: ${wtPath}`)
+    const res = await execGit(['-C', repoPath, 'worktree', 'add', '-b', name, wtPath], ACTION_TIMEOUT_MS)
+    if (res.code !== 0) {
+      throw new Error(
+        res.code === -1
+          ? '未检测到 git（请安装 git 或加入 PATH）'
+          : (firstLine(res.stderr) || `git worktree add 退出码 ${res.code}`),
+      )
+    }
+    // 返回值从 worktree list 回读（单一事实源）：porcelain 的路径分隔符/大小写与
+    // 我们拼的字符串可能不同（Windows 上 git 输出正斜杠），直接回读保证与后续
+    // loadWorktrees 的条目逐字一致，chooseWorktree 的同路径复用才找得到。
+    const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+    const list = await this.listWorktrees(repoPath)
+    const created = list.find(w => norm(w.path) === norm(wtPath))
+    if (!created) throw new Error('工作树已创建，但未能在列表中确认（请刷新后重试）')
+    return created
+  }
+
+  /** 清理失效工作树记录（git worktree prune）：目录已被手动删除的登记项清出，
+   *  只动 git 的管理数据，绝不触碰任何现存目录。 */
+  async pruneWorktrees(path: string): Promise<GitRawResult> {
+    return execGit(['-C', assertRepoPath(path), 'worktree', 'prune'], ACTION_TIMEOUT_MS)
   }
 
   /** 登记本地仓库：绝对路径 + 目录下有 .git；重复登记幂等 */

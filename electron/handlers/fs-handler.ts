@@ -112,22 +112,28 @@ function rethrowIfSensitivePath(err: any, logWarn: (d: string, m: string) => voi
 /** 读取 Git for Windows 安装路径（优先 HKLM，fallback HKCU） */
 function findGitBashFromRegistry(): string | null {
   if (process.platform !== 'win32') return null
-  // argv 数组形式 spawn（execFileSync）：不再经 cmd.exe 拼接解析，消除 shell 解释面。
-  // 参数与原字符串命令逐段一致（reg query <键名> /v InstallPath），输出与超时口径不变。
-  const regKeys = ['HKLM\\SOFTWARE\\GitForWindows', 'HKCU\\SOFTWARE\\GitForWindows']
-  for (const key of regKeys) {
+  // 注册表读取走 PowerShell Get-ItemProperty（与 utils/proxy.ts 同口径），不再
+  // spawn reg.exe：reg.exe 是安全软件/命令黑名单的高频盯防对象，被拦时整棵
+  // Electron 进程树会被连带终止。仍用 argv 数组形式 execFileSync（不经 cmd.exe
+  // 拼接解析），resolvePowerShell 出绝对路径避免 PATH 裁剪环境下裸名 ENOENT。
+  const psKeys = ['HKLM:\\SOFTWARE\\GitForWindows', 'HKCU:\\SOFTWARE\\GitForWindows']
+  for (const key of psKeys) {
     try {
-      const output = execFileSync('reg', ['query', key, '/v', 'InstallPath'], {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-        timeout: 3000,
-      })
-      const match = output.match(/InstallPath\s+REG_SZ\s+(.+)/)
-      if (match) {
-        const installPath = match[1].trim()
-        const bashPath = join(installPath, 'bin', 'bash.exe')
-        if (existsSync(bashPath)) return bashPath
-      }
+      const output = execFileSync(
+        resolvePowerShell(),
+        ['-NoProfile', '-NonInteractive', '-Command',
+          `(Get-ItemProperty -Path '${key}' -ErrorAction Stop).InstallPath`],
+        {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'ignore'],
+          timeout: 3000,
+          windowsHide: true,
+        },
+      )
+      const installPath = String(output ?? '').trim()
+      if (!installPath) continue
+      const bashPath = join(installPath, 'bin', 'bash.exe')
+      if (existsSync(bashPath)) return bashPath
     } catch {
       // ignore registry errors
     }

@@ -1,9 +1,11 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, session, nativeImage } from 'electron'
+import http from 'http'
 import { safeSend } from './utils/safe-send'
 import { join, resolve as pathResolve, dirname, basename } from 'path'
 import { pathToFileURL } from 'url'
 import { readdir } from 'fs/promises'
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs'
+import { unlink as fsUnlink } from 'fs/promises'
 import { execFile, spawn } from 'child_process'
 import { BackendManager } from './backend-manager'
 import { PtyManager, clampPtyDimension } from './pty-manager'
@@ -156,6 +158,38 @@ function isSSHError(e: unknown): e is SSHError {
 /** consumePending 只跑一次：ready-to-show 在 macOS 窗口重建时会再触发。 */
 let pendingConsume = false
 
+// ─── 启动加载加固（2026-11-10 黑屏归因）──────────
+// 现象：窗口 show:false 等 ready-to-show，而渲染层首次加载一旦失败（dev server
+// 未就绪、首连被安全软件/沙箱过滤拖超时），用户面对的就是 20s+ 的无窗或深色
+// 空窗，没有任何自救。三层加固：
+//   1) dev URL 先从主进程探活（Node 栈）再 loadURL —— vite 未就绪不再抢跑失败；
+//   2) did-fail-load 指数退避自动重载 —— 首连超时/抖动自愈，错误页不再被当终态；
+//   3) 6s 兜底 show —— 极端挂起时宁可露出深色窗，也不让用户对「点了没反应」干等。
+// 生产走 loadFile 不涉网络，只吃到 3) 的兜底。
+const DEV_LOAD_MAX_RETRIES = 5
+/** 兜底亮窗时限：热态首启实测 3.6s 出窗（本机安全软件对新进程评估约 2.3s），
+ *  6s 留足余量不误触；冷态/被拦情形（实测出现过 17.9s）则 6s 先亮窗，
+ *  不让用户对着无窗状态干等 —— 原来的 15s 是同一问题下的过度保守值。 */
+const FALLBACK_SHOW_MS = 6000
+
+/** 主进程侧探活 dev server：单次 1.5s 超时、200ms 间隔轮询，总预算 timeoutMs。 */
+async function waitForDevUrl(url: string, timeoutMs = 15000): Promise<boolean> {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeoutMs) {
+    const ok = await new Promise<boolean>((resolve) => {
+      const req = http.get(url, { timeout: 1500 }, (res) => {
+        res.resume()
+        resolve((res.statusCode ?? 500) < 500)
+      })
+      req.on('error', () => resolve(false))
+      req.on('timeout', () => { req.destroy(); resolve(false) })
+    })
+    if (ok) return true
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  return false
+}
+
 /** 背景图存放目录：userData/backgrounds。背景图的保存/清理/加载/删除逻辑已迁往
  *  handlers/fs-handler.ts，目录口径仍在此处 —— 它要 app.getPath，而 fs-handler
  *  按依赖注入拿这个函数（反向 import 会成环）。 */
@@ -204,7 +238,17 @@ function createWindow(): void {
   sshManager?.setWindow(mainWindow)
   tunnelManager?.setWindow(mainWindow)
 
+  // 兜底 show：ready-to-show 万一不来（渲染层挂起/加载卡死），先把窗口亮出来。
+  // 正常路径 ready-to-show 远早于 6s，定时器到点前就会被清掉，正常启动零影响。
+  const fallbackShowTimer = setTimeout(() => {
+    if (mainWindow && !mainWindow.isVisible()) {
+      logWarn('startup', `ready-to-show ${FALLBACK_SHOW_MS}ms 未到，兜底显示窗口（加载仍未完成）`)
+      mainWindow.show()
+    }
+  }, FALLBACK_SHOW_MS)
+
   mainWindow.on('ready-to-show', () => {
+    clearTimeout(fallbackShowTimer)
     perfMark('window ready-to-show')
     mainWindow?.show()
     // 首屏已出：更新链路的同步读盘与残留清理放这里，不再与首屏抢主线程。
@@ -219,6 +263,29 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.once('did-finish-load', () => perfMark('renderer did-finish-load'))
+  // 启动分段埋点：把「loadURL 调用 → 导航发起 → DOM 就绪 → 首帧可见」四段拆开，
+  // 才能在黑屏/慢启动时区分是 Chromium 侧导航被环境拖住，还是渲染层自身编译慢。
+  mainWindow.webContents.once('did-start-navigation', () => perfMark('renderer did-start-navigation'))
+  mainWindow.webContents.once('dom-ready', () => perfMark('renderer dom-ready'))
+
+  // dev 首连自愈：主框架加载失败按指数退避重载（300ms → 9.3s，最多 5 次）。
+  // ERR_ABORTED(-3) 是「新导航打断旧导航」的正常取消，不算失败；子框架（iframe
+  // / 错误页内部资源）不重试。不按 did-finish-load 清零 —— 它对错误页同样触发，
+  // 清零会让永久性失败变成无限重试。重试耗尽打 error 留痕（dev-only，生产不注册）。
+  if (isDev) {
+    let devLoadRetries = 0
+    mainWindow.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
+      if (!isMainFrame || code === -3) return
+      if (devLoadRetries >= DEV_LOAD_MAX_RETRIES) {
+        logError('startup', `dev 页面加载失败且重试耗尽：code=${code} ${desc} ${url}`)
+        return
+      }
+      const delay = 300 * 2 ** devLoadRetries
+      devLoadRetries += 1
+      logWarn('startup', `dev 页面加载失败（code=${code} ${desc}），${delay}ms 后第 ${devLoadRetries}/${DEV_LOAD_MAX_RETRIES} 次重试`)
+      setTimeout(() => { void mainWindow?.loadURL(url) }, delay)
+    })
+  }
 
   // G8：关窗隐藏到托盘。preventDefault 后窗口不销毁，'closed' 不触发，
   // window-all-closed 也就不会误判成"用户退出了"而拆掉后端/PTY。
@@ -273,7 +340,21 @@ function createWindow(): void {
   })
 
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    const devUrl = process.env['ELECTRON_RENDERER_URL']
+    // 启动顺序加固：主进程（Node 栈）探活通过才发起渲染层加载 —— 后端健康检查
+    // 走的就是这条 Node 连接路径（实测 1.4s 就绪），它说通了，Chromium 才不会
+    // 对着没起完的 vite 抢跑。探活超预算也照样 loadURL：did-fail-load 重试兜底。
+    void (async () => {
+      const ready = await waitForDevUrl(devUrl)
+      if (!ready) logWarn('startup', `dev server 15s 未探活成功，仍尝试加载：${devUrl}`)
+      perfMark('dev server probe done')
+      try {
+        await mainWindow.loadURL(devUrl)
+      } catch (e) {
+        // reject 与 did-fail-load 重试同源（重试被新导航打断时也会 reject），只记日志
+        logWarn('startup', `loadURL promise 失败（由重试机制接管）：${e instanceof Error ? e.message : String(e)}`)
+      }
+    })()
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
@@ -791,6 +872,19 @@ function setupSSHIPC(): void {
     return sshStore!.migrateLegacy(legacy)
   })
 
+  // 快速连接弹窗的「打开 SSH 配置文件」：用户要编辑的是 ~/.ssh/config 本身，
+  // 不是我们自己的连接库。文件不存在时先建一个 0600 的空文件 —— 否则
+  // shell.openPath 对不存在的路径只会回一段错误字符串，用户看到的是「点了没反应」。
+  handleTrusted('ssh:openConfig', async () => {
+    const dir = join(app.getPath('home'), '.ssh')
+    const file = join(dir, 'config')
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
+    if (!existsSync(file)) writeFileSync(file, '', { mode: 0o600 })
+    const err = await shell.openPath(file)
+    if (err) throw new Error(err)
+    return file
+  })
+
   // ── SSH 隧道（端口转发）──
   // 设计要点（历史设计文档已退役，口径以 tunnel-manager.ts 为准）：
   // 规则持久化走 TunnelStore，运行态走 TunnelManager（独立 ssh2 client，与终端
@@ -940,6 +1034,21 @@ function setupSSHIPC(): void {
   //    但远端命令由渲染层经 sshExec 下发，主进程不碰远端）──
   handleTrusted('gitrepos:getRegistry', () => {
     return gitRepos!.getRegistry()
+  })
+
+  // 任务台「工作树」落点：只读枚举该仓库的 git worktree（主仓 + 分支工作树）
+  handleTrusted('gitrepos:listWorktrees', (_event, path: string) => {
+    return gitRepos!.listWorktrees(path)
+  })
+
+  // 新建工作树（参考 Trae）：自动建分支 + 仓库旁目录，返回可落点的 worktree
+  handleTrusted('gitrepos:createWorktree', (_event, path: string, branch: string) => {
+    return gitRepos!.createWorktree(path, branch)
+  })
+
+  // 清理失效工作树记录（git worktree prune，只动管理数据不碰现存目录）
+  handleTrusted('gitrepos:pruneWorktrees', (_event, path: string) => {
+    return gitRepos!.pruneWorktrees(path)
   })
 
   handleTrusted('gitrepos:addLocal', (_event, path: string) => {
@@ -1186,6 +1295,10 @@ function setupSftpIPC(): void {
   handleTrusted('sftp:delete', (_event, sshSessionId: string, remotePath: string) => {
     return sshManager!.sftpDelete(sshSessionId, remotePath)
   })
+  // 权限位修改（S5-22 chmod 支持）
+  handleTrusted('sftp:chmod', (_event, sshSessionId: string, remotePath: string, mode: number) => {
+    return sshManager!.sftpChmod(sshSessionId, remotePath, mode)
+  })
   // 上传/下载：本地路径须过 assertSafePath（防止受控渲染进程读写系统位置）
   handleTrusted('sftp:upload', async (
     _event,
@@ -1208,14 +1321,35 @@ function setupSftpIPC(): void {
       transferId,
       localPath,
       remotePath,
-      meta,
+      { ...meta, kind: 'upload' },
       run,
       { discardPart: () => sshManager!.sftpDelete(sshSessionId, remotePath + '.part').catch(() => {}) },
     )
   })
-  handleTrusted('sftp:download', async (_event, transferId: string, sshSessionId: string, remotePath: string, localPath: string) => {
+  // S5-25：下载也纳入记录 —— 本地 `.part` 同样会在崩溃后成为孤儿，
+  // 记录 + 归一化让重启后能一键续传（与上传对称）
+  handleTrusted('sftp:download', async (
+    _event,
+    transferId: string,
+    sshSessionId: string,
+    remotePath: string,
+    localPath: string,
+    meta?: UploadTaskMeta,
+  ) => {
     await assertSafePath(localPath)
-    return sshManager!.sftpDownload(transferId, sshSessionId, remotePath, localPath)
+    const run = () => sshManager!.sftpDownload(transferId, sshSessionId, remotePath, localPath)
+    const connectionId = sshManager!.getSessionConnectionId(sshSessionId)
+    if (!uploadTaskStore || !connectionId) return run()
+    return uploadTaskStore.trackUpload(
+      connectionId,
+      transferId,
+      localPath,
+      remotePath,
+      { ...meta, kind: 'download' },
+      run,
+      // 续传一致性检查失败时清理本地 .part（上传侧清的是远端 .part）
+      { discardPart: () => fsUnlink(localPath + '.part').catch(() => {}) },
+    )
   })
   handleTrusted('sftp:cancel', (_event, transferId: string) => {
     requestCopyCancel(transferId)  // 同时通知 fs:copy 和 sftp 传输表
@@ -1238,6 +1372,8 @@ function setupSftpIPC(): void {
       .filter(t => t && typeof t.id === 'string' && typeof t.localPath === 'string' && typeof t.remotePath === 'string')
       .map(t => ({
         id: t.id,
+        // S5-25：方向按条显式携带，拒收非法值（缺省按上传 —— 该通道历史上只传上传）
+        kind: t.kind === 'download' ? 'download' : 'upload',
         localPath: t.localPath,
         remotePath: t.remotePath,
         name: typeof t.name === 'string' ? t.name : '',

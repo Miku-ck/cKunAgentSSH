@@ -393,3 +393,113 @@ export interface ChatAttachment {
   truncated?: boolean
 }
 
+// ── 专家（Expert）：运行策略配置包，不引入新可执行能力 ──────────────────
+/** 集合字段是 JSON 文本：null = 继承现状，'[]' = 显式空集，两者语义不同。 */
+export interface Expert {
+  id: string
+  slug: string
+  name: string
+  description: string | null
+  identity_prompt: string
+  model_id: string | null
+  tool_names_json: string | null
+  plugin_ids_json: string
+  skill_ids_json: string | null
+  permission_ceiling: 'inherit' | 'normal' | 'plan'
+  max_iterations: number | null
+  memory_scope: 'inherit' | 'global' | 'host' | 'none'
+  enabled: number
+  is_builtin: number
+  revision: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ExpertPayload {
+  name: string
+  description?: string | null
+  identity_prompt?: string
+  model_id?: string | null
+  tool_names?: string[] | null
+  skill_ids?: string[] | null
+  plugin_ids?: string[]
+  permission_ceiling?: 'inherit' | 'normal' | 'plan'
+  max_iterations?: number | null
+  memory_scope?: 'inherit' | 'global' | 'host' | 'none'
+}
+
+export const expertsApi = {
+  list: () => request<Expert[]>('/experts'),
+  create: (payload: ExpertPayload & { slug: string }) =>
+    request<Expert>('/experts', { method: 'POST', body: JSON.stringify(payload) }),
+  update: (id: string, payload: Partial<ExpertPayload>) =>
+    request<Expert>(`/experts/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  duplicate: (id: string, slug: string, name?: string) =>
+    request<Expert>(`/experts/${id}/duplicate`, {
+      method: 'POST',
+      body: JSON.stringify({ slug, ...(name ? { name } : {}) }),
+    }),
+  setEnabled: (id: string, enabled: boolean) =>
+    request<Expert>(`/experts/${id}/enabled`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    }),
+  remove: (id: string) =>
+    request<{ deleted: boolean }>(`/experts/${id}`, { method: 'DELETE' }),
+}
+
+// ── 插件（MCP server / 外部进程）：新增可执行能力，必须走同意流 ──────────
+export interface PluginToolSpec {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+  readOnlyHint: boolean
+}
+
+export interface Plugin {
+  id: string
+  slug: string
+  name: string
+  description: string | null
+  command: string
+  args_json: string
+  cwd: string | null
+  config_rev: number
+  enabled: number
+  consented_at: string | null
+  timeout_s: number
+  tools_json: string
+  readonly_tools_json: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PluginPayload {
+  slug: string
+  name: string
+  description?: string | null
+  command: string
+  args?: string[]
+  cwd?: string | null
+  env?: Record<string, string>
+  timeout_s?: number
+}
+
+export const pluginsApi = {
+  list: () => request<Plugin[]>('/plugins'),
+  create: (payload: PluginPayload) =>
+    request<Plugin>('/plugins', { method: 'POST', body: JSON.stringify(payload) }),
+  update: (id: string, payload: Partial<PluginPayload>) =>
+    request<Plugin>(`/plugins/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  validate: (id: string) =>
+    request<{ tools: PluginToolSpec[]; count: number }>(`/plugins/${id}/validate`, { method: 'POST' }),
+  consent: (id: string) =>
+    request<Plugin>(`/plugins/${id}/consent`, { method: 'POST' }),
+  setReadonly: (id: string, names: string[]) =>
+    request<Plugin>(`/plugins/${id}/readonly`, { method: 'POST', body: JSON.stringify({ names }) }),
+  setEnabled: (id: string, enabled: boolean) =>
+    request<Plugin>(`/plugins/${id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+  remove: (id: string) =>
+    request<{ deleted: boolean }>(`/plugins/${id}`, { method: 'DELETE' }),
+}
+

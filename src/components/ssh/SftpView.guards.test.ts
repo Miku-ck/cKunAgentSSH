@@ -44,3 +44,36 @@ describe('上传入口唯一', () => {
     expect(ctxAction, '右键分支不得直调上传/下载').not.toMatch(/store\.(uploadFiles|downloadFiles)\(/)
   })
 })
+
+describe('同侧复制入口收敛（S5-21）', () => {
+  it('store.localCopy / remoteCopy 在页面里只被 doTransfer 调用', () => {
+    // 同侧复制曾由右键「粘贴」直调 store.localCopy/remoteCopy，绕过冲突确认 ——
+    // 同名项被静默覆盖。现在两条路径都必须经 doTransfer 的 askConflicts。
+    const copyCalls = src.match(/store\.(localCopy|remoteCopy)\(/g) ?? []
+    expect(copyCalls.length, '同侧复制只允许出现在 doTransfer 的 copy 分支').toBe(2)
+    const doTransfer = sliceUntil('async function doTransfer(', '// ─── 右键菜单')
+    for (const call of copyCalls) {
+      expect(doTransfer).toContain(call)
+    }
+  })
+
+  it('粘贴分支走 onTransfer({ copy: true })，不直调 store 复制', () => {
+    const paste = src.slice(src.indexOf("if (action === 'paste')"))
+    const pasteBody = paste.slice(0, paste.indexOf("if (action === 'newFolder')"))
+    expect(pasteBody).toContain('await onTransfer({ side, paths: cb.paths, targetDir, copy: true })')
+    expect(pasteBody, '粘贴不得直调 localCopy/remoteCopy').not.toMatch(/store\.(localCopy|remoteCopy)\(/)
+  })
+
+  it('copy 分支的复制调用发生在冲突决策之后，且带 renameMap', () => {
+    const doTransfer = sliceUntil('async function doTransfer(', '// ─── 右键菜单')
+    const copyAt = doTransfer.indexOf('if (payload.copy)')
+    expect(copyAt).toBeGreaterThanOrEqual(0)
+    // 冲突决策必须在 copy 分支之前：先 askConflicts → 拿到 renameMap → 才派发复制
+    expect(doTransfer.indexOf('await askConflicts(items)')).toBeLessThan(copyAt)
+    const copyBranch = doTransfer.slice(copyAt)
+    expect(copyBranch).toContain('store.localCopy(paths, payload.targetDir!, renameMap)')
+    expect(copyBranch).toContain('store.remoteCopy(paths, payload.targetDir!, renameMap)')
+    // 决策产出的 renameMap 必须真的落到复制入参，而不是丢弃
+    expect(doTransfer).toContain('renameMap = Object.keys(plan.renameMap).length ? plan.renameMap : undefined')
+  })
+})

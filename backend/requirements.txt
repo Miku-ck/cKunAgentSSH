@@ -13,4 +13,8 @@ qq-botpy==1.2.1
 # 微信客服消息回调的报文加解密（AES-256-CBC）；缺了微信渠道连不上，QQ 不受影响
 cryptography>=42.0.0,<52.0
 
+# MCP 插件客户端（stdio 子进程）。未装时插件功能不可用，但主程序仍可启动：
+# run_assembly 把启动/发现失败收敛为 warning，不阻断普通 run。
+mcp>=2.0.0,<3.0
+
 # 可选依赖见 requirements-optional.txt

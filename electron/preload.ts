@@ -165,6 +165,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sshDuplicateConnection: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.sshDuplicateConnection, id),
   sshTestConnection: (config: any) => ipcRenderer.invoke(INVOKE_CHANNELS.sshTestConnection, config),
   sshMigrateLegacy: (legacy: any[]) => ipcRenderer.invoke(INVOKE_CHANNELS.sshMigrateLegacy, legacy),
+  sshOpenConfig: () => ipcRenderer.invoke(INVOKE_CHANNELS.sshOpenConfig),
 
   // SSH 隧道（端口转发）
   tunnelList: () => ipcRenderer.invoke(INVOKE_CHANNELS.tunnelList),
@@ -206,6 +207,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelSaveOptions, patch),
   // Git 仓库管理（本地注册表 + 本地 git 执行；远端命令由渲染层经 sshExec 下发）
   gitreposGetRegistry: () => ipcRenderer.invoke(INVOKE_CHANNELS.gitreposGetRegistry),
+  gitreposListWorktrees: (path: string) => ipcRenderer.invoke(INVOKE_CHANNELS.gitreposListWorktrees, path),
+  gitreposCreateWorktree: (path: string, branch: string) =>
+    ipcRenderer.invoke(INVOKE_CHANNELS.gitreposCreateWorktree, path, branch),
+  gitreposPruneWorktrees: (path: string) => ipcRenderer.invoke(INVOKE_CHANNELS.gitreposPruneWorktrees, path),
   gitreposAddLocal: (path: string) => ipcRenderer.invoke(INVOKE_CHANNELS.gitreposAddLocal, path),
   gitreposRemoveLocal: (path: string) => ipcRenderer.invoke(INVOKE_CHANNELS.gitreposRemoveLocal, path),
   gitreposSetRemotePaths: (connectionId: string, paths: string[]) =>
@@ -275,10 +280,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sftpStat: (sshSessionId: string, remotePath: string) => ipcRenderer.invoke(INVOKE_CHANNELS.sftpStat, sshSessionId, remotePath),
   sftpRename: (sshSessionId: string, oldPath: string, newPath: string) => ipcRenderer.invoke(INVOKE_CHANNELS.sftpRename, sshSessionId, oldPath, newPath),
   sftpDelete: (sshSessionId: string, remotePath: string) => ipcRenderer.invoke(INVOKE_CHANNELS.sftpDelete, sshSessionId, remotePath),
+  sftpChmod: (sshSessionId: string, remotePath: string, mode: number) =>
+    ipcRenderer.invoke(INVOKE_CHANNELS.sftpChmod, sshSessionId, remotePath, mode),
   sftpUpload: (transferId: string, sshSessionId: string, localPath: string, remotePath: string, meta?: UploadTaskMeta) =>
     ipcRenderer.invoke(INVOKE_CHANNELS.sftpUpload, transferId, sshSessionId, localPath, remotePath, meta),
-  sftpDownload: (transferId: string, sshSessionId: string, remotePath: string, localPath: string) =>
-    ipcRenderer.invoke(INVOKE_CHANNELS.sftpDownload, transferId, sshSessionId, remotePath, localPath),
+  sftpDownload: (transferId: string, sshSessionId: string, remotePath: string, localPath: string, meta?: UploadTaskMeta) =>
+    ipcRenderer.invoke(INVOKE_CHANNELS.sftpDownload, transferId, sshSessionId, remotePath, localPath, meta),
   sftpCancel: (transferId: string) => ipcRenderer.invoke(INVOKE_CHANNELS.sftpCancel, transferId),
   // 上传记录（主进程权威写入；渲染层只读展示与显式操作）
   sftpRegisterUploadTasks: (sshSessionId: string, tasks: RegisteredUploadTask[]) =>

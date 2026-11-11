@@ -32,6 +32,29 @@ _PRIOR_SUMMARY_SENTINEL = "\x00__PRIOR_SUMMARY__\x00"
 _SUMMARY_PREFIX = "以下是之前对话的摘要:\n"
 
 
+def normalize_system_messages(messages: list[dict]) -> list[dict]:
+    """把 system 消息合并为单条并置顶，兼容 vLLM/OpenAI 的 400 约束。
+
+    多条 system 仅都放在开头仍可能被部分 vLLM 拒绝，因此按相对顺序合并内容；
+    其余消息保持原序。首条 system 的附加字段（如 name）保留。
+    """
+    systems = [m for m in messages if m.get("role") == "system"]
+    if not systems:
+        return messages
+    others = [m for m in messages if m.get("role") != "system"]
+    if len(systems) == 1:
+        return [systems[0]] + others
+
+    merged_content = "\n\n".join(
+        m.get("content", "") for m in systems if m.get("content")
+    )
+    merged: dict = {"role": "system", "content": merged_content}
+    for key, value in systems[0].items():
+        if key not in ("role", "content"):
+            merged.setdefault(key, value)
+    return [merged] + others
+
+
 def estimate_messages_tokens(messages: list[dict]) -> int:
     """估算 messages 总 token 数"""
     total = 0
@@ -151,53 +174,38 @@ class Bridle:
 
     def _build(self, ctx: RunContext) -> list[dict[str, str]]:
         """按当前 ctx 状态组装 messages（含已持久化的摘要），不触发压缩"""
-        # 400 约束的单一口径（其它注入点引用这里，别再各写一份）：OpenAI/vLLM 要求
-        # system 消息只能出现在开头，插到末尾即报 400。所以 driver.py / reins/guards.py
-        # 里末尾注入的纠偏、引导、提示一律走 "user" 角色；而已经躺在 ctx.history /
-        # ctx.messages 里的 system，由下面两处循环统一提到顶部。
-        system_msgs: list[dict[str, str]] = []
-        other_msgs: list[dict[str, str]] = []
+        # 400 约束由 normalize_system_messages 统一收口；本方法只负责组装领域消息。
+        messages: list[dict[str, str]] = []
 
         # 1. system prompt
         if ctx.system_prompt:
-            system_msgs.append({"role": "system", "content": ctx.system_prompt})
+            messages.append({"role": "system", "content": ctx.system_prompt})
 
         # 2. 记忆注入（作为 system 消息追加）
         if ctx.memories:
             memory_text = "\n".join(f"- {m}" for m in ctx.memories if m)
             if memory_text:
-                system_msgs.append({
+                messages.append({
                     "role": "system",
                     "content": f"[相关记忆]\n{memory_text}",
                 })
 
         # 3. 历史（始终前置、不参与压缩）
-        # 修复：历史中可能含有之前 Agent 运行注入的 system 消息（纠偏提示等），
-        # 无差别放入 other_msgs 会导致 system 消息夹在非 system 消息中间，
-        # vLLM 返回 400 "System message must be at the beginning"。
-        for msg in ctx.history:
-            entry = {"role": msg.get("role", "user"), "content": msg.get("content", "")}
-            if entry["role"] == "system":
-                system_msgs.append(entry)
-            else:
-                other_msgs.append(entry)
+        messages.extend(
+            {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+            for msg in ctx.history
+        )
 
         # 3.5 上下文摘要注入（压缩后保留的早期 run 对话摘要）
-        # 置于 history 之后、近期 run 之前：摘要浓缩的是本轮早期 run 消息，
-        # 时间上位于 history 之后，顺序符合时间线。角色取 user，见本方法顶部的 400 约束。
+        # 角色取 user，避免 system 消息夹在非 system 消息中间。
         summary = ctx.metadata.get("context_summary")
         if summary:
-            other_msgs.append({"role": "user", "content": f"[上下文摘要]\n{summary}"})
+            messages.append({"role": "user", "content": f"[上下文摘要]\n{summary}"})
 
         # 4. 当前运行累积的消息（含 task / assistant / tool / 拦截器注入的 system 纠偏消息）
-        # 分离 system 消息到顶部，避免 vLLM 400 "System message must be at the beginning"
-        for msg in ctx.messages:
-            if msg.get("role") == "system":
-                system_msgs.append(msg)
-            else:
-                other_msgs.append(msg)
+        messages.extend(ctx.messages)
 
-        return system_msgs + other_msgs
+        return normalize_system_messages(messages)
 
     async def _compress_run_into(self, ctx: RunContext, force: bool) -> None:
         """

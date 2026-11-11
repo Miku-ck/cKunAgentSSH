@@ -14,6 +14,16 @@ export interface SftpEntry {
   name: string
   path: string
   isDirectory: boolean
+  /**
+   * 是否为符号链接（S5-20：mode 的类型位 0o120000）。
+   *
+   * 与 `isDirectory` 互斥但**不是**它的补集：远端条目还可能是 socket/fifo/设备
+   * 节点。这里显式给出链接标记，是因为链接在下载/复制两条链路上的语义与「普通
+   * 文件」完全不同 —— 跟随它会把链接目标的内容拉成文件副本（本地侧 fs:copy
+   * 与 zip 早已用 lstat fail-closed 拒绝，远端侧此前无防护，见 sftpList）。
+   * 权限列展示用的 `mode` 字符串已含 `l` 类型位，本字段是它的机器可读版本。
+   */
+  isSymlink: boolean
   size: number
   modified: number
   mode: string

@@ -15,16 +15,10 @@ import {
   sanitizeAlertMonitorTasks,
   type AlertMonitorTask,
 } from '@/utils/alert-trigger-core'
+import { readJson, writeJson } from '@/utils/storage-json'
 
 function loadFromStorage(): AlertMonitorTask[] {
-  try {
-    const raw = localStorage.getItem(ALERT_MONITOR_STORAGE_KEY)
-    if (!raw) return []
-    return sanitizeAlertMonitorTasks(JSON.parse(raw))
-  } catch {
-    // 坏 JSON / 结构非法：落成空数组，不写回以免覆盖潜在可读数据（下次读取仍会再收敛）
-    return []
-  }
+  return sanitizeAlertMonitorTasks(readJson(ALERT_MONITOR_STORAGE_KEY, []))
 }
 
 // 模块级单例：同一会话内所有消费者（useAlertTrigger、OpsPanel）看到同一份响应式状态
@@ -32,11 +26,9 @@ const tasks = ref<AlertMonitorTask[]>(loadFromStorage())
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined
 function persist(): void {
-  try {
-    localStorage.setItem(ALERT_MONITOR_STORAGE_KEY, JSON.stringify(tasks.value))
-  } catch (e) {
+  writeJson(ALERT_MONITOR_STORAGE_KEY, tasks.value, e => {
     console.warn('[alertMonitorTasks] 持久化失败（localStorage 可能已满或被禁用）:', e)
-  }
+  })
 }
 
 watch(tasks, () => {

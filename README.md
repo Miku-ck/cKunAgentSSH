@@ -236,7 +236,7 @@ cKunAgentSSH/
 ├── gateway/               # TLS 接入网关（单文件、零依赖、独立部署）
 ├── scripts/               # dev / package / clean / ci-check / rebuild-native / prepare-runtime / deploy
 ├── resources/             # 应用与托盘图标
-├── docs/                  # 设计与实施 spec（当前为空，历史 spec 已退役；不进发行包）
+├── docs/                  # 设计与实施 spec（结构重构方案；不进发行包）
 ├── designs/               # UI 概念稿（本地产物，已被 .gitignore 忽略）
 ├── runtime/               # 内嵌 Python 运行时（本地制备，已被 .gitignore 忽略）
 ├── electron.vite.config.ts
@@ -244,7 +244,7 @@ cKunAgentSSH/
 └── package.json
 ```
 
-**目录职责边界**：`electron/`、`src/`、`shared/`、`backend/`、`gateway/`、`scripts/`、`resources/` 属构建与运行链路，目录名被配置、CI 与运行时路径硬编码引用（例如 `shared/` 有近百处跨层 import），不要随意重命名；`docs/`、`designs/` 是文档与概念稿，不进发行包；`runtime/`、`out/`、`dist/`、`node_modules/` 是可再生的本地产物。测试与守卫脚本刻意与被测文件同目录，由 `vitest.config.ts` 的 glob 收集，`src/styles/` 里的 `.ts` 即 CSS 守卫工具与测试，不是样式文件。前端视觉与组件硬规则见 [DESIGN.md](DESIGN.md)，术语口径见 [CONTEXT.md](CONTEXT.md)。
+**目录职责边界**：`electron/`、`src/`、`shared/`、`backend/`、`gateway/`、`scripts/`、`resources/` 属构建与运行链路，目录名被配置、CI 与运行时路径硬编码引用（例如 `shared/` 有近百处跨层 import），不要随意重命名；`docs/`、`designs/` 是文档与概念稿，不进发行包；`runtime/`、`out/`、`dist/`、`node_modules/` 是可再生的本地产物。测试与守卫脚本刻意与被测文件同目录，由 `vitest.config.ts` 的 glob 收集，`src/styles/` 里的 `.ts` 即 CSS 守卫工具与测试，不是样式文件。前端视觉与组件硬规则见 [DESIGN.md](DESIGN.md)，术语口径见 [CONTEXT.md](CONTEXT.md)。结构重构方案见 [docs/structure-refactor-plan.md](docs/structure-refactor-plan.md)。
 
 **命名与格式约定**（描述已落地的规则；存量不一致处不批量改名，新代码按此执行）：
 

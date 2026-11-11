@@ -32,7 +32,14 @@ _MAX_TITLE_CHARS = 80
 
 
 def _host_scopes(context) -> list[str]:
-    """检索作用域：全局 + 当前主机（多主机场景下别把 A 机经验当 B 机事实）"""
+    """检索作用域：全局 + 当前主机（多主机场景下别把 A 机经验当 B 机事实）。
+
+    专家可把范围收紧到 global/host/none；空列表是「不读记忆」的显式值，
+    不能用 `or` 退回默认 —— 那会把「禁用」悄悄放大成「读全部」。
+    """
+    override = getattr(context, "memory_scopes", None)
+    if override is not None:
+        return list(override)
     return memory_retriever.context_scopes(getattr(context, "ssh_session_id", ""))
 
 

@@ -7,6 +7,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { genId } from '@/utils/id'
+import { readJson, writeJson } from '@/utils/storage-json'
 
 export type PathBookmark = {
   id: string
@@ -67,42 +68,31 @@ export const useSftpBookmarksStore = defineStore('sftpBookmarks', () => {
 
   function load(): void {
     if (loaded.value) return
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        if (Array.isArray(parsed)) {
-          // 旧版/手改数据可能是裸数组，按本地收藏读，避免整份丢弃
-          local.value = sanitizeRows(parsed)
-        } else if (parsed && typeof parsed === 'object') {
-          const rec = parsed as Record<string, unknown>
-          local.value = sanitizeRows(rec.local)
-          const remoteRaw = rec.remote
-          if (remoteRaw && typeof remoteRaw === 'object' && !Array.isArray(remoteRaw)) {
-            const next: Record<string, PathBookmark[]> = {}
-            for (const [host, rows] of Object.entries(remoteRaw as Record<string, unknown>)) {
-              if (!host) continue
-              next[host] = sanitizeRows(rows)
-            }
-            remote.value = next
-          }
+    const parsed = readJson<unknown>(STORAGE_KEY, null)
+    if (Array.isArray(parsed)) {
+      // 旧版/手改数据可能是裸数组，按本地收藏读，避免整份丢弃
+      local.value = sanitizeRows(parsed)
+    } else if (parsed && typeof parsed === 'object') {
+      const rec = parsed as Record<string, unknown>
+      local.value = sanitizeRows(rec.local)
+      const remoteRaw = rec.remote
+      if (remoteRaw && typeof remoteRaw === 'object' && !Array.isArray(remoteRaw)) {
+        const next: Record<string, PathBookmark[]> = {}
+        for (const [host, rows] of Object.entries(remoteRaw as Record<string, unknown>)) {
+          if (!host) continue
+          next[host] = sanitizeRows(rows)
         }
+        remote.value = next
       }
-    } catch (err) {
-      console.error('[sftpBookmarks] load failed:', err)
-      local.value = []
-      remote.value = {}
     }
     loaded.value = true
   }
 
   function save(): void {
-    try {
-      const payload: BookmarkFile = { local: local.value, remote: remote.value }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
-    } catch (err) {
+    const payload: BookmarkFile = { local: local.value, remote: remote.value }
+    writeJson(STORAGE_KEY, payload, err => {
       console.error('[sftpBookmarks] save failed:', err)
-    }
+    })
   }
 
   function listFor(side: 'local' | 'remote', hostKey: string): PathBookmark[] {

@@ -15,6 +15,7 @@ import net from 'net'
 import tls from 'tls'
 import https from 'https'
 import { execFile } from 'child_process'
+import { resolvePowerShell } from './powershell-path'
 
 export type ProxyProtocol = 'http' | 'socks' | 'unknown'
 
@@ -166,15 +167,22 @@ function run(cmd: string, args: string[]): Promise<string> {
   })
 }
 
-/** 读取 Windows 系统代理（ProxyEnable=1 才算） */
+/** 读取 Windows 系统代理（ProxyEnable=1 才算）。
+ *  读注册表走 PowerShell Get-ItemProperty 而不是 reg.exe：reg.exe 是安全软件 /
+ *  命令黑名单的高频盯防对象（本机实测：spawn reg.exe 被拦时整棵 Electron 进程树
+ *  被连带终止，界面黑屏）。输出拼成 key=value 两行，解析口径与原 reg 查询一致。 */
 async function readWinInetProxy(): Promise<string | null> {
   if (process.platform !== 'win32') return null
-  const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
-  const enabled = await run('reg', ['query', key, '/v', 'ProxyEnable'])
-  if (!/ProxyEnable\s+REG_DWORD\s+0x1\b/i.test(enabled)) return null
-  const server = await run('reg', ['query', key, '/v', 'ProxyServer'])
-  const m = /ProxyServer\s+REG_SZ\s+(.+)/i.exec(server)
-  return pickProxyServerValue(m?.[1] ?? null)
+  const key = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
+  const out = await run(
+    resolvePowerShell(),
+    ['-NoProfile', '-NonInteractive', '-Command',
+      `$k = Get-ItemProperty -Path '${key}' -ErrorAction Stop; `
+      + `"ProxyEnable=$([int][bool]$k.ProxyEnable)"; "ProxyServer=$($k.ProxyServer)"`],
+  )
+  if (!/^ProxyEnable=1\b/m.test(out)) return null
+  const m = /^ProxyServer=(.*)$/m.exec(out)
+  return pickProxyServerValue(m?.[1]?.trim() || null)
 }
 
 /**

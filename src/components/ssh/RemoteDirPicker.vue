@@ -21,8 +21,12 @@ const props = withDefaults(defineProps<{
   initial?: string
   /** file 模式下的后缀白名单，如 ['.tar', '.tar.gz']；空表示不过滤 */
   accept?: string[]
+  /** dir 模式下也把文件列出来（只显示、不可选）。
+   *  用途：首页那枚目录 chip —— 用户要看的是「这个目录里有什么」，只列子目录会让
+   *  一个装满文件的目录看起来是空的（2026-11-11 用户口径：不显示文件）。 */
+  showFiles?: boolean
   disabled?: boolean
-}>(), { mode: 'dir', initial: '/', accept: () => [], disabled: false })
+}>(), { mode: 'dir', initial: '/', accept: () => [], showFiles: false, disabled: false })
 
 const emit = defineEmits<{
   /** 当前目录变化（dir 模式靠它拿到用户选的目录） */
@@ -45,7 +49,7 @@ let seq = 0
 const shown = computed(() => {
   const list = entries.value.filter((e) => {
     if (e.isDirectory) return true
-    if (props.mode === 'dir') return false
+    if (props.mode === 'dir') return props.showFiles
     if (!props.accept.length) return true
     const n = e.name.toLowerCase()
     return props.accept.some(ext => n.endsWith(ext.toLowerCase()))
@@ -57,7 +61,7 @@ const atRoot = computed(() => cwd.value === '/')
 /** 空列表的两种成因分开说：目录模式过滤掉了所有文件，说「没有匹配的文件」会让人以为目录是空的 */
 const emptyText = computed(() => {
   if (!entries.value.length) return '空目录'
-  if (props.mode === 'dir') return '此目录下没有子目录'
+  if (props.mode === 'dir') return props.showFiles ? '空目录' : '此目录下没有子目录'
   // 白名单由调用方给，文案跟着它走 —— 写死后缀会在调用方放宽后悄悄过时
   return props.accept.length ? `没有 ${props.accept.join(' / ')}` : '此目录下没有文件'
 })
@@ -147,7 +151,8 @@ watch(() => props.sessionId, () => {
       <button
         v-for="e in shown" :key="e.path" type="button" class="rdp-row"
         :class="{ on: selected === e.path, dir: e.isDirectory }"
-        :disabled="disabled" :title="e.path"
+        :disabled="disabled || (mode === 'dir' && !e.isDirectory)"
+        :title="mode === 'dir' && !e.isDirectory ? `${e.path}（只读展示 · 选目录请点文件夹）` : e.path"
         @click="onPick(e)"
       >
         <svg v-if="e.isDirectory" class="rdp-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h6l2 2h10v10H3z"/></svg>

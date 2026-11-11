@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { genId } from '@/utils/id'
+import { readJson, writeJson } from '@/utils/storage-json'
 
 export type QuickCommand = {
   id: string
@@ -34,41 +35,29 @@ export const useQuickCommandsStore = defineStore('quickCommands', () => {
 
   function load(): void {
     if (loaded.value) return
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        if (Array.isArray(parsed)) {
-          // 逐项过滤而非整体 try 兜底：一条脏数据（null/字符串混进数组）就让
-          // item.name 抛错，会走到 catch 把 commands 清成 [] —— 之后任何一次
-          // addCommand 的 save() 都会把「只剩这一条」写回 localStorage。
-          commands.value = parsed
-            .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-            .map((item, index) => ({
-              id: typeof item.id === 'string' && item.id ? item.id : genId(),
-              name: String(item.name ?? '').slice(0, 30),
-              command: String(item.command ?? '').slice(0, 1000),
-              color: typeof item.color === 'string' && item.color
-                ? item.color
-                : PRESET_COLORS[index % PRESET_COLORS.length],
-              // NaN/Infinity 的 order 会让 sortedCommands 比较结果不确定，退回位置序号
-              order: Number.isFinite(item.order) ? item.order as number : index,
-            }))
-        }
-      }
-    } catch (err) {
-      console.error('[quickCommands] load failed:', err)
-      commands.value = []
+    const parsed = readJson<unknown>(STORAGE_KEY, null)
+    if (Array.isArray(parsed)) {
+      // 逐项过滤而非整体兜底：一条脏数据不能让整份命令历史被清空。
+      commands.value = parsed
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .map((item, index) => ({
+          id: typeof item.id === 'string' && item.id ? item.id : genId(),
+          name: String(item.name ?? '').slice(0, 30),
+          command: String(item.command ?? '').slice(0, 1000),
+          color: typeof item.color === 'string' && item.color
+            ? item.color
+            : PRESET_COLORS[index % PRESET_COLORS.length],
+          // NaN/Infinity 的 order 会让 sortedCommands 比较结果不确定，退回位置序号
+          order: Number.isFinite(item.order) ? item.order as number : index,
+        }))
     }
     loaded.value = true
   }
 
   function save(): void {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(commands.value))
-    } catch (err) {
+    writeJson(STORAGE_KEY, commands.value, err => {
       console.error('[quickCommands] save failed:', err)
-    }
+    })
   }
 
   function addCommand(name: string, command: string, color?: string): QuickCommand {

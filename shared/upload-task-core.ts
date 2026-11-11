@@ -1,10 +1,15 @@
 /**
- * upload-task-core.ts — SFTP 上传记录的共享契约（主进程 / 渲染端 / vitest 共用）
+ * upload-task-core.ts — SFTP 传输记录的共享契约（主进程 / 渲染端 / vitest 共用）
  *
- * 上传的真实生命周期在主进程（.part、进度、rename），但展示在渲染层。记录必须
- * 跨重启存活，否则闪退后远端 `.part` 成为孤儿任务，用户没有任何入口把它接上。
+ * 传输的真实生命周期在主进程（.part、进度、rename），但展示在渲染层。记录必须
+ * 跨重启存活，否则闪退后 `.part` 成为孤儿任务，用户没有任何入口把它接上。
  * 状态表、校验与恢复归一化放在这里：两侧各写一份迟早对 `running` 的「上次没传完」
  * 语义分叉，重启后一边显示可继续、另一边显示已完成。
+ *
+ * S5-25：从「只记上传」泛化为「上传 + 下载」两类。两侧的续传起点都在本地
+ * （上传在远端 `.part`、下载在本地 `.part`），所以持久化的收益对称：崩一次都
+ * 该能接上。`kind` 为必填字段，读盘校验会拒收缺字段的旧记录（宁丢一条也不让
+ * 续传拿到错的路径语义）。
  *
  * 约束：本文件必须保持平台无关 — 不得 import electron / node 内置模块。
  */
@@ -26,10 +31,15 @@ export const UPLOAD_TASK_STATUSES: readonly UploadTaskStatus[] = [
   'cancelled',
 ]
 
-/** 落盘的一条上传记录。`connectionId` 是归属键：切换主机后只显示该主机的记录。 */
+/** 传输方向。upload = 本地 → 远端；download = 远端 → 本地。 */
+export type UploadTaskKind = 'upload' | 'download'
+
+/** 落盘的一条传输记录。`connectionId` 是归属键：切换主机后只显示该主机的记录。 */
 export interface UploadTaskRecord {
   id: string
   connectionId: string
+  /** S5-25：方向。缺省视为 'upload' 仅为兼容注释，读盘校验仍要求显式存在 */
+  kind: UploadTaskKind
   localPath: string
   remotePath: string
   name: string
@@ -49,6 +59,8 @@ export interface UploadTaskRecord {
 /** 渲染层入队时交给主进程的字段（connectionId 与时间戳由主进程补齐）。 */
 export interface RegisteredUploadTask {
   id: string
+  /** S5-25：方向。注册时即确定，落盘后不可改。 */
+  kind: UploadTaskKind
   localPath: string
   remotePath: string
   name: string
@@ -59,6 +71,8 @@ export interface RegisteredUploadTask {
 
 /** `sftp:upload` 的可选元数据。`resume` 只有用户显式点「继续」才为 true。 */
 export interface UploadTaskMeta {
+  /** S5-25：方向。trackUpload 据此决定记录与续传语义。 */
+  kind?: UploadTaskKind
   name?: string
   groupId?: string
   groupLabel?: string
@@ -89,6 +103,8 @@ export function isValidUploadTaskRecord(r: unknown): r is UploadTaskRecord {
   const o = r as Record<string, unknown>
   if (typeof o.id !== 'string' || !o.id) return false
   if (typeof o.connectionId !== 'string' || !o.connectionId) return false
+  // S5-25：方向缺失的记录无法安全续传（不知道该删哪一侧的 .part），拒收
+  if (o.kind !== 'upload' && o.kind !== 'download') return false
   if (typeof o.localPath !== 'string' || !o.localPath) return false
   if (typeof o.remotePath !== 'string' || !o.remotePath) return false
   if (typeof o.name !== 'string') return false

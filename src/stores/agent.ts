@@ -300,6 +300,8 @@ export const useAgentStore = defineStore('agent', () => {
     /** token 熔断上限；不传 = 后端默认，显式 0 = 不设上限 */
     maxTotalTokens?: number
     skillIds?: string[]
+    /** 专家 id：跟随本次发送，落到 run 归因；不传 = 无专家 */
+    expertId?: string
     autoSkillMatch?: boolean
     contextWindow?: number
     visibleTerminal?: boolean

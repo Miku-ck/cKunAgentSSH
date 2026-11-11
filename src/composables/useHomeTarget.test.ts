@@ -74,7 +74,9 @@ describe('useHomeTarget', () => {
     expect(t.options.value[0].label).toBe('root@10.20.1.7')
     // 副标题给连接名，用户认得的是名字不是 IP
     expect(t.options.value[0].hint).toBe('web-03')
-    expect(t.options.value[1].hint).toBe('本地终端')
+    // 本地行没有目录：label 与 hint 都空，由调用方决定不列这行
+    expect(t.options.value[1].label).toBe('')
+    expect(t.options.value[1].hint).toBe('')
   })
 
   it('选目标只改活动会话，首页状态不在这里被触碰', () => {
@@ -97,15 +99,58 @@ describe('useHomeTarget', () => {
     expect(ssh.activeSessionId).toBe('s1')
   })
 
-  it('远程目标给出地址段，本地目标给出 shell 名（WSL 也要有落点）', () => {
+  it('目标标记只给 chip 上没有的差量：远程不重复印地址，本地只有非默认 shell 才亮', () => {
     const { ssh, t } = mount()
     ssh.sessions.push({ id: 's1', name: 'web-03', type: 'remote', shell: 'root@10.20.1.7', connectionId: 'c1' })
     ssh.activeSessionId = 's1'
-    expect(t.targetChip.value).toBe('10.20.1.7')
-    ssh.sessions.push({ id: 's2', name: 'WSL', type: 'local', shell: 'WSL' })
+    // 第一枚 chip 已经写着这台机器：右边再印一遍同一串地址就是重复（用户截图口径）
+    expect(t.targetChip.value).toBe('')
+    // 地址没丢，在第一枚 chip 的 title 里
+    expect(t.targetHint.value).toBe('root@10.20.1.7')
+    // 本地默认落点：底栏已经有「本地 + 文件夹」，再印 PowerShell 只是重复默认值
+    ssh.sessions.push({ id: 's2', name: 'PowerShell', type: 'local', shell: 'PowerShell' })
     ssh.activeSessionId = 's2'
-    // 本地不印地址（没有"落到哪台机器"），但必须给出 shell 名 —— 否则审批档右边空一格
+    expect(t.targetChip.value).toBe('')
+    // 非默认 shell（WSL / Git Bash / CMD）命令语法换了一套，必须亮出来
+    ssh.sessions.push({ id: 's3', name: 'WSL', type: 'local', shell: 'WSL' })
+    ssh.activeSessionId = 's3'
     expect(t.targetChip.value).toBe('WSL')
+    ssh.sessions.push({ id: 's4', name: 'Git Bash', type: 'local', shell: 'Git Bash' })
+    ssh.activeSessionId = 's4'
+    expect(t.targetChip.value).toBe('Git Bash')
+  })
+
+  it('本地会话在候选项里用目录名当标签，读不出目录就留空（不编「本地终端」）', () => {
+    const { ssh, t } = mount()
+    ssh.sessions.push(
+      { id: 's1', name: 'PowerShell', type: 'local', shell: 'PowerShell', cwd: 'D:\\work\\cKunAgentSSH' },
+      { id: 's2', name: 'PowerShell', type: 'local', shell: 'PowerShell' },
+    )
+    const [withCwd, noCwd] = t.options.value
+    expect(withCwd.label).toBe('cKunAgentSSH')
+    expect(withCwd.hint).toBe('D:\\work\\cKunAgentSSH')
+    expect(withCwd.path).toBe('D:\\work\\cKunAgentSSH')
+    // 没有目录的会话：label / path 都空，调用方据此不列这一行
+    expect(noCwd.label).toBe('')
+    expect(noCwd.path).toBe('')
+  })
+
+  it('目录读数优先实时 cwd：终端里 cd 过之后，那个会话就属于新目录', () => {
+    const { ssh, t } = mount()
+    ssh.sessions.push({ id: 's1', name: 'PowerShell', type: 'local', shell: 'PowerShell', cwd: 'D:\\work\\a' })
+    ssh.setTerminalCwd('s1', 'D:\\work\\b')
+    expect(t.options.value[0].label).toBe('b')
+    expect(t.options.value[0].path).toBe('D:\\work\\b')
+    expect(ssh.sessionCwd('s1')).toBe('D:\\work\\b')
+  })
+
+  it('没绑定目录的会话即使上报了主目录也不进候选：默认不在项目就不读文件夹', () => {
+    const { ssh, t } = mount()
+    ssh.sessions.push({ id: 's1', name: 'PowerShell', type: 'local', shell: 'PowerShell' })
+    ssh.setTerminalCwd('s1', 'C:\\Users\\ckun')
+    // 终端跑在主目录，不代表用户选了「ckun 这个项目」
+    expect(t.options.value[0].label).toBe('')
+    expect(t.options.value[0].path).toBe('')
   })
 
   it('远程地址拆不出来时宁可不显示，不把会话名冒充 IP', () => {

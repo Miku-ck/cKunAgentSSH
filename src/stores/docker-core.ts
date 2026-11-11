@@ -12,6 +12,7 @@
 import { formatBytesCompact } from '../utils/format'
 
 import { extractSSHError } from '@/types/ssh-error-types'
+import { shSingleQuote } from '../../shared/sh-quote-core'
 
 // ── 数据类型 ──
 
@@ -183,35 +184,33 @@ export const SYSTEM_DF_CMD = `docker system df`
 
 // ── 操作命令构造（名称一律 shell 引用，容忍含空格的名字） ──
 
-/** POSIX 单引号转义：把值安全地包进单引号，内部单引号用 '\'' 序列脱出 */
-export function sq(s: string): string {
-  return `'` + s.replace(/'/g, `'\\''`) + `'`
-}
+/** POSIX shell 单引号字面量的兼容别名；实现统一由 shared/sh-quote-core 提供。 */
+export const sq = shSingleQuote
 
 export const logsCmd = (name: string, tail = 200): string =>
-  `docker logs --tail ${tail} ${sq(name)} 2>&1`
-export const startCmd = (name: string): string => `docker start ${sq(name)}`
-export const stopCmd = (name: string): string => `docker stop ${sq(name)}`
-export const restartCmd = (name: string): string => `docker restart ${sq(name)}`
-export const rmCmd = (name: string): string => `docker rm -f ${sq(name)}`
+  `docker logs --tail ${tail} ${shSingleQuote(name)} 2>&1`
+export const startCmd = (name: string): string => `docker start ${shSingleQuote(name)}`
+export const stopCmd = (name: string): string => `docker stop ${shSingleQuote(name)}`
+export const restartCmd = (name: string): string => `docker restart ${shSingleQuote(name)}`
+export const rmCmd = (name: string): string => `docker rm -f ${shSingleQuote(name)}`
 // 默认不强制：确认框承诺「有容器（含已停止）正在使用时会失败」，带上 -f 会强删
 // 并让引用它的容器变成悬空引用 —— 与用户确认的语义相反。
-export const rmiCmd = (ref: string, force = false): string => `docker rmi${force ? ' -f' : ''} ${sq(ref)}`
-export const execCmd = (name: string): string => `docker exec -it ${sq(name)} sh`
-export const volumeRmCmd = (name: string): string => `docker volume rm ${sq(name)}`
-export const networkRmCmd = (name: string): string => `docker network rm ${sq(name)}`
+export const rmiCmd = (ref: string, force = false): string => `docker rmi${force ? ' -f' : ''} ${shSingleQuote(ref)}`
+export const execCmd = (name: string): string => `docker exec -it ${shSingleQuote(name)} sh`
+export const volumeRmCmd = (name: string): string => `docker volume rm ${shSingleQuote(name)}`
+export const networkRmCmd = (name: string): string => `docker network rm ${shSingleQuote(name)}`
 // prune -f：跳过交互确认；调用方须先经 UI 确认框（无 -f 时非 tty 环境直接失败）
 export const volumePruneCmd = (): string => `docker volume prune -f`
 export const networkPruneCmd = (): string => `docker network prune -f`
 // inspect：一次拿一个对象的完整元数据，用于详情弹窗；docker 返回数组，取首元素
-export const volumeInspectCmd = (name: string): string => `docker volume inspect ${sq(name)}`
-export const networkInspectCmd = (name: string): string => `docker network inspect ${sq(name)}`
-export const containerInspectCmd = (name: string): string => `docker container inspect ${sq(name)}`
+export const volumeInspectCmd = (name: string): string => `docker volume inspect ${shSingleQuote(name)}`
+export const networkInspectCmd = (name: string): string => `docker network inspect ${shSingleQuote(name)}`
+export const containerInspectCmd = (name: string): string => `docker container inspect ${shSingleQuote(name)}`
 // --no-stream：取一次快照而不是持续刷屏；{{json .}} 的键为 CPUPerc/MemUsage/... 原始显示串
 export const containerStatsCmd = (name: string): string =>
-  `docker stats --no-stream --format '{{json .}}' ${sq(name)}`
+  `docker stats --no-stream --format '{{json .}}' ${shSingleQuote(name)}`
 // --quiet：非 TTY 下不吐进度条，只留结果/错误，避免 1MB 截断；耗时由调用方放长预算
-export const pullCmd = (ref: string): string => `docker pull --quiet ${sq(ref)}`
+export const pullCmd = (ref: string): string => `docker pull --quiet ${shSingleQuote(ref)}`
 // 不带 -a：只清 dangling（无标签层），不动任何带标签镜像
 export const imagePruneCmd = (): string => `docker image prune -f`
 // -a：连同带标签但未被任何容器（含已停止）引用的镜像一起清；破坏面更大，
@@ -239,8 +238,8 @@ export function saveTempPath(path: string): string {
 }
 
 const gzSaveCmd = (ref: string, remotePath: string): string => {
-  const tmp = sq(saveTempPath(remotePath))
-  return `docker save -o ${tmp} ${sq(ref)} && gzip -1 -c ${tmp} > ${sq(remotePath)}; rc=$?; rm -f ${tmp}; exit $rc`
+  const tmp = shSingleQuote(saveTempPath(remotePath))
+  return `docker save -o ${tmp} ${shSingleQuote(ref)} && gzip -1 -c ${tmp} > ${shSingleQuote(remotePath)}; rc=$?; rm -f ${tmp}; exit $rc`
 }
 
 /**
@@ -248,10 +247,10 @@ const gzSaveCmd = (ref: string, remotePath: string): string => {
  * 压缩级别取 -1：镜像层多是二进制，-6 省不下多少体积，但在 600s 预算里明显更慢。
  */
 export const dockerSaveCmd = (ref: string, remotePath: string, gz = false): string =>
-  gz ? gzSaveCmd(ref, remotePath) : `docker save -o ${sq(remotePath)} ${sq(ref)}`
+  gz ? gzSaveCmd(ref, remotePath) : `docker save -o ${shSingleQuote(remotePath)} ${shSingleQuote(ref)}`
 // 加载不看后缀：docker load 按魔数识别 gzip / bzip2 / xz，.tar.gz 直接能读
 export const dockerLoadCmd = (remotePath: string): string =>
-  `docker load -i ${sq(remotePath)}`
+  `docker load -i ${shSingleQuote(remotePath)}`
 
 /** 已知归档后缀：顺序从长到短，先到先删 —— 否则 .tar.gz 会被当成 .tar 只剥一层 */
 const ARCHIVE_SUFFIX_RE = /(\.tar\.gz|\.tgz|\.tar|\.gz)$/i

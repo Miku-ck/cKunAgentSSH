@@ -19,6 +19,7 @@ import {
 const rec = (over: Partial<UploadTaskRecord> = {}): UploadTaskRecord => ({
   id: 't1',
   connectionId: 'c1',
+  kind: 'upload',
   localPath: '/local/a.bin',
   remotePath: '/remote/a.bin',
   name: 'a.bin',
@@ -88,6 +89,15 @@ describe('nextTransferSeqFrom', () => {
 describe('isValidUploadTaskRecord', () => {
   it('完整记录通过', () => {
     expect(isValidUploadTaskRecord(rec())).toBe(true)
+    // S5-25：下载记录同构，方向合法即通过
+    expect(isValidUploadTaskRecord(rec({ kind: 'download' }))).toBe(true)
+  })
+
+  it('缺方向或方向非法的记录被拒收（不知道该清哪一侧的 .part）', () => {
+    const { kind: _omit, ...noKind } = rec()
+    expect(isValidUploadTaskRecord(noKind)).toBe(false)
+    expect(isValidUploadTaskRecord({ ...rec(), kind: 'sideways' })).toBe(false)
+    expect(isValidUploadTaskRecord({ ...rec(), kind: 1 })).toBe(false)
   })
 
   it('缺连接归属或路径的记录被丢弃（续传不能拿 undefined 去 stat）', () => {

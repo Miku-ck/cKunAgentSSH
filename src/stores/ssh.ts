@@ -2,7 +2,7 @@
  * SSH Store — 管理 SSH 连接配置和终端会话
  * 连接配置通过 IPC 持久化到主进程(safeStorage 加密),不再走 localStorage
  */
-import { defineStore } from 'pinia'
+import { acceptHMRUpdate, defineStore } from 'pinia'
 import { ref, computed, onScopeDispose, getCurrentScope } from 'vue'
 import { useToastStore } from './toast'
 import { toFriendlyMessage } from '@/api/client'
@@ -24,6 +24,9 @@ export interface TerminalSession {
   name: string
   type: 'local' | 'remote'
   shell: string           // 本地: shell名, 远程: username@host
+  /** 会话启动目录（本地 PTY 才有值）。chip 上要显示「在哪个文件夹」，
+   *  这是唯一读得到的事实源——输入栏不再靠猜或读进程 cwd。 */
+  cwd?: string
   connectionId?: string   // 远程连接的 ID
   createdAt?: number      // 会话创建时间戳（用于判断本地终端是否“启动即退出”）
   /** 后台会话有新输出（切走时置位，激活时清零） */
@@ -32,6 +35,9 @@ export interface TerminalSession {
   reconnect?: { attempt: number; maxAttempts: number } | null
   /** 自动重连已放弃（等待用户手动重连） */
   reconnectGaveUp?: boolean
+  /** 主进程侧已没有这条会话（探测回 SESSION_NOT_FOUND 时置位）。与 reconnectGaveUp
+   *  的区别是来源：那个由主进程推送，这个由本端实际执行失败反证。重连成功后清除。 */
+  unavailable?: boolean
 }
 
 interface CommandHistoryEntry {
@@ -177,6 +183,9 @@ export const useSSHStore = defineStore('ssh', () => {
       } else if (data.phase === 'success') {
         s.reconnect = null
         s.reconnectGaveUp = false
+        // 重连成功 = 这条会话又在主进程里了，探测反证的失效标记必须一起清掉，
+        // 否则目录 chip 会一直停在「未连接」
+        s.unavailable = false
       } else if (data.phase === 'gave-up') {
         s.reconnect = null
         // cancelled/config-missing 是「收摊」不是「失败」：清状态，不亮红点
@@ -301,6 +310,7 @@ export const useSSHStore = defineStore('ssh', () => {
       name: shell,
       type: 'local',
       shell,
+      cwd: cwd || '',
       createdAt: Date.now(),
     })
 
@@ -347,6 +357,69 @@ export const useSSHStore = defineStore('ssh', () => {
       connections.value[idx] = { ...connections.value[idx], lastConnectedAt: Date.now() }
     }
 
+    return id
+  }
+
+  /** 把一条「主进程侧已经不在了」的远程会话重新拨起来，**占同一个标签位**。
+   *
+   *  为什么必须有它：会话池是主进程内存，主进程重启或自动重连放弃之后，池里就没有
+   *  这条会话了；而渲染层的标签是活的（HMR / 长时间不关窗口时状态一直在）。于是界面
+   *  呈现「一个看着还连着的标签 + 一枚没有目录的 chip」，真实状态却是背后一条连接都
+   *  没有（2026-11-11 用户反馈：连接成功到 SSH 却不显示文件夹，实际那条会话在 10 小时
+   *  前就被主进程移除了，4642 次 SESSION_NOT_FOUND 全来自它）。
+   *
+   *  走的是 ssh:connect 而不是 ssh:reconnect：后者按 id 找主进程的重连条目，而条目在
+   *  「放弃」那一刻就被删了，对幽灵会话必然抛 SESSION_NOT_FOUND —— 只能整条重建。
+   *  凭据仍由主进程从连接配置里取（渲染层不持明文）。
+   */
+  async function redial(sessionId: string, cols = 80, rows = 24): Promise<string> {
+    const idx = sessions.value.findIndex(x => x.id === sessionId)
+    if (idx === -1) throw new Error('会话已关闭')
+    const s = sessions.value[idx]
+    if (s.type !== 'remote' || !s.connectionId) throw new Error('只有远程会话可以重新连接')
+    // 首页不一定已经拉过连接列表（会话从终端页带过来时连接配置可能还没加载）：
+    // 空表下直接报「配置已被删除」是假诊断，先补一次再判。
+    let conn = connections.value.find(c => c.id === s.connectionId)
+    if (!conn) {
+      await loadConnections().catch(() => { /* 下面统一报错 */ })
+      conn = connections.value.find(c => c.id === s.connectionId)
+    }
+    if (!conn) throw new Error('连接配置已被删除，请重新添加服务器')
+    const api = window.electronAPI
+    if (!api) throw new Error('Electron API not available')
+
+    // 主进程侧本就没有它时这里是空操作；万一标记是误判、会话其实还活着，先拆掉再建，
+    // 不留两条并存连接（同 id 迟到握手那套守卫解决不了「两个 id 两条连接」）。
+    try { await api.sshDisconnect(sessionId) } catch { /* 主进程侧已无此会话 */ }
+
+    // 剥离 Vue 响应式 Proxy，避免 structuredClone 失败（同 connectRemote）
+    const plain = JSON.parse(JSON.stringify(conn))
+    const { id, name } = await api.sshConnect({ ...plain, cols, rows })
+
+    sessions.value[idx] = {
+      ...s,
+      id,
+      name: name || s.name,
+      unavailable: false,
+      reconnect: null,
+      reconnectGaveUp: false,
+      createdAt: Date.now(),
+    }
+
+    // 按会话 id 键控的现场状态整体搬到新 id：换的是连接，不是用户的那条会话
+    delete selectionBySession.value[sessionId]
+    delete cwdBySession.value[sessionId]
+    commandHistory.value = commandHistory.value.map(h => (h.sessionId === sessionId ? { ...h, sessionId: id } : h))
+    commandChains.value = commandChains.value.map(c => (c.sessionId === sessionId ? { ...c, sessionId: id } : c))
+    if (lastCommandBySession.value[sessionId] !== undefined) {
+      lastCommandBySession.value[id] = lastCommandBySession.value[sessionId]
+      delete lastCommandBySession.value[sessionId]
+    }
+    mruIds.value = mruIds.value.map(x => (x === sessionId ? id : x))
+    if (activeSessionId.value === sessionId) activeSessionId.value = id
+
+    // 立刻补一次目录：重拨完 chip 就该显示远端真实目录，而不是等着终端页 OSC 7
+    void ensureTerminalCwd(id)
     return id
   }
 
@@ -625,6 +698,98 @@ export const useSSHStore = defineStore('ssh', () => {
     return cwdBySession.value[sessionId] || ''
   }
 
+  /** 某个会话「现在在哪个目录」：优先终端同步上来的实时 cwd（用户 cd 过之后它才是
+   *  真相，OSC 7 / pty 轮询都写这张表），退到建会话时的初始 cwd。
+   *  落点 chip 与会话列表的目录读数都走这里 —— 直接读 session.cwd 会把
+   *  「建会话时没给目录」的会话一律读成空，进而被显示成「主目录」或一个编出来的名字。 */
+  function sessionCwd(sessionId: string): string {
+    const live = getTerminalCwd(sessionId)
+    if (live) return live
+    return sessions.value.find(s => s.id === sessionId)?.cwd || ''
+  }
+
+  /** 在途的远程 pwd 探测（同一会话并发只发一次） */
+  const cwdProbing = new Set<string>()
+
+  /** 探测到的「主进程侧没有这条会话」：把标签标记成不可用，界面据此说真话 */
+  function _markSessionUnavailable(sessionId: string): void {
+    const s = sessions.value.find(x => x.id === sessionId)
+    if (s) s.unavailable = true
+  }
+
+  /** IPC 抛出的会话失效错误（主进程 SSHManager 抛 SESSION_NOT_FOUND） */
+  function _isSessionGoneError(e: unknown): boolean {
+    const msg = e instanceof Error ? e.message : String(e ?? '')
+    return msg.includes('SESSION_NOT_FOUND') || msg.includes('会话不存在')
+  }
+
+  /** 远程会话「现在在哪个目录」的一次性兜底：OSC 7 只在终端页可见时每 5s 上报
+   *  （useTerminalContext 的轮询），用户刚连上就切回首页、或远端 shell 不是
+   *  bash/zsh（PROMPT_COMMAND / precmd 注入不生效）时，cwdBySession 永远是空的，
+   *  首页那枚目录 chip 就只能写死一个 `~`。这里按代价从低到高分两级补：
+   *
+   *  1. `sshGetCwd`：主进程本来就在 stream 里持续解析 OSC 7（ssh-manager 的
+   *     osc7Match），它与渲染层是否挂载无关 —— 这是最准也最便宜的一级。
+   *  2. `sshExec pwd`：走 client.exec 独立通道，不往交互式 pty 写字节（不污染
+   *     回显、不打断用户正在敲的命令）。代价是拿到的是**登录目录**而非交互式
+   *     shell 里 cd 之后的目录，因此只在第 1 级为空时才用；一旦终端页的 OSC 7
+   *     上报了真实值，会直接覆盖这里的兜底值。 */
+  async function ensureTerminalCwd(sessionId: string): Promise<string> {
+    if (!sessionId) return ''
+    const known = sessionCwd(sessionId)
+    if (known) return known
+    const api = typeof window === 'undefined' ? undefined : window.electronAPI
+    if (!api) return ''
+    if (cwdProbing.has(sessionId)) return ''
+    cwdProbing.add(sessionId)
+    try {
+      if (api.sshGetCwd) {
+        const tracked = await api.sshGetCwd(sessionId).catch(() => '')
+        if (tracked) {
+          setTerminalCwd(sessionId, tracked)
+          const s = sessions.value.find(x => x.id === sessionId)
+          if (s) s.unavailable = false
+          return tracked
+        }
+      }
+      if (!api.sshExec) return ''
+      const r = await api.sshExec(sessionId, 'pwd', 5)
+      const cwd = (r?.stdout || '').trim()
+      if (cwd) {
+        setTerminalCwd(sessionId, cwd)
+        const s = sessions.value.find(x => x.id === sessionId)
+        if (s) s.unavailable = false
+      }
+      return cwd
+    } catch (e) {
+      // 会话已断开 / 通道被拒：静默降级，chip 保留占位读数。
+      // SESSION_NOT_FOUND 是硬证据 —— 主进程侧已经没有这条会话了（标签还留着），
+      // 必须置 unavailable，否则首页那枚 chip 会继续把死会话画成一个 `~` 的活目标。
+      if (_isSessionGoneError(e)) _markSessionUnavailable(sessionId)
+      return ''
+    } finally {
+      cwdProbing.delete(sessionId)
+    }
+  }
+
+  /** 让远端交互式 shell 切到指定目录。
+   *
+   *  SSH 落点的「目录」不是一条配置，而是那条 shell 的 cwd —— 后端只认
+   *  ssh_session_id，命令最终经 visible_terminal 写回同一个 pty（见 exec-target
+   *  头部注释）。所以「选目录」在远端只能落成一句 cd：写进 pty 用户看得见，
+   *  之后在终端里接着敲也在同一个目录，chip 与终端不会各说一套。
+   *
+   *  路径整段用单引号包住（内部单引号转义成 '\''），空格 / $ / 反引号都进不了 shell 语法。 */
+  function cdRemote(sessionId: string, path: string): void {
+    const api = typeof window === 'undefined' ? undefined : window.electronAPI
+    const target = (path || '').trim()
+    if (!sessionId || !target || !api?.sshWrite) return
+    const quoted = `'${target.replace(/'/g, "'\\''")}'`
+    api.sshWrite(sessionId, `cd -- ${quoted}\r`)
+    // 乐观更新：OSC 7 要等终端页那 5s 轮询才回来，chip 不该为等它空一轮
+    setTerminalCwd(sessionId, target)
+  }
+
   // ─── 连接管理(走 IPC 持久化) ──────────────────
   /**
    * S4-03：主进程保存时若系统密钥环不可用，密码/passphrase 不会落盘（不落明文），
@@ -709,6 +874,7 @@ export const useSSHStore = defineStore('ssh', () => {
     loadConnections,
     createLocalTerminal,
     connectRemote,
+    redial,
     closeSession,
     removeSession,
     switchSession,
@@ -732,5 +898,14 @@ export const useSSHStore = defineStore('ssh', () => {
     getTerminalSelection,
     setTerminalCwd,
     getTerminalCwd,
+    sessionCwd,
+    ensureTerminalCwd,
+    cdRemote,
   }
 })
+
+// 同 exec-target：开发期热更本文件时把新增 action 补进已存在的实例，
+// 否则运行中的窗口会拿旧 setup 定义的 store，新方法一律 undefined。
+if (import.meta.hot) {
+  import.meta.hot.accept(acceptHMRUpdate(useSSHStore, import.meta.hot))
+}

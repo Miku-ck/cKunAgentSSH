@@ -2,7 +2,7 @@
  * contextBridge 运行时契约守卫。
  *
  * 源码文本守卫（shared/ipc-contract.test.ts）只能证明「字符串对得上」，证明不了
- * 161 个方法真的被暴露、真的调到对应频道、监听真的能注销。这里 mock electron，
+ * 163 个方法真的被暴露、真的调到对应频道、监听真的能注销。这里 mock electron，
  * 加载真实 preload.ts 并捕获 exposeInMainWorld 的实参逐项验证。
  */
 import { beforeAll, describe, expect, it, vi } from 'vitest'
@@ -36,16 +36,16 @@ beforeAll(async () => {
 })
 
 describe('electronAPI 暴露形状', () => {
-  it('挂在 electronAPI 上，共 161 个成员且全为函数', () => {
+  it('挂在 electronAPI 上，共 166 个成员且全为函数', () => {
     expect(mocks.exposed.key).toBe('electronAPI')
-    expect(Object.keys(mocks.exposed.api)).toHaveLength(161)
+    expect(Object.keys(mocks.exposed.api)).toHaveLength(166)
     for (const [key, fn] of Object.entries(mocks.exposed.api)) {
       expect(typeof fn, `${key} 不是函数`).toBe('function')
     }
     expect(typeof mocks.exposed.api.getPathForFile).toBe('function')
   })
 
-  it('142 个 invoke 成员调用时把对应频道作为首参传给 ipcRenderer', () => {
+  it('146 个 invoke 成员调用时把对应频道作为首参传给 ipcRenderer', () => {
     for (const key of Object.keys(INVOKE_CHANNELS)) {
       mocks.invoke.mockClear()
       mocks.exposed.api[key]('probe')

@@ -5,8 +5,8 @@
  * 记成完成、把用户暂停的任务记成取消、或者用迟到的失败把已删记录复活。这些都是
  * 异步竞态，只能在这里用可控的 run/deferred 逐条钉住。
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { readFile, writeFile } from 'fs/promises'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { readFile, unlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -29,6 +29,8 @@ function makeStore(at = 1000): UploadTaskStore {
 
 const task = (id = 't1', over: Record<string, unknown> = {}) => ({
   id,
+  // S5-25：默认上传；下载用例显式传 kind: 'download'
+  kind: 'upload' as const,
   localPath: `/local/${id}.bin`,
   remotePath: `/remote/${id}.bin`,
   name: `${id}.bin`,
@@ -174,6 +176,7 @@ describe('启动归一化', () => {
   const rawRecord = (over: Record<string, unknown>) => ({
     id: 't1',
     connectionId: 'c1',
+    kind: 'upload' as const,
     localPath: '/l',
     remotePath: '/r',
     name: 'a',
@@ -223,13 +226,65 @@ describe('启动归一化', () => {
   })
 })
 
+describe('下载记录的 kind 归属（S5-25）', () => {
+  it('registerBatch 按条写 kind，下载记录与上传记录互不串改', async () => {
+    const store = makeStore()
+    await store.registerBatch('c1', [
+      { id: 'up', kind: 'upload' as const, localPath: '/l/a.bin', remotePath: '/r/a.bin', name: 'a.bin', total: 10 },
+      { id: 'down', kind: 'download' as const, localPath: 'D:\\d\\b.bin', remotePath: '/r/b.bin', name: 'b.bin', total: 20 },
+    ])
+    expect(store.get('up')!.kind).toBe('upload')
+    expect(store.get('down')!.kind).toBe('download')
+
+    // 读回后方向不变 —— 渲染层靠它决定续传走哪一侧
+    const reopened = makeStore()
+    await reopened.init()
+    expect((await reopened.list('c1')).map(r => [r.id, r.kind])).toEqual([
+      ['up', 'upload'],
+      ['down', 'download'],
+    ])
+  })
+
+  it('trackUpload 的 meta.kind 决定方向；同 id 重入不改写既有方向', async () => {
+    const store = makeStore()
+    await store.registerBatch('c1', [
+      { id: 'd1', kind: 'download' as const, localPath: '/l/d.bin', remotePath: '/r/d.bin', name: 'd.bin', total: 30 },
+    ])
+    // 同 id 重传：方向以注册时为准，否则续传起点会算错一侧
+    await store.trackUpload('c1', 'd1', '/l/d.bin', '/r/d.bin', { kind: 'upload', size: 30 }, async () => {})
+    expect(store.get('d1')!.kind).toBe('download')
+    expect(store.get('d1')!.status).toBe('done')
+
+    // 未注册就 trackUpload：走 meta.kind 兜底
+    await store.trackUpload('c1', 'd2', '/l/e.bin', '/r/e.bin', { kind: 'download', size: 40 }, async () => {})
+    expect(store.get('d2')!.kind).toBe('download')
+  })
+
+  it('下载侧 discardPart 清理的是本地 .part', async () => {
+    const store = makeStore()
+    const part = join(dir, 'dst.part')
+    writeFileSync(part, Buffer.alloc(12))
+    await store.registerBatch('c1', [
+      { id: 'd1', kind: 'download' as const, localPath: join(dir, 'dst.bin'), remotePath: '/r/dst.bin', name: 'dst.bin', total: 100 },
+    ])
+    // 源文件已变（大小不符）→ 清本地 .part 并报 REMOTE_CHANGED
+    const err = await store.trackUpload(
+      'c1', 'd1', join(dir, 'dst.bin'), '/r/dst.bin', { kind: 'download', resume: true },
+      async () => {},
+      { discardPart: async () => { await unlink(part) } },
+    ).catch(e => e)
+    expect(parseTransferErrorCode(err?.name)).toBe('REMOTE_CHANGED')
+    expect(existsSync(part)).toBe(false)
+  })
+})
+
 describe('显式续传的源文件一致性', () => {
   it('本地文件大小与记录不符 → 清 .part、记 REMOTE_CHANGED、不执行上传', async () => {
     const local = join(dir, 'src.bin')
     writeFileSync(local, Buffer.alloc(50))
     const store = makeStore()
     await store.registerBatch('c1', [
-      { id: 't1', localPath: local, remotePath: '/r/src.bin', name: 'src.bin', total: 100 },
+      { id: 't1', kind: 'upload' as const, localPath: local, remotePath: '/r/src.bin', name: 'src.bin', total: 100 },
     ])
 
     let discarded = 0
@@ -254,7 +309,7 @@ describe('显式续传的源文件一致性', () => {
     writeFileSync(local, Buffer.alloc(100))
     const store = makeStore()
     await store.registerBatch('c1', [
-      { id: 't1', localPath: local, remotePath: '/r/src.bin', name: 'src.bin', total: 100 },
+      { id: 't1', kind: 'upload' as const, localPath: local, remotePath: '/r/src.bin', name: 'src.bin', total: 100 },
     ])
     let ran = false
     await store.trackUpload('c1', 't1', local, '/r/src.bin', { resume: true }, async () => { ran = true })

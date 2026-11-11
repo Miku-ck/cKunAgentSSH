@@ -56,6 +56,14 @@ function pushTransfer(store: ReturnType<typeof useSftpStore>, over: Record<strin
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
 
+/** 通用传输行夹具：三组 describe 共用（原本只服务第一组，属局部重复） */
+function mk(id: string, status = 'running') {
+  return {
+    id, direction: 'up', kind: 'upload', name: id, from: '/a', to: '/b',
+    transferred: 0, total: 100, status, startTime: 1,
+  } as never
+}
+
 describe('sftp store — 传输索引不变量（阶段2/B4）', () => {
   let api: FakeApi
   beforeEach(() => {
@@ -64,13 +72,6 @@ describe('sftp store — 传输索引不变量（阶段2/B4）', () => {
     api = makeApi()
     ;(globalThis as unknown as { window: unknown }).window = { electronAPI: api }
   })
-
-  function mk(id: string, status = 'running') {
-    return {
-      id, direction: 'up', kind: 'upload', name: id, from: '/a', to: '/b',
-      transferred: 0, total: 100, status, startTime: 1,
-    } as never
-  }
 
   it('addTransfer 登记后 applyProgress 命中数组里的同一对象', () => {
     const store = useSftpStore()
@@ -102,6 +103,42 @@ describe('sftp store — 传输索引不变量（阶段2/B4）', () => {
     store.applyProgress({ id: 'done', transferred: 100, total: 100 })
     expect(store.transfers.find(t => t.id === 'done')).toBeUndefined()
     expect(store.transfers[0].transferred).toBe(0)
+  })
+})
+
+describe('sftp store — 复制进度的总量回填（S5-26）', () => {
+  let api: FakeApi
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    api = makeApi()
+    ;(globalThis as unknown as { window: unknown }).window = { electronAPI: api }
+  })
+
+  it('total 未知的行由进度事件撑开，复制行不再永远画成滑块', () => {
+    const store = useSftpStore()
+    store.addTransfer(mk('copy', 'running'))
+    store.transfers[0].total = 0   // 入队时主进程还没递归收集完
+    store.applyProgress({ id: 'copy', transferred: 50, total: 4096 })
+    expect(store.transfers[0].total).toBe(4096)
+    expect(store.transfers[0].transferred).toBe(50)
+  })
+
+  it('已知总量不被后续事件改小（文件不会越收越多，只会越收越少）', () => {
+    const store = useSftpStore()
+    store.addTransfer(mk('up', 'running'))   // 入队即带 total=100
+    store.applyProgress({ id: 'up', transferred: 10, total: 100 })
+    expect(store.transfers[0].total).toBe(100)
+    store.applyProgress({ id: 'up', transferred: 60, total: 100 })
+    expect(store.transfers[0].total).toBe(100)
+  })
+
+  it('total=0 的进度事件不写入 0（那会把已撑开的总量打回未知）', () => {
+    const store = useSftpStore()
+    store.addTransfer(mk('copy', 'running'))
+    store.transfers[0].total = 0
+    store.applyProgress({ id: 'copy', transferred: 0, total: 0 })
+    expect(store.transfers[0].total).toBe(0)
   })
 })
 
@@ -238,7 +275,7 @@ describe('sftp store — 上传记录（跨重启保留 / 手动继续）', () =
     expect(api.sftpClearUploadTasks).toHaveBeenCalledWith('conn-1')
   })
 
-  it('删除上传行会删持久记录；删除下载行不会', () => {
+  it('删除上传/下载行都会删各自的持久记录（S5-33）', () => {
     const store = useSftpStore()
     pushUpload(store)
     pushTransfer(store, { id: 'd1', kind: 'download', direction: 'down' })
@@ -246,11 +283,12 @@ describe('sftp store — 上传记录（跨重启保留 / 手动继续）', () =
     store.removeTransfer('t1')
     expect(api.sftpRemoveUploadTask).toHaveBeenCalledWith('t1')
 
+    // 原实现只清 upload —— 下载记录留在磁盘上，重启又冒出来一条历史
     store.removeTransfer('d1')
-    expect(api.sftpRemoveUploadTask).not.toHaveBeenCalledWith('d1')
+    expect(api.sftpRemoveUploadTask).toHaveBeenCalledWith('d1')
   })
 
-  it('上传成功后不自动消失（记录承诺）；下载仍按原逻辑自动移除', async () => {
+  it('上传/下载成功后都不自动消失（记录承诺）；同侧复制仍自动清理', async () => {
     vi.useFakeTimers()
     try {
       api.fsStat = vi.fn(async () => ({ isDirectory: false, size: 100 })) as never
@@ -266,13 +304,25 @@ describe('sftp store — 上传记录（跨重启保留 / 手动继续）', () =
       expect(row.status).toBe('done')
 
       await vi.advanceTimersByTimeAsync(4000)
-      expect(store.transfers.find(t => t.id === row.id)).toBeTruthy()
+      expect(store.transfers.find(t => t.id === row.id), '上传行应保留').toBeTruthy()
+
+      // 下载同理：行自动消失而记录留在磁盘上，重启后历史会自己冒回来
+      pushTransfer(store, { id: 'd2', kind: 'download', direction: 'down', status: 'done' })
+      store.scheduleRemoveTransfer('d2', 3000)
+      await vi.advanceTimersByTimeAsync(4000)
+      expect(store.transfers.find(t => t.id === 'd2'), '下载行也应保留').toBeTruthy()
+
+      // 同侧复制没有持久记录，保持原有的自动清理（否则列表会被复制行永久占满）
+      pushTransfer(store, { id: 'c1', kind: 'copy-remote', direction: 'down', status: 'done' })
+      store.scheduleRemoveTransfer('c1', 3000)
+      await vi.advanceTimersByTimeAsync(4000)
+      expect(store.transfers.find(t => t.id === 'c1'), '复制行应自动清理').toBeUndefined()
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('断开连接：上传行转 paused+interrupted 保留，下载行清空', async () => {
+  it('断开连接：上传/下载行都转 paused+interrupted 保留（S5-33）', async () => {
     const store = useSftpStore()
     store.sshSessionId = 'sid'
     store.online = true
@@ -284,9 +334,37 @@ describe('sftp store — 上传记录（跨重启保留 / 手动继续）', () =
     const up = store.transfers.find(t => t.id === 't1')!
     expect(up.status).toBe('paused')
     expect(up.interrupted).toBe(true)
-    expect(store.transfers.find(t => t.id === 'd1')).toBeUndefined()
+    // 下载现在也写本地 .part 并登记记录，断线把行清空 + 记录标 cancelled
+    // 等于丢掉已下载的字节与续传入口
+    const down = store.transfers.find(t => t.id === 'd1')!
+    expect(down.status).toBe('paused')
+    expect(down.interrupted).toBe(true)
     expect(api.sftpPauseUploadTask).toHaveBeenCalledWith('t1', true)
+    expect(api.sftpPauseUploadTask).toHaveBeenCalledWith('d1', true)
     expect(api.sftpCancel).toHaveBeenCalledWith('t1')
+    expect(api.sftpCancel).toHaveBeenCalledWith('d1')
+  })
+
+  it('断开连接：同侧复制仍按取消清空（cp -r 无断点语义）', async () => {
+    const store = useSftpStore()
+    store.sshSessionId = 'sid'
+    store.online = true
+    pushTransfer(store, { id: 'c1', kind: 'copy-remote', direction: 'down', status: 'running' })
+
+    await store.disconnect()
+
+    expect(store.transfers.find(t => t.id === 'c1')).toBeUndefined()
+  })
+
+  it('取消排队的下载任务也补发 sftpCancel（否则重启冒出假的可继续记录）', async () => {
+    const store = useSftpStore()
+    store.sshSessionId = 'sid'
+    store.online = true
+    pushTransfer(store, { id: 'd3', kind: 'download', direction: 'down', status: 'pending' })
+
+    await store.cancelTransfer('d3')
+
+    expect(api.sftpCancel).toHaveBeenCalledWith('d3')
   })
 
   it('离线时继续只提示，不发传输', () => {

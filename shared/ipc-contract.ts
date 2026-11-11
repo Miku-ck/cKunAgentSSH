@@ -60,6 +60,8 @@ export const INVOKE_CHANNELS = {
   sshDuplicateConnection: 'ssh:duplicateConnection',
   sshTestConnection: 'ssh:testConnection',
   sshMigrateLegacy: 'ssh:migrateLegacy',
+  /** 用系统默认编辑器打开 ~/.ssh/config（快速连接弹窗底部的出口） */
+  sshOpenConfig: 'ssh:openConfig',
   tunnelList: 'tunnel:list',
   tunnelSave: 'tunnel:save',
   tunnelDelete: 'tunnel:delete',
@@ -91,6 +93,9 @@ export const INVOKE_CHANNELS = {
   ghaccelHostsRemove: 'ghaccel:hostsRemove',
   ghaccelSaveOptions: 'ghaccel:saveOptions',
   gitreposGetRegistry: 'gitrepos:getRegistry',
+  gitreposListWorktrees: 'gitrepos:listWorktrees',
+  gitreposCreateWorktree: 'gitrepos:createWorktree',
+  gitreposPruneWorktrees: 'gitrepos:pruneWorktrees',
   gitreposAddLocal: 'gitrepos:addLocal',
   gitreposRemoveLocal: 'gitrepos:removeLocal',
   gitreposSetRemotePaths: 'gitrepos:setRemotePaths',
@@ -133,6 +138,7 @@ export const INVOKE_CHANNELS = {
   sftpStat: 'sftp:stat',
   sftpRename: 'sftp:rename',
   sftpDelete: 'sftp:delete',
+  sftpChmod: 'sftp:chmod',
   sftpUpload: 'sftp:upload',
   sftpDownload: 'sftp:download',
   sftpCancel: 'sftp:cancel',
@@ -173,5 +179,5 @@ export const EVENT_CHANNELS = {
 
 export type InvokeKey = keyof typeof INVOKE_CHANNELS
 export type EventKey = keyof typeof EVENT_CHANNELS
-/** 161 个 electronAPI 成员 = 142 invoke + 18 监听 + 1 个 webUtils 直通 */
+/** 165 个 electronAPI 成员 = 146 invoke + 18 监听 + 1 个 webUtils 直通 */
 export type ApiKey = InvokeKey | EventKey | 'getPathForFile'

@@ -33,6 +33,8 @@ from routes.bot_stickers import router as bot_stickers_router
 from routes.wechat_callback import router as wechat_callback_router
 from routes.settings import router as settings_router
 from routes.skills import router as skills_router
+from routes.experts import router as experts_router
+from routes.plugins import router as plugins_router
 from routes.agent import router as agent_router
 from routes.terminal import router as terminal_router
 from routes.audit import router as audit_router
@@ -467,6 +469,8 @@ app.include_router(bot_stickers_router)
 app.include_router(wechat_callback_router)
 app.include_router(settings_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
+app.include_router(experts_router, prefix="/api")
+app.include_router(plugins_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(terminal_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")

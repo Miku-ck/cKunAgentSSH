@@ -181,12 +181,12 @@ def test_run_slot_conflict(monkeypatch):
     async def main():
         assert await ra._acquire_run_slot("c1", "run1") is None
         assert await ra._acquire_run_slot("c1", "run2") == "run1", "同会话第二个 run 必须冲突"
-        await ra._release_run_slot("c1", "run1")
+        ra._release_run_slot_sync("c1", "run1")
         assert await ra._acquire_run_slot("c1", "run3") is None, "释放后可再占位"
         # 误删保护：占位者是 run3 时，用 run9 释放不得删掉 run3
-        await ra._release_run_slot("c1", "run9")
+        ra._release_run_slot_sync("c1", "run9")
         assert await ra._acquire_run_slot("c1", "runX") == "run3"
-        await ra._release_run_slot("c1", "run3")
+        ra._release_run_slot_sync("c1", "run3")
 
     asyncio.run(main())
 

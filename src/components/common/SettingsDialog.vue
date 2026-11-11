@@ -54,6 +54,8 @@ import ModelsPanel from '@/components/settings/panels/ModelsPanel.vue'
 import ChatPanel from '@/components/settings/panels/ChatPanel.vue'
 import AppearancePanel from '@/components/settings/panels/AppearancePanel.vue'
 import SkillsPanel from '@/components/settings/panels/SkillsPanel.vue'
+import ExpertsPanel from '@/components/settings/panels/ExpertsPanel.vue'
+import PluginsPanel from '@/components/settings/panels/PluginsPanel.vue'
 import AgentPanel from '@/components/settings/panels/AgentPanel.vue'
 import MemoryPanel from '@/components/settings/panels/MemoryPanel.vue'
 import OpsPanel from '@/components/settings/panels/OpsPanel.vue'
@@ -61,7 +63,7 @@ import AboutPanel from '@/components/settings/panels/AboutPanel.vue'
 
 // 导航图标（自绘 SVG，渲染函数组件 —— 见 settings-nav-icons.ts 的说明）
 import {
-  IconModels, IconChat, IconAppearance, IconAgent, IconSkills, IconMemory, IconOps, IconAbout,
+  IconModels, IconChat, IconAppearance, IconAgent, IconSkills, IconExperts, IconPlugins, IconMemory, IconOps, IconAbout,
 } from './settings-nav-icons'
 
 const visible = ref(false)
@@ -84,6 +86,8 @@ const PANELS: Record<SettingCategory, { label: string; icon: Component; panel: C
   chat:       { label: '对话',  icon: IconChat,       panel: markRaw(ChatPanel) },
   appearance: { label: '外观',  icon: IconAppearance, panel: markRaw(AppearancePanel) },
   skills:     { label: '技能',  icon: IconSkills,     panel: markRaw(SkillsPanel) },
+  experts:    { label: '专家',  icon: IconExperts,    panel: markRaw(ExpertsPanel) },
+  plugins:    { label: '插件',  icon: IconPlugins,    panel: markRaw(PluginsPanel) },
   agent:      { label: 'Agent', icon: IconAgent,      panel: markRaw(AgentPanel) },
   memory:     { label: '记忆',  icon: IconMemory,     panel: markRaw(MemoryPanel) },
   ops:        { label: '运维',  icon: IconOps,        panel: markRaw(OpsPanel) },

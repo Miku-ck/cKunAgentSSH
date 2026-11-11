@@ -3,6 +3,7 @@
 import { PERMISSION_MODE_DEFAULT, type PermissionModeKey } from '@/utils/run-modes'
 import type { RunTerminalState } from '@/utils/agent-run-status'
 import { backendErrorDetail, ensureApiToken, getBaseUrl, toFriendlyMessage, withApiToken } from './base'
+import { createConnectTimeout } from './connect-timeout'
 
 // ── Agent SSE 流式运行 ──
 
@@ -175,6 +176,8 @@ export interface StreamAgentOptions {
   /** token 熔断上限。不传 = 后端默认；显式 0 = 不设上限 */
   maxTotalTokens?: number
   skillIds?: string[]
+  /** 本次 run 使用的专家 id。不传 = 完全沿用现有默认行为（无专家）。 */
+  expertId?: string
   /** 是否启用触发词自动技能匹配（设置"自动技能匹配"，默认开启） */
   autoSkillMatch?: boolean
   /** 历史上下文条数（设置"上下文窗口"，1-100） */
@@ -221,26 +224,11 @@ const STALL_CHECK_INTERVAL_MS = 5_000
  * 流时长，长回答仍由后端 15s 心跳 + 90s 看门狗按原口径照看。28s 给后端留足首字节
  * 时间，又不让用户无限等；与心跳周期、桥 hello-ack 是彼此独立的口径。
  */
-const CONNECT_TIMEOUT_MS = 28_000
-
 export function streamAgentRun(options: StreamAgentOptions): () => void {
-  const abortController = new AbortController()
-
-  // 连接阶段超时：复用同一个 controller，到点以可识别的 TimeoutError 中止 fetch；
-  // fetch 返回 headers 后立刻清掉定时器，之后仍由调用方拿到的 abort() 控制整条流。
-  // 用自建 timer 而非 AbortSignal.timeout() 挂 signal，正是为了不限制流的时长。
-  let connectTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-    connectTimer = null
-    const err = new Error('连接超时')
-    err.name = 'TimeoutError'
-    abortController.abort(err)
-  }, CONNECT_TIMEOUT_MS)
-  const clearConnectTimer = (): void => {
-    if (connectTimer !== null) {
-      clearTimeout(connectTimer)
-      connectTimer = null
-    }
-  }
+  // 连接阶段超时只约束 fetch 返回 headers 之前；响应开始后由调用方拿到的 abort() 控制整条流。
+  const connectTimeout = createConnectTimeout()
+  const abortController = connectTimeout.controller
+  const clearConnectTimer = connectTimeout.clear
 
   const run = async () => {
     try {
@@ -255,6 +243,8 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           task: options.task,
           conversation_id: options.conversationId,
           model_id: options.modelId,
+          // 未选专家时省略字段：后端 expert_id=None 走原装配链，逐字节等价
+          ...(options.expertId ? { expert_id: options.expertId } : {}),
           system_prompt: options.systemPrompt,
           ssh_session_id: options.sshSessionId,
           environment: options.environment || 'test',
@@ -454,12 +444,8 @@ export async function postToolResult(
   // 非流式回传也不能让 fetch 永久 pending（后端挂起时交付确认会一直转）。
   // 自建 controller + 显式 clearTimeout：拿到响应就撤掉超时，且单测的 fake timers
   // 能驱动这条失败路径（AbortSignal.timeout 的内部定时器不受 fake timers 控制）。
-  const connectController = new AbortController()
-  const connectTimer = setTimeout(() => {
-    const err = new Error('连接超时')
-    err.name = 'TimeoutError'
-    connectController.abort(err)
-  }, CONNECT_TIMEOUT_MS)
+  const connectTimeout = createConnectTimeout()
+  const connectController = connectTimeout.controller
   let res: Response
   try {
     res = await fetch(url, {
@@ -479,7 +465,7 @@ export async function postToolResult(
       }),
     })
   } finally {
-    clearTimeout(connectTimer)
+    connectTimeout.clear()
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))

@@ -1,12 +1,5 @@
 import { backendErrorDetail, ensureApiToken, getBaseUrl, request, toFriendlyMessage, withApiToken } from './base'
-
-/**
- * 连接/首字节超时：只覆盖 fetch 返回 headers 之前，不限制整条 SSE 流时长。
- * 后端 /bot/chat 不发送心跳，所以这里刻意**不**加读取循环停滞看门狗 —— 模型思考期
- * 可能长时间无字节，90s 判停会误杀正常长回答；Agent SSE 那套 15s 心跳 + 90s
- * 看门狗的口径不能照搬过来。28s 与 src/api/sse.ts 的 CONNECT_TIMEOUT_MS 同口径。
- */
-const CONNECT_TIMEOUT_MS = 28_000
+import { createConnectTimeout } from './connect-timeout'
 
 /** 表达 DNA：说话方式的可执行档位。档位文案在服务端，这里只约束取值。 */
 export interface BotExpressionDna {
@@ -254,12 +247,8 @@ export async function streamBotChat(
   options: { onContent: (text: string) => void; onReasoning?: (text: string) => void; onPacing?: (hint: string) => void; images?: string[]; signal?: AbortSignal },
 ): Promise<BotMessage> {
   await ensureApiToken()
-  const connectController = new AbortController()
-  const connectTimer = setTimeout(() => {
-    const err = new Error('连接超时')
-    err.name = 'TimeoutError'
-    connectController.abort(err)
-  }, CONNECT_TIMEOUT_MS)
+  const connectTimeout = createConnectTimeout()
+  const connectController = connectTimeout.controller
   // 调用方 signal 必须仍能中止整条流（含响应体），用 any 合并而不是只挂超时 signal：
   // fetch 返回 headers 后立刻 clearTimeout，连接超时从此不再介入，用户主动中止照旧生效。
   const signal = options.signal
@@ -278,7 +267,7 @@ export async function streamBotChat(
     if (error instanceof Error && error.name === 'TimeoutError') throw new Error('连接超时，请检查网络后重试')
     throw new Error(toFriendlyMessage(error, '陪聊服务连接失败'))
   } finally {
-    clearTimeout(connectTimer)
+    connectTimeout.clear()
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: response.statusText }))

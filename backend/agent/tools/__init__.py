@@ -110,6 +110,9 @@ class ToolContext:
     # None = 无治理（老调用方 / 单测直连工具）：spawn_subagent 据此拒绝启动，
     # 绝不降级成免审路径。
     governance: object | None = None
+    # 专家限定的记忆可见范围。None = 沿用 context_scopes 的既有口径；
+    # [] = 明确不读任何记忆（与 None 语义不同，不能被 `or` 合并掉）。
+    memory_scopes: list[str] | None = None
 
 
 def _schema_type_ok(schema_type: str, value) -> bool:

@@ -162,6 +162,11 @@ async def try_auto_approve(
     """
     if not is_auto_mode(ctx):
         return None
+    # MCP 插件工具一律不让模型代判：插件描述/输出是不可信数据，且能力来自
+    # 用户未必审阅过的外部进程。回退到用户逐次点卡（fail-closed）。
+    from agent.plugins.mcp_tool import is_mcp_tool
+    if is_mcp_tool(tool):
+        return None
 
     subject = _subject_of(tool, args if isinstance(args, dict) else {})
     if bound_command:

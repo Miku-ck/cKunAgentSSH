@@ -237,7 +237,7 @@ cKunAgentSSH/
 ├── gateway/               # TLS access gateway (single file, zero deps, deployed independently)
 ├── scripts/               # dev / package / clean / ci-check / rebuild-native / prepare-runtime / deploy
 ├── resources/             # App and tray icons
-├── docs/                  # Design/implementation specs (currently empty, retired; not shipped)
+├── docs/                  # Design/implementation specs (structure refactor plan; not shipped)
 ├── designs/               # UI concept mockups (local artifacts, ignored by .gitignore)
 ├── runtime/               # Embedded Python runtime (prepared locally, ignored by .gitignore)
 ├── electron.vite.config.ts
@@ -245,7 +245,7 @@ cKunAgentSSH/
 └── package.json
 ```
 
-**Directory boundaries**: `electron/`, `src/`, `shared/`, `backend/`, `gateway/`, `scripts/` and `resources/` are part of the build and runtime chain; their names are hardcoded in configs, CI and runtime paths (`shared/` alone has nearly 100 cross-layer imports), so do not rename them casually. `docs/` and `designs/` are documentation and mockups and are not packaged. `runtime/`, `out/`, `dist/` and `node_modules/` are reproducible local artifacts. Tests and guard scripts deliberately sit next to the code under test and are collected by the globs in `vitest.config.ts`; the `.ts` files in `src/styles/` are CSS guard utilities and tests, not stylesheets. Frontend visual and component rules live in [DESIGN.md](DESIGN.md); terminology is pinned in [CONTEXT.md](CONTEXT.md).
+**Directory boundaries**: `electron/`, `src/`, `shared/`, `backend/`, `gateway/`, `scripts/` and `resources/` are part of the build and runtime chain; their names are hardcoded in configs, CI and runtime paths (`shared/` alone has nearly 100 cross-layer imports), so do not rename them casually. `docs/` and `designs/` are documentation and mockups and are not packaged. `runtime/`, `out/`, `dist/` and `node_modules/` are reproducible local artifacts. Tests and guard scripts deliberately sit next to the code under test and are collected by the globs in `vitest.config.ts`; the `.ts` files in `src/styles/` are CSS guard utilities and tests, not stylesheets. Frontend visual and component rules live in [DESIGN.md](DESIGN.md); terminology is pinned in [CONTEXT.md](CONTEXT.md). The structure refactor plan lives in [docs/structure-refactor-plan.md](docs/structure-refactor-plan.md).
 
 **Naming and formatting conventions** (rules already in effect; existing inconsistencies are not bulk-renamed, new code follows these):
 

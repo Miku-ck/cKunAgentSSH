@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     import openai
 
 import netconfig
+from agent.harness.bridle import normalize_system_messages
 
 logger = logging.getLogger(__name__)
 
@@ -43,36 +44,6 @@ _client_cache: "OrderedDict[tuple[str, str], openai.AsyncOpenAI]" = OrderedDict(
 # LRU 淘汰时若计数 > 0（还有流在占用该 httpx 连接池），跳过 aclose，
 # 避免掐断进行中的流；该客户端将由 GC 回收，或下次同 key 重建时复用。
 _client_in_flight: dict[tuple[str, str], int] = {}
-
-
-def _normalize_system_first(messages: list[dict]) -> list[dict]:
-    """部分 OpenAI 兼容服务要求 system 消息必须位于消息列表最前。
-
-    Agent 组装路径（bridle._build）会把 ctx.messages 原样追加到末尾，而
-    上下文压缩保留的 system 纠偏消息恰好位于 ctx.messages 末尾；chat 路由的
-    history 也可能含有持久化的 system 消息。此处统一重排：所有 system 消息
-    合并为单条置顶（保持相对顺序），其余消息保持原序。
-
-    合并而非仅前置的原因：部分 vLLM 版本要求 system 消息"恰好一条"——
-    即便全部排在开头区域，出现第二条 system 仍报
-    400 "System message must be at the beginning"。
-    """
-    systems = [m for m in messages if m.get("role") == "system"]
-    if not systems:
-        return messages
-    others = [m for m in messages if m.get("role") != "system"]
-    if len(systems) == 1:
-        return [systems[0]] + others
-    # 多条 system 合并为一条（换行分隔，保持相对顺序）
-    merged_content = "\n\n".join(
-        m.get("content", "") for m in systems if m.get("content")
-    )
-    merged: dict = {"role": "system", "content": merged_content}
-    # 保留首条 system 的其他字段（如 name），避免信息丢失
-    for k, v in systems[0].items():
-        if k not in ("role", "content"):
-            merged.setdefault(k, v)
-    return [merged] + others
 
 
 async def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
@@ -304,7 +275,7 @@ async def _chat_stream_impl(
     kwargs: dict = {
         "model": model,
         # system 消息统一前置，避免部分服务端 400 拒绝
-        "messages": _normalize_system_first(messages),
+        "messages": normalize_system_messages(messages),
         "temperature": temperature,
         "top_p": top_p,
         "stream": True,

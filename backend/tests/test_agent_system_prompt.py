@@ -99,10 +99,36 @@ def test_existing_guidance_preserved(fragment):
     assert fragment in prompt
 
 
-def test_time_and_mode_role_present():
+def test_time_and_ops_role_present_for_ops_task():
     prompt = _build_agent_system_prompt(_req(), "", False)
     assert "[系统时间]" in prompt
     assert "cKunAgentSSH 的智能运维助手" in prompt
+
+
+def test_conversation_task_uses_neutral_identity():
+    """纯对话不得自称"智能运维助手"，也不得复述运维能力清单。
+
+    旧实现里角色段是一段固定常量（MODE_PROMPTS["ssh"] 坍缩后的产物），无条件
+    注入到每一轮 run。用户没选专家、只发一句"你好"时，模型手里唯一的身份描述
+    就是那段文本，于是把这六项能力当成自我介绍念出来。角色段现在按任务性质
+    二选一：运维任务用 SSH_MODE_PROMPT，纯对话用 CHAT_MODE_PROMPT。
+    """
+    prompt = _build_agent_system_prompt(_req(task="你好"), "", True, is_change=False)
+    assert "智能运维助手" not in prompt
+    assert "Linux 系统管理" not in prompt
+    assert "请用中文直接回答" in prompt
+    # 输出约定必须在两个分支都保留：代码块包裹 + 风险说明
+    assert "```bash" in prompt
+
+
+def test_ops_role_absent_from_conversation_even_with_profile():
+    """带画像/目标/自定义 prompt 的对话轮同样不能把运维身份漏回来"""
+    prompt = _build_agent_system_prompt(
+        _req(task="你是谁", system_prompt="[自定义] 严格模式"), PROFILE, True,
+        goal_text="[当前目标] 梳理数据库索引",
+    )
+    assert "智能运维助手" not in prompt
+    assert "[自定义] 严格模式" in prompt
 
 
 def test_user_system_prompt_appended_and_reflection_backdoor_gone():

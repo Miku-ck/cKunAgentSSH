@@ -23,6 +23,7 @@ import { SSHError, classifyRawError, toFriendlyZh } from './ssh-error'
 import { encodeTransferErrorName, isTransferRetryable, type TransferErrorCode } from '../shared/transfer-error-core'
 import { classifyExit, EXEC_TRUNCATED_NOTE } from '../shared/exec-outcome-core'
 import { shSingleQuote } from '../shared/sh-quote-core'
+import { modeToRwxString } from '../shared/mode-bits-core'
 import { promises as fsPromises } from 'fs'
 import { posix, join, dirname } from 'path'
 import { createHash, randomBytes } from 'crypto'
@@ -199,11 +200,37 @@ export class TransferHeartbeat {
   private timer: NodeJS.Timeout | null = null
   private stalled = false
 
-  start(intervalMs: number, stallThresholdMs: number, getLastProgress: () => number, onStall: () => void): void {
+  /**
+   * S5-34：停滞阈值支持两种口径。
+   *
+   * 固定阈值（原实现）：30s 内没有字节增长就判停滞。对 100MB 以下够用，但
+   * 15GB 在慢链路上（100Mbps → 每 30s 只传 375KB）只要有一次网络抖动就会
+   * 误判 STALLED 并中断，然后走自动重试 —— 用户看到的是「传着传着就断了」。
+   *
+   * 动态阈值（新增）：按「最近一段时间的平均速率」推算「多久没进展算异常」。
+   * 速率采样窗口 60s，阈值 = max(速率 × 20s, 30s) 且上限 5min。含义是：
+   *   - 正常速率 1MB/s → 20s 没进展才判停滞（比固定 30s 宽松）
+   *   - 正常速率 10MB/s → 20s 没进展判停滞（同样宽松）
+   *   - 刚起步速率未建立 → 兜底 30s（与原实现一致）
+   *   - 极慢链路（10KB/s）→ 200s 阈值，仍受 5min 上限约束
+   *
+   * 动态口径需要调用方提供速率采样器（getRecentRateBytesPerSec）。不传则
+   * 保持固定阈值，向后兼容。
+   */
+  start(
+    intervalMs: number,
+    stallThresholdMs: number,
+    getLastProgress: () => number,
+    onStall: () => void,
+    getRecentRateBytesPerSec?: () => number,
+  ): void {
     this.stop()
     this.stalled = false
     this.timer = setInterval(() => {
-      if (Date.now() - getLastProgress() > stallThresholdMs) {
+      const threshold = getRecentRateBytesPerSec
+        ? this.dynamicThreshold(getRecentRateBytesPerSec())
+        : stallThresholdMs
+      if (Date.now() - getLastProgress() > threshold) {
         if (!this.stalled) {
           this.stalled = true
           onStall()
@@ -217,6 +244,27 @@ export class TransferHeartbeat {
     }, intervalMs)
   }
 
+  /**
+   * 动态阈值：按「传满一个在途窗口（8 × 256KB = 2MB）所需时间」的 3 倍算，
+   * 钳在 [30s, 5min]。
+   *
+   * 语义：正常传输时，2MB 应该在一个窗口周期内传完。如果 3 倍时间还没传完
+   * 一个窗口，说明链路真的出问题了。
+   *   - 100MB/s（8s 传 2MB）→ 24s，钳到 30s
+   *   - 10MB/s（0.2s 传 2MB）→ 0.6s，钳到 30s
+   *   - 1MB/s（2s 传 2MB）→ 6s，钳到 30s
+   *   - 100KB/s（20s 传 2MB）→ 60s
+   *   - 10KB/s（200s 传 2MB）→ 600s，钳到 300s
+   *
+   * 速率未建立（≤0）时返回下限 30s —— 与原固定阈值同口径，避免「刚起步就判死」。
+   */
+  private dynamicThreshold(rateBytesPerSec: number): number {
+    if (!Number.isFinite(rateBytesPerSec) || rateBytesPerSec <= 0) return 30000
+    const windowBytes = 8 * 256 * 1024 // 8 路 × 256KB = 在途窗口
+    const windowMs = (windowBytes / rateBytesPerSec) * 1000
+    return Math.min(300000, Math.max(30000, Math.round(windowMs * 3)))
+  }
+
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer)
@@ -226,6 +274,54 @@ export class TransferHeartbeat {
 
   isStalled(): boolean {
     return this.stalled
+  }
+}
+
+/**
+ * S5-34：滑动窗口速率采样。
+ *
+ * 只保留 windowMs 内的 (时间戳, 累计字节数) 采样点，每次查询时先丢弃过期点，
+ * 再用「窗口内首末两点」算平均速率。用累计值而非增量值：增量需要自己维护
+ * 累加器并在查询时清零，多一处状态就多一处与传输循环不同步的机会。
+ *
+ * 内存：采样点按 chunk 完成写入（256KB 一块），60s 窗口在 10MB/s 下约 240 个点
+ * （每个点 16 字节）≈ 4KB，可忽略。
+ */
+export class TransferRateSampler {
+  private readonly windowMs: number
+  private readonly points: Array<{ t: number; bytes: number }> = []
+
+  constructor(windowMs: number) {
+    this.windowMs = windowMs
+  }
+
+  /** 记一次字节数（累计值，不是增量）。 */
+  record(bytes: number): void {
+    const now = Date.now()
+    // 同一毫秒内的多次记录只保留最后一个 —— 避免高频上报把采样表撑成噪声
+    const last = this.points[this.points.length - 1]
+    if (last && now - last.t < 10) { last.bytes = bytes; return }
+    this.points.push({ t: now, bytes })
+    this.prune(now)
+  }
+
+  /** 近 windowMs 的平均字节/秒；样本不足两个点时返回 0（速率未建立）。 */
+  getRateBytesPerSec(): number {
+    const now = Date.now()
+    this.prune(now)
+    if (this.points.length < 2) return 0
+    const first = this.points[0]
+    const last = this.points[this.points.length - 1]
+    const spanMs = last.t - first.t
+    if (spanMs < 100) return 0 // 时间跨度太短，算出的速率没有统计意义
+    return ((last.bytes - first.bytes) / spanMs) * 1000
+  }
+
+  private prune(now: number): void {
+    const cutoff = now - this.windowMs
+    let i = 0
+    while (i < this.points.length && this.points[i].t < cutoff) i++
+    if (i > 0) this.points.splice(0, i)
   }
 }
 
@@ -1775,6 +1871,10 @@ export class SSHManager {
       name: item.filename,
       path: posix.join(remotePath, item.filename),
       isDirectory: (item.attrs.mode & 0o170000) === 0o040000,
+      // S5-20：类型位显式给出链接标记。isDirectory 只认目录位，链接会落到
+      // 「非目录」分支被当普通文件 —— 下载时 sftp.readFile 跟随链接，把目标
+      // 内容拉成本地普通文件；远端 cp -r 同理。渲染层据此 fail-closed。
+      isSymlink: (item.attrs.mode & 0o170000) === 0o120000,
       size: item.attrs.size || 0,
       modified: (item.attrs.mtime || 0) * 1000,
       mode: modeToString(item.attrs.mode),
@@ -1848,14 +1948,44 @@ export class SSHManager {
    * 目录拉全量列表再扔掉，是入队延迟的纯浪费。不存在时抛错（与 sftpList 探测
    * 失败同语义，渲染层按「非目录」处理）。
    */
-  async sftpStat(sshSessionId: string, remotePath: string): Promise<{ size: number; isDirectory: boolean; modified: number }> {
+  async sftpStat(sshSessionId: string, remotePath: string): Promise<{ size: number; isDirectory: boolean; isSymbolicLink: boolean; modified: number }> {
     const sftp = this.requireSftp(sshSessionId)
     const st = await sftpStat(sftp, remotePath)
     return {
       size: st.size || 0,
       isDirectory: (st.mode & 0o170000) === 0o040000,
+      // S5-20：与 sftpList 同一判据，供远端复制/下载做链接 fail-closed
+      isSymbolicLink: (st.mode & 0o170000) === 0o120000,
       modified: (st.mtime || 0) * 1000,
     }
+  }
+
+  /**
+   * 修改远程文件权限位（S5-22 chmod）。
+   * mode 为 POSIX 八进制权限（如 0o644），只取低 12 位权限位 —— 高位（SUID/SGID/sticky）
+   * 也合法，故不额外截断，但拒绝超出 0o7777 的值（含文件类型位）以免误传。
+   */
+  async sftpChmod(sshSessionId: string, remotePath: string, mode: number): Promise<void> {
+    if (!Number.isInteger(mode) || mode < 0 || mode > 0o7777) {
+      throw new Error('权限值非法（应为 0–7777 的八进制权限位）')
+    }
+    const sftp = this.requireSftp(sshSessionId)
+    await new Promise<void>((resolve, reject) => {
+      sftp.chmod(remotePath, mode, (err: Error | null | undefined) => {
+        if (err) {
+          const msg = err.message || ''
+          if (msg.includes('Permission denied')) {
+            reject(new Error('权限不足，无法修改'))
+          } else if (msg.includes('No such file')) {
+            reject(new Error('文件或目录不存在'))
+          } else {
+            reject(new Error(`修改权限失败: ${msg}`))
+          }
+          return
+        }
+        resolve()
+      })
+    })
   }
 
   async sftpRename(sshSessionId: string, oldPath: string, newPath: string): Promise<void> {
@@ -1868,6 +1998,23 @@ export class SSHManager {
     })
   }
 
+/**
+ * 删除远程条目（S5-26：目录递归删除）。
+ *
+ * 原实现只发 rmdir —— 非空目录必然失败并提示「目录不为空」。但同一套 UI 里
+ * 远端复制早已能 `cp -r` 整树、下载能展开整树，唯独删除不能删非空目录，
+ * 用户要清空一个项目目录只能去开终端敲 `rm -rf`。能力不对称就是缺口。
+ *
+ * 为什么目录走 `rm -rf` 而不是逐项 SFTP 删：逐项删要把整棵树递归列一遍
+ * （每个目录一次 readdir），N 个文件就是 N 次往返，还自己重写一遍 rmdir 顺序
+ * （先子后父）的易错逻辑；`rm -rf` 由服务端一次做完，语义与本地侧
+ * `shell.trashItem` 的递归口径一致。路径经 shSingleQuote 转义，不存在拼接注入。
+ *
+ * 残留风险（已权衡）：递归删除是不可逆的远端破坏性操作。前端已在删除确认框里
+ * 对目录与批量做了显式提示（SftpView 的 handleCtxAction('delete')），且
+ * `rm -rf` 只作用于调用方给出的那一条路径 —— 不会跟随链接跳出目录（POSIX rm
+ * 不跟随命令行参数上的符号链接，与复制侧 S5-20 的拦截口径互补）。
+ */
 async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 	const sftp = this.requireSftp(sshSessionId)
 	const stat: any = await new Promise((resolve, reject) => {
@@ -1877,24 +2024,46 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 		})
 	})
 	const isDir = (stat.mode & 0o170000) === 0o040000
+
+	// 目录：交给远端 rm -rf（一条 exec，服务端递归）。用 stat 判据决定分支，
+	// 因此符号链接指向的目录不会被当成目录去 rmdir（rmdir 对链接报 ENOTDIR）。
+	if (isDir) {
+		const cmd = `rm -rf ${shSingleQuote(remotePath)}`
+		const result = await this.execCommandWithExitCode(sshSessionId, cmd, 300)
+		if (classifyExit(result.exitCode) === 'unknown') {
+			// S5-19 口径：未知不等于失败 —— 递归删除可能已经删完，谎报失败会
+			// 让人以为要「再删一次」，而谎报成功又会让人在下次操作时才发现目录还在
+			throw new Error(`删除结果未知（通道未回 exit-status）：请刷新目录确认 ${remotePath}`)
+		}
+		if (result.exitCode !== 0) {
+			// execCommandWithExitCode 的 stderr 上限 1MB（MAX_EXEC_OUTPUT_CHARS）。
+			// 递归删除碰上一棵挂载点/权限混乱的大目录时，stderr 可能真有几百 KB 的
+			// 「Permission denied」逐行刷屏 —— 整段塞进 toast 是不可读的。取首行做
+			// 摘要，与「未知」分支的口径一致：让用户能判断原因，同时给出可行动的提示。
+			const detail = (result.stderr || result.stdout || '').trim()
+			const firstLine = detail.split(/\r?\n/, 1)[0].trim()
+			if (!firstLine) throw new Error('删除失败：远端未返回原因')
+			// 首行自己就超长（远端一行报了整条路径 + 一堆噪声）时截断，别让 toast 撑爆
+			const head = firstLine.length > 200 ? `${firstLine.slice(0, 200)}…` : firstLine
+			throw new Error(`删除失败: ${head}`)
+		}
+		return
+	}
+
 	await new Promise<void>((resolve, reject) => {
-		const cb = (err: Error | null | undefined) => {
+		sftp.unlink(remotePath, (err: Error | null | undefined) => {
 			if (!err) { resolve(); return }
 			// 保留原始 SFTP 错误信息，便于用户定位原因
 			const msg = err.message || '未知错误'
 			// 常见错误给出更友好的提示
 			if (msg.includes('Permission denied')) {
 				reject(new Error('权限不足，无法删除'))
-			} else if (msg.includes('Directory not empty') || msg.includes('not empty')) {
-				reject(new Error('目录不为空，无法删除'))
 			} else if (msg.includes('No such file')) {
 				reject(new Error('文件或目录不存在'))
 			} else {
 				reject(new Error(`删除失败: ${msg}`))
 			}
-		}
-		if (isDir) sftp.rmdir(remotePath, cb)
-		else sftp.unlink(remotePath, cb)
+		})
 	})
 }
 
@@ -1944,6 +2113,8 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     let cancelled = false
     let lastProgress = Date.now()
     let transferred = 0
+    // S5-34：近 60s 速率采样，供心跳按链路实际速度推算停滞窗口（见 TransferHeartbeat.dynamicThreshold）
+    const uploadRate = new TransferRateSampler(60000)
     // 与下载侧 downloadComplete 对称：rename 前标记数据已完整写入 .part，
     // rename 阶段失败据此归类 RENAME_FAILED（retryable、保留 .part）
     let uploadComplete = false
@@ -1977,13 +2148,14 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         // retryable 统一走自动续传路径
         stallReject?.(toTransferError({ code: 'STALLED', message: '传输停滞，网络可能不稳定' }))
       }
-    })
+    }, () => uploadRate.getRateBytesPerSec())
 
     // 已失效传输（已按 STALLED reject）不再发进度，避免渲染层收到已放弃
     // 传输的迟到事件
     const sendProgress = (data: { transferred: number; total: number }): void => {
       if (stalled) return
       this.safeSend('sftp:progress', { id: transferId, ...data })
+      uploadRate.record(data.transferred)
       try { this.uploadProgressSink?.(transferId, data.transferred, data.total) } catch { /* 记录侧异常不影响传输 */ }
     }
 
@@ -2312,6 +2484,8 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     let cancelled = false
     let lastProgress = Date.now()
     let transferred = 0
+    // S5-34：近 60s 速率采样，供心跳按链路实际速度推算停滞窗口（与上传侧对称）
+    const downloadRate = new TransferRateSampler(60000)
     // C10 修复：心跳判定停滞后除发 sftp:stalled 事件外，还要 reject 该传输的
     // IPC Promise（渲染层 retryable 自动续传依赖它）。标记失效后同一传输只
     // reject 一次，后续进度回调对已失效传输忽略
@@ -2342,13 +2516,14 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         // retryable 统一走自动续传路径
         stallReject?.(toTransferError({ code: 'STALLED', message: '传输停滞，网络可能不稳定' }))
       }
-    })
+    }, () => downloadRate.getRateBytesPerSec())
 
     // 已失效传输（已按 STALLED reject）不再发进度，避免渲染层收到已放弃
     // 传输的迟到事件
     const sendProgress = (data: { transferred: number; total: number }): void => {
       if (stalled) return
       this.safeSend('sftp:progress', { id: transferId, ...data })
+      downloadRate.record(data.transferred)
     }
 
     // M7 修复：声明在 try 外部，确保 finally 块始终可访问
@@ -2894,23 +3069,10 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
   }
 }
 
-/** 将数值 mode(含文件类型位)转为 'drwxr-xr-x' 形式 */
+/**
+ * 数值 mode → 'drwxr-xr-x'。实现已抽到 shared/mode-bits-core.ts（S5-27）：
+ * 渲染与渲染层的反推必须共用同一份实现，否则高位权限会在编辑权限时被静默清零。
+ */
 function modeToString(mode: number): string {
-  const typeMap: Record<number, string> = {
-    0o140000: 's', 0o120000: 'l', 0o100000: '-',
-    0o060000: 'b', 0o020000: 'c', 0o040000: 'd', 0o010000: 'p',
-  }
-  let typeChar = '?'
-  for (const k of Object.keys(typeMap)) {
-    if ((mode & 0o170000) === Number(k)) {
-      typeChar = typeMap[Number(k)]
-      break
-    }
-  }
-  const permChars = ['r', 'w', 'x']
-  let s = typeChar
-  for (let i = 0; i < 9; i++) {
-    s += (mode & (1 << (8 - i))) ? permChars[i % 3] : '-'
-  }
-  return s
+  return modeToRwxString(mode)
 }

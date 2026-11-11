@@ -1,7 +1,7 @@
 /**
  * IPC 契约守恒守卫。
  *
- * 142 个 invoke 频道与 18 个事件频道原先在 preload.ts / main.ts / fs-handler.ts /
+ * 147 个 invoke 频道与 18 个事件频道原先在 preload.ts / main.ts / fs-handler.ts /
  * src/env.d.ts 里各写一份，编译器抓不到漂移。这里把四方按「集合逐字相等」钉死：
  *   主进程 handleTrusted 注册集合 ≡ INVOKE_CHANNELS 值集合
  *   preload 成员键集合 ≡ INVOKE_CHANNELS 键集合 ≡ EVENT_CHANNELS 键集合
@@ -55,7 +55,7 @@ const BASELINE_EVENT_CHANNELS = [
  * 主进程 → 渲染层的推送点。
  *
  * 本次改造只把 preload 侧收敛到常量表，主进程仍保留 18 个事件频道名的字面量
- * （142 个 handleTrusted 注册同样保留字面量），这是「不批量改名、不动核心链路」
+ * （147 个 handleTrusted 注册同样保留字面量），这是「不批量改名、不动核心链路」
  * 档位下的有意取舍。为免改名漏改一侧而编译器不报错，这里用推送点集合与常量表
  * 做双向比对：少推一个、多推一个未知频道，测试都会红。
  *
@@ -93,11 +93,11 @@ function mainProcessPushSites(): { channel: string; site: string }[] {
 
 const pushSites = mainProcessPushSites()
 
-describe('IPC invoke 契约守恒（142 频道）', () => {
-  it('常量表 142 项且频道名唯一', () => {
-    expect(Object.keys(INVOKE_CHANNELS)).toHaveLength(142)
-    expect(new Set(Object.values(INVOKE_CHANNELS)).size).toBe(142)
-    expect(registered, '主进程注册集合提取为空，守卫等于空跑').toHaveLength(142)
+describe('IPC invoke 契约守恒（147 频道）', () => {
+  it('常量表 147 项且频道名唯一', () => {
+    expect(Object.keys(INVOKE_CHANNELS)).toHaveLength(147)
+    expect(new Set(Object.values(INVOKE_CHANNELS)).size).toBe(147)
+    expect(registered, '主进程注册集合提取为空，守卫等于空跑').toHaveLength(147)
   })
 
   it('主进程 handleTrusted 注册集合 ≡ 常量表值集合', () => {
@@ -106,7 +106,7 @@ describe('IPC invoke 契约守恒（142 频道）', () => {
 
   it('preload 的 INVOKE_CHANNELS 引用集合 ≡ 常量表键集合', () => {
     expect(sorted(invokeKeysInPreload)).toEqual(sorted(Object.keys(INVOKE_CHANNELS)))
-    expect(new Set(invokeKeysInPreload).size).toBe(142)
+    expect(new Set(invokeKeysInPreload).size).toBe(147)
   })
 
   it('preload 里不再有硬编码的 invoke 频道字符串', () => {
@@ -156,17 +156,17 @@ describe('IPC 事件推送端守恒（主进程 → 渲染层）', () => {
   })
 })
 
-describe('ElectronAPI 成员守恒（161 成员）', () => {
-  it('env.d.ts 成员集合 ≡ 142 invoke + 18 监听 + getPathForFile', () => {
+describe('ElectronAPI 成员守恒（166 成员）', () => {
+  it('env.d.ts 成员集合 ≡ 147 invoke + 18 监听 + getPathForFile', () => {
     const members = electronApiMembers(envDts)
-    expect(members, 'env.d.ts 成员提取为空，守卫等于空跑').toHaveLength(161)
+    expect(members, 'env.d.ts 成员提取为空，守卫等于空跑').toHaveLength(166)
     const expected = [
       ...Object.keys(INVOKE_CHANNELS),
       ...Object.keys(EVENT_CHANNELS),
       'getPathForFile',
     ]
     expect(sorted(members)).toEqual(sorted(expected))
-    expect(new Set(members).size).toBe(161)
+    expect(new Set(members).size).toBe(166)
   })
 
   it('preload 暴露对象仍为字面量且带 satisfies 编译期守恒', () => {

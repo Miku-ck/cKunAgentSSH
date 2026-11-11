@@ -14,6 +14,7 @@ import { describeTransferError } from '@/utils/transfer-error'
 import { isActiveTransferStatus, type TransferKind, type TransferStatus } from '@/utils/transfer-format'
 import { sortForRestore, toTransferItem } from '@/utils/upload-task-restore'
 import { nextTransferSeqFrom } from '../../shared/upload-task-core'
+import { shSingleQuote } from '../../shared/sh-quote-core'
 
 /** 并发上限的可调天花板。导出而不是让底栏再抄一份 8 —— 两边一旦分叉，
  *  「+」号会在 store 还在钳的时候先停住，或反过来按下去没反应。 */
@@ -123,6 +124,60 @@ export const useSftpStore = defineStore('sftp', () => {
   // ─── 选择 ─────────────────────────────────────
   const selectedLocal = ref<Set<string>>(new Set())
   const selectedRemote = ref<Set<string>>(new Set())
+  /**
+   * Shift 连续选择的锚点（S5-23）：记录每侧「最后单独点选」的路径，
+   * 与 displayEntries 的可见序（已排序/筛选）配合做区间选中。
+   * null = 尚未在本侧点过项（首次 Shift 按 0 处理）。
+   */
+  const lastSelectedLocal = ref<string | null>(null)
+  const lastSelectedRemote = ref<string | null>(null)
+
+  // ─── 列表排序 / 筛选（S5-23 / S5-24） ──────────
+  type SortKey = 'name' | 'size' | 'modified'
+  type SortDir = 'asc' | 'desc'
+  const localSort = ref<{ key: SortKey; dir: SortDir }>({ key: 'name', dir: 'asc' })
+  const remoteSort = ref<{ key: SortKey; dir: SortDir }>({ key: 'name', dir: 'asc' })
+  // 空串 = 不筛选。只匹配名称（大小写不敏感），与常见文件管理器口径一致
+  const localFilter = ref('')
+  const remoteFilter = ref('')
+
+  function sortEntries<T extends { name: string; size: number; modified: number; isDirectory: boolean }>(
+    list: T[],
+    key: SortKey,
+    dir: SortDir,
+  ): T[] {
+    const sign = dir === 'asc' ? 1 : -1
+    // 目录恒在前（与 Windows 资源管理器 / Finder 同口径），组内再按所选列排序
+    return [...list].sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+      let cmp = 0
+      if (key === 'name') {
+        // localeCompare 认大小写与数字的自然序（a2 排在 a10 前）
+        cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+      } else if (key === 'size') {
+        cmp = a.size - b.size
+      } else {
+        cmp = a.modified - b.modified
+      }
+      // 同值按名称兜底，保证排序稳定（否则同大小文件在反复切换排序方向时抖动）
+      return cmp !== 0 ? cmp * sign : a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+    })
+  }
+
+  function filterEntries<T extends { name: string }>(list: T[], keyword: string): T[] {
+    const kw = keyword.trim().toLowerCase()
+    if (!kw) return list
+    return list.filter(e => e.name.toLowerCase().includes(kw))
+  }
+
+  function setSort(side: 'local' | 'remote', key: SortKey): void {
+    const cur = side === 'local' ? localSort.value : remoteSort.value
+    // 同列再点 → 翻转方向；换列 → 默认升序（名称列首次点击即升序）
+    const dir: SortDir = cur.key === key ? (cur.dir === 'asc' ? 'desc' : 'asc') : 'asc'
+    const next = { key, dir }
+    if (side === 'local') localSort.value = next
+    else remoteSort.value = next
+  }
 
   // ─── 传输队列 ─────────────────────────────────
   const transfers = ref<TransferItem[]>([])
@@ -270,7 +325,8 @@ export const useSftpStore = defineStore('sftp', () => {
     // 用户可能已经发起一条新上传，而计数器重启后从 1 重来（bump 在本次循环后才做），
     // 它的 id 会撞上历史记录。删掉会把在途传输从列表里抹掉，完成后写进一个已脱钩的对象。
     const isLive = (t: TransferItem): boolean => t.status === 'running' || t.status === 'pending'
-    const kept = transfers.value.filter(t => t.kind !== 'upload' || isLive(t))
+    // S5-25：上传与下载都以内存为准（两类都有主进程记录）
+    const kept = transfers.value.filter(t => t.kind !== 'upload' && t.kind !== 'download' || isLive(t))
     if (kept.length !== transfers.value.length) {
       transfers.value = kept
       reindexTransfers()
@@ -433,10 +489,15 @@ export const useSftpStore = defineStore('sftp', () => {
     // B10 修复：清空前先对在途（running）任务显式取消并置 cancelled，
     // 避免每个传输 Promise 的 reject 走通用错误路径连弹"上传/下载失败"。
     // 先置状态再发 sftpCancel：CANCELLED 拒绝到达 catch 时看到 cancelled 即静默 return。
-    // 上传例外：断线不等于任务结束 —— 置 paused + interrupted，主进程保留记录与
-    // 远端 .part，重连后可手动继续（下载/复制没有可恢复的远端半成品，仍按取消处理）。
+    //
+    // S5-33：下载与上传同等待遇。原实现只给上传「断线≠任务结束」的豁免，理由是
+    // 「下载没有可恢复的远端半成品」—— 那是 S5-25 之前的口径。现在下载也会写
+    // 本地 .part 并登记记录，断线时把行清空 + 记录标 cancelled，等于把用户已经
+    // 下载了一半的字节和续传入口一起丢掉：重启后不会显示为「可继续」，那个 .part
+    // 永远对不上任何记录，只能靠用户自己去本地目录里翻。
+    // 同侧复制仍按取消处理（cp -r 没有断点语义，记录也不参与续传）。
     for (const t of transfers.value) {
-      if (t.kind === 'upload') {
+      if (t.kind === 'upload' || t.kind === 'download') {
         if (t.status === 'running' || t.status === 'pending') {
           t.status = 'paused'
           t.interrupted = true
@@ -455,8 +516,8 @@ export const useSftpStore = defineStore('sftp', () => {
         void getApi().sftpCancel(t.id).catch(() => { /* 忽略取消失败 */ })
       }
     }
-    // 上传行保留（记录在断开后仍可见、可继续）；下载/复制行清空
-    transfers.value = transfers.value.filter(t => t.kind === 'upload')
+    // 上传/下载行保留（记录在断开后仍可见、可继续）；同侧复制行清空
+    transfers.value = transfers.value.filter(t => t.kind === 'upload' || t.kind === 'download')
     reindexTransfers()
   }
 
@@ -624,6 +685,14 @@ async function remoteRefresh(): Promise<void> {
     await remoteRefresh()
   }
 
+  /**
+   * 修改远程文件权限位（S5-22 chmod）。成功后静默刷新列表，让权限列立刻反映新值。
+   */
+  async function remoteChmod(path: string, mode: number): Promise<void> {
+    await getApi().sftpChmod(sshSessionId.value, path, mode)
+    await remoteRefresh()
+  }
+
   async function remoteRename(oldPath: string, newName: string): Promise<void> {
     const parent = oldPath.split('/').slice(0, -1).join('/') || '/'
     const newPath = parent === '/' ? '/' + newName : parent + '/' + newName
@@ -641,17 +710,24 @@ async function remoteRefresh(): Promise<void> {
   /**
    * 本地同侧复制：将 paths 复制到 targetDir
    * 支持目录递归，进度通过 sftp:progress 事件上报
+   * @param renameMap 冲突「重命名」落地下发的 原路径 → 新顶层名 映射（S5-21 起
+   *   由 doTransfer 的冲突确认产出，缺省保持原名 = 覆盖）
    */
-  async function localCopy(paths: string[], targetDir: string): Promise<void> {
+  async function localCopy(paths: string[], targetDir: string, renameMap?: Record<string, string>): Promise<void> {
     const tasks: Array<{ id: string; src: string; dest: string; name: string }> = []
     for (const src of paths) {
-      const name = basenameLocal(src)
+      const name = renameMap?.[src] ?? basenameLocal(src)
       const dest = await getApi().fsPathJoin(targetDir, name)
       const id = `t${transferSeq.value++}`
+      // S5-26：入队时就能知道单文件的字节数（目录仍为 0 —— 展开要递归 stat，
+      // 那正是主进程 fs:copy 顺手做完的事）。有值就直接给，省得先画一帧滑块
+      // 再跳百分比。先查列表缓存：同 uploadFiles 的口径，避免每个源多一次 IPC。
+      const hit = localEntries.value.find(e => e.path === src)
+      const knownTotal = hit && !hit.isDirectory ? hit.size || 0 : 0
       addTransfer({
         id, direction: 'up', kind: 'copy-local', name,
         from: src, to: dest,
-        transferred: 0, total: 0,
+        transferred: 0, total: knownTotal,
         status: 'pending', startTime: Date.now(),
       })
       tasks.push({ id, src, dest, name })
@@ -700,12 +776,13 @@ async function remoteRefresh(): Promise<void> {
 
   /**
    * 远程同侧复制：用 cp -r 复制，不支持细粒度进度（total=0 不定进度）
+   * @param renameMap 同 localCopy：冲突确认产出的 原路径 → 新顶层名
    */
-  async function remoteCopy(paths: string[], targetDir: string): Promise<void> {
+  async function remoteCopy(paths: string[], targetDir: string, renameMap?: Record<string, string>): Promise<void> {
     if (!sshSessionId.value || !online.value) return
     const tasks: Array<{ id: string; src: string; dest: string; name: string }> = []
     for (const src of paths) {
-      const name = basenameRemote(src)
+      const name = renameMap?.[src] ?? basenameRemote(src)
       const dest = targetDir === '/' ? '/' + name : targetDir + '/' + name
       const id = `t${transferSeq.value++}`
       addTransfer({
@@ -732,11 +809,17 @@ async function remoteRefresh(): Promise<void> {
     if (t.status === 'cancelled') return
     t.status = 'running'
     try {
-      // 用 cp -r 递归复制，shellQuote 转义路径中的特殊字符
-      const escapedSrc = `'${src.replace(/'/g, "'\\''")}'`
-      const escapedDest = `'${dest.replace(/'/g, "'\\''")}'`
+      // S5-20：cp -r 会跟随符号链接（GNU cp 无 -P 时默认跟随命令行给出的链接），
+      // 把链接目标的内容拷成真实文件/目录 —— 与本地侧 fs:copy 的 lstat fail-closed
+      // 口径对齐，这里先 stat 探测，命中链接即拒绝该条而不是静默跟随。
+      // 目录内部的链接由 cp 自己的语义决定，管不到也不该管（那会变成逐文件拦截）。
+      const st = await getApi().sftpStat(sshSessionId.value, src)
+      if (st.isSymbolicLink) {
+        throw new Error('符号链接不支持远端复制（会丢失链接语义），请改用下载后手动重建')
+      }
+      // 用 cp -r 递归复制，路径统一经 POSIX shell 单引号转义
       // B7 修复：cp -r 大目录必超 sshExec 默认 30s 超时 — 显式传 300s
-      const result = await sshExecWithTimeout(getApi(), sshSessionId.value, `cp -r ${escapedSrc} ${escapedDest}`, 300)
+      const result = await sshExecWithTimeout(getApi(), sshSessionId.value, `cp -r ${shSingleQuote(src)} ${shSingleQuote(dest)}`, 300)
       // 未知退出码（通道未收到 exit-status，main 侧 exitCode 保持 null）不能算成功：
       // 那正是进程被杀/通道异常中断的形态，此时 cp -r 可能只拷了一半。
       // 与 main 进程其余 exec 判定（exitCode !== 0）保持一致。
@@ -766,11 +849,13 @@ async function remoteRefresh(): Promise<void> {
   }
 
   // ─── 选择 ─────────────────────────────────────
+  /** 单选/普通点选：只翻转该路径，并把 Shift 锚点钉到它 */
   function toggleSelectLocal(path: string): void {
     const s = new Set(selectedLocal.value)
     if (s.has(path)) s.delete(path)
     else s.add(path)
     selectedLocal.value = s
+    lastSelectedLocal.value = path
   }
 
   function toggleSelectRemote(path: string): void {
@@ -778,6 +863,38 @@ async function remoteRefresh(): Promise<void> {
     if (s.has(path)) s.delete(path)
     else s.add(path)
     selectedRemote.value = s
+    lastSelectedRemote.value = path
+  }
+
+  /**
+   * Shift 连续选择（S5-23）：在**当前可见序**里取锚点与目标之间的闭区间，全部选中。
+   * 锚点缺失（用户没在本侧点过项）时按列表首项处理 —— 这是各文件管理器的通行口径。
+   * 注意 visible 必须与渲染层 displayEntries 的口径一致（筛选 → 排序 → 截断），
+   * 否则区间会选到用户看不见的项，看起来像「多选了几个」。
+   */
+  function selectRange(side: 'local' | 'remote', targetPath: string, visible: string[]): void {
+    if (visible.length === 0) return
+    const anchorPath = side === 'local' ? lastSelectedLocal.value : lastSelectedRemote.value
+    const a = anchorPath ? visible.indexOf(anchorPath) : 0
+    const b = visible.indexOf(targetPath)
+    const from = a >= 0 ? a : 0
+    const to = b >= 0 ? b : visible.length - 1
+    const [lo, hi] = from <= to ? [from, to] : [to, from]
+    const next = side === 'local' ? new Set(selectedLocal.value) : new Set(selectedRemote.value)
+    for (let i = lo; i <= hi; i++) next.add(visible[i])
+    if (side === 'local') {
+      selectedLocal.value = next
+      lastSelectedLocal.value = targetPath
+    } else {
+      selectedRemote.value = next
+      lastSelectedRemote.value = targetPath
+    }
+  }
+
+  /** Ctrl/Cmd+A 全选（S5-23）：只选当前可见项 —— 筛选后全选应只覆盖筛选结果 */
+  function selectAll(side: 'local' | 'remote', visible: string[]): void {
+    if (side === 'local') selectedLocal.value = new Set(visible)
+    else selectedRemote.value = new Set(visible)
   }
 
   function clearSelection(side?: 'local' | 'remote'): void {
@@ -843,6 +960,7 @@ async function remoteRefresh(): Promise<void> {
     // P3 修复：同 expandLocalDir — 收集不可读而跳过的子目录并统一告警
     const skipped: string[] = []
     const unsafe: string[] = []
+    const symlinks: string[] = []
     while (stack.length > 0) {
       const { dir, rel } = stack.pop()!
       let entries: SftpEntry[]
@@ -863,6 +981,14 @@ async function remoteRefresh(): Promise<void> {
           unsafe.push(`${dir}/${e.name}`)
           continue
         }
+        // S5-20：符号链接不进展开结果。链接的 size 是目标路径串的长度（POSIX），
+        // 当文件下载会把目标内容拉成本地普通文件、丢失链接；指向目录的链接也
+        // 不会被误判成目录（isDirectory 已只认目录位），但语义同样不可逆。
+        // 与本地侧 fs:copy 的 lstat 拒绝、zip 的 fail-closed 扫描同口径。
+        if (e.isSymlink) {
+          symlinks.push(`${dir}/${e.name}`)
+          continue
+        }
         const childRel = rel ? `${rel}/${e.name}` : e.name
         if (e.isDirectory) {
           stack.push({ dir: e.path, rel: childRel })
@@ -877,6 +1003,9 @@ async function remoteRefresh(): Promise<void> {
     }
     if (unsafe.length > 0) {
       toast.warning(`部分远程条目因文件名不安全被跳过（${unsafe.length} 个）：${unsafe.slice(0, 3).join('、')}${unsafe.length > 3 ? ' …' : ''}`)
+    }
+    if (symlinks.length > 0) {
+      toast.warning(`部分远程符号链接被跳过（${symlinks.length} 个）：${symlinks.slice(0, 3).join('、')}${symlinks.length > 3 ? ' …' : ''}`)
     }
     return result
   }
@@ -989,6 +1118,7 @@ async function remoteRefresh(): Promise<void> {
       try {
         await getApi().sftpRegisterUploadTasks(sid, registered.map(t => ({
           id: t.id,
+          kind: 'upload' as const,
           localPath: t.localPath,
           remotePath: t.remotePath,
           name: t.name,
@@ -1028,7 +1158,9 @@ async function remoteRefresh(): Promise<void> {
     // 从另一台主机读取同名路径
     const sid = sshSessionId.value
     const localBaseDir = targetDir ?? localCwd.value
-    const tasks: Array<{ id: string; remotePath: string; localPath: string; size: number }> = []
+    // S5-25：带上 name/groupId/groupLabel —— 下载记录要与上传记录同构，
+    // 展示层（组头折叠）与恢复逻辑才能共用一套映射
+    const tasks: Array<{ id: string; remotePath: string; localPath: string; size: number; name: string; groupId?: string; groupLabel?: string }> = []
     // 目录下载涉及的全部本地父目录（去重后并发创建，见循环后）
     const localDirs = new Set<string>()
 
@@ -1046,16 +1178,26 @@ async function remoteRefresh(): Promise<void> {
       // 用 sftpStat 探测兜底 —— 一次往返拿类型。此前用 sftpList 全量列目录，
       // 万级文件的目录要拉全量列表只为扔掉
       let isDir = false
+      let isSymlink = false
       const remoteEntry = remoteEntries.value.find(e => e.path === rp)
       if (remoteEntry) {
         isDir = remoteEntry.isDirectory
+        isSymlink = remoteEntry.isSymlink
       } else {
         try {
           const st = await getApi().sftpStat(sid, rp)
           isDir = st.isDirectory
+          isSymlink = st.isSymbolicLink
         } catch {
           isDir = false
         }
+      }
+      // S5-20：单文件下载前拦截符号链接。sftpDownload 走 sftp.open + read，
+      // 跟随链接会把目标内容写成本地普通文件 —— 链接语义丢失且用户以为拿到了
+      // 那个文件本身。目录下载已在 expandRemoteDir 里逐项跳过。
+      if (isSymlink) {
+        toast.error(`符号链接不支持下载（会丢失链接语义），已跳过：${rp}`)
+        continue
       }
 
       if (isDir) {
@@ -1087,7 +1229,10 @@ async function remoteRefresh(): Promise<void> {
             groupId, groupLabel,
             size: f.size,
           })
-          tasks.push({ id, remotePath: f.remotePath, localPath, size: f.size })
+          tasks.push({
+            id, remotePath: f.remotePath, localPath, size: f.size,
+            name: f.relPath, groupId, groupLabel,
+          })
         }
       } else {
         // 文件：直接加入（大小从 remoteEntries 缓存取；不在缓存里时 stat 一次
@@ -1105,7 +1250,7 @@ async function remoteRefresh(): Promise<void> {
           status: 'pending', startTime: Date.now(),
           size: fileSize,
         })
-        tasks.push({ id, remotePath: rp, localPath: localBase, size: fileSize })
+        tasks.push({ id, remotePath: rp, localPath: localBase, size: fileSize, name })
       }
     }
 
@@ -1117,6 +1262,31 @@ async function remoteRefresh(): Promise<void> {
     // 大文件优先：同 uploadFiles —— 并发门先放大文件（各占一条独立连接的
     // 2 MB 窗口），小文件填缝在后，减少长尾延迟（稳定排序，同大小维持原序）
     tasks.sort((a, b) => b.size - a.size)
+
+    // S5-25：入队即登记为 pending（同上传侧口径）—— 崩溃后「还没轮到」的
+    // 下载也在历史里，本地 .part 才有入口续上。登记失败不阻断传输。
+    const registeredDown = tasks.filter(t => transferById.get(t.id)?.status === 'pending')
+    if (registeredDown.length > 0) {
+      try {
+        await getApi().sftpRegisterUploadTasks(sid, registeredDown.map(t => ({
+          id: t.id,
+          kind: 'download' as const,
+          localPath: t.localPath,
+          remotePath: t.remotePath,
+          name: t.name,
+          total: t.size,
+          groupId: t.groupId,
+          groupLabel: t.groupLabel,
+        })))
+      } catch (e) {
+        console.warn('[sftp] 下载任务登记失败（不影响传输）:', e)
+      }
+      for (const t of registeredDown) {
+        const row = transferById.get(t.id)
+        if (!row) void getApi().sftpRemoveUploadTask(t.id).catch(() => { /* ignore */ })
+        else if (row.status === 'cancelled') void getApi().sftpCancel(t.id).catch(() => { /* ignore */ })
+      }
+    }
 
     // F-6 修复：带上 id/kind（runBatch 派发前检查 + 并发门计数）
     runBatch(tasks.map(t => ({ fn: () => runDownload(t.id, sid, t.remotePath, t.localPath), id: t.id, kind: 'download' as const }))).then(async (results) => {
@@ -1219,18 +1389,18 @@ async function remoteRefresh(): Promise<void> {
   }
 
   // ─── 路径辅助（用于 ZIP 覆盖确认等场景） ────────
-  /** 拼接远程子路径（基于当前 remoteCwd） */
-  function joinRemotePath(name: string): string {
-    if (!name) return remoteCwd.value
+  /** 拼接远程子路径（基于当前 remoteCwd，S5-21 起可显式传基目录 —— 同侧复制目标不是 cwd） */
+  function joinRemotePath(name: string, base: string = remoteCwd.value): string {
+    if (!name) return base
     if (name.startsWith('/')) return name
-    return remoteCwd.value === '/' ? '/' + name : remoteCwd.value + '/' + name
+    return base === '/' ? '/' + name : base + '/' + name
   }
 
-  /** 拼接本地子路径（基于当前 localCwd） */
-  async function joinLocalPath(name: string): Promise<string> {
-    if (!name) return localCwd.value
+  /** 拼接本地子路径（基于当前 localCwd，S5-21 起可显式传基目录 —— 同侧复制目标不是 cwd） */
+  async function joinLocalPath(name: string, base: string = localCwd.value): Promise<string> {
+    if (!name) return base
     if (/^[a-z]:[\\/]/i.test(name) || name.startsWith('/')) return name
-    return await getApi().fsPathJoin(localCwd.value, name)
+    return await getApi().fsPathJoin(base, name)
   }
 
   /** 检查远程路径是否存在（文件或目录）。未连接时返回 false */
@@ -1453,8 +1623,14 @@ async function remoteRefresh(): Promise<void> {
     t.status = 'running'
     try {
       // 审查 M-18：同 runUpload — 严格按 4 参 IPC 契约调用（续传主进程按本地
-      // .part 自动定位，取消走 sftp:cancel）
-      await getApi().sftpDownload(id, sid, remotePath, localPath)
+      // .part 自动定位，取消走 sftp:cancel）。
+      // S5-25：第 5 参 meta 携带展示字段，主进程据此写下载记录（跨重启可续传）
+      await getApi().sftpDownload(id, sid, remotePath, localPath, {
+        name: t.name,
+        groupId: t.groupId,
+        groupLabel: t.groupLabel,
+        size: t.size ?? t.total,
+      })
       t.status = 'done'
       t.endTime = Date.now()
       toast.success(`下载成功: ${t.name}`)
@@ -1502,9 +1678,13 @@ async function cancelTransfer(id: string): Promise<void> {
     t.status = 'cancelled'
     t.endTime = Date.now()
     toast.info(`已取消排队任务: ${t.name}`)
-    // 上传已在主进程登记为 pending：补发 sftpCancel 让记录落成 cancelled（保留为
-    // 历史），否则下次启动它会被归一化为「未完成 · 可继续」重新冒出来
-    if (t.kind === 'upload') void getApi().sftpCancel(id).catch(() => { /* ignore */ })
+    // S5-33：上传与下载都已在主进程登记为 pending，都要补发 sftpCancel 让记录落成
+    // cancelled（保留为历史），否则下次启动它会被归一化为「未完成 · 可继续」重新
+    // 冒出来。原实现只判 upload —— 下载行取消后记录仍是 pending，重启就多一条假的
+    // 「可继续」断点，而本地 .part 早没了。
+    if (t.kind === 'upload' || t.kind === 'download') {
+      void getApi().sftpCancel(id).catch(() => { /* ignore */ })
+    }
     scheduleRemoveTransfer(id, 10000)
     return
   }
@@ -1549,9 +1729,12 @@ function pauseTransfer(id: string): void {
   t.status = 'paused'
   // 用户主动暂停不是「中断」：不展示「未完成 · 可继续」的警示语义
   t.interrupted = undefined
-  // 上传还要让主进程把记录标成 paused，否则崩溃/退出后会被归一化当成中断，
+  // 上传/下载都要让主进程把记录标成 paused，否则崩溃/退出后会被归一化当成中断，
   // 且「继续」与自动重试的 CANCELLED 谁先到都不会把 paused 覆盖成 cancelled
-  if (t.kind === 'upload') void getApi().sftpPauseUploadTask(id, false).catch(() => { /* ignore */ })
+  // （S5-25：下载记录同一条通道，主进程按记录自身的 kind 判定方向）
+  if (t.kind === 'upload' || t.kind === 'download') {
+    void getApi().sftpPauseUploadTask(id, false).catch(() => { /* ignore */ })
+  }
   // 审查修复（P2）：同 disconnect 路径 — 同步 try/catch 捕获不到
   // sftpCancel 返回 Promise 的 reject，改为挂 .catch
   void getApi().sftpCancel(id).catch(() => { /* 忽略取消失败 */ })
@@ -1637,9 +1820,10 @@ function removeTransfer(id: string): void {
     }
     const idx = transfers.value.findIndex(t => t.id === id)
     if (idx >= 0) transfers.value.splice(idx, 1)
-    // 上传行有对应的持久记录：删行 = 用户不想再看到它。远端 .part 刻意保留
-    // （清记录是只读展示操作，不替用户删远端数据）
-    if (transferById.get(id)?.kind === 'upload') {
+    // S5-33：上传与下载行都有主进程持久记录，删行 = 用户不想再看到它，两类都要清。
+    // 原实现只判 upload —— 下载行删掉后记录还留在磁盘上，重启又冒出来一条历史。
+    // 远端/本地的 .part 刻意保留（清记录是只读展示操作，不替用户删数据）。
+    if (transferById.get(id)?.kind === 'upload' || transferById.get(id)?.kind === 'download') {
       void getApi().sftpRemoveUploadTask(id).catch(() => { /* 记录侧失败不影响本地移除 */ })
     }
     transferById.delete(id)
@@ -1663,9 +1847,10 @@ function removeTransfer(id: string): void {
   }
 
   function scheduleRemoveTransfer(id: string, delay = 3000): void {
-    // 上传记录跨重启保留、只有手动清除才删除：成功后 3s / 失败后 10s 自动消失
-    // 会让「记录」这一产品承诺形同虚设。下载/复制保持原有的自动清理。
-    if (transferById.get(id)?.kind === 'upload') return
+    // S5-33：上传/下载记录跨重启保留、只有手动清除才删除：行自动消失而记录留在
+    // 磁盘上，重启后那条历史会自己冒回来 —— 用户看到的是「删了又出现」。
+    // 同侧复制没有持久记录，保持原有的自动清理（3s/10s）。
+    if (transferById.get(id)?.kind === 'upload' || transferById.get(id)?.kind === 'download') return
     // 同一 id 重复调度时先清旧定时器，避免多个定时器重复回调
     const existing = removeTimers.get(id)
     if (existing) clearTimeout(existing)
@@ -1684,8 +1869,13 @@ function removeTransfer(id: string): void {
     // 后仍可能有一条在途事件迟到抵达，裸写会把已完成行的字节数改回中间值，
     // 使「100% 完成」的行闪回 87% 或让已取消行重新涨字节。终态只读，直接丢弃。
     if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') return
+    // S5-26：total 允许被进度事件「撑开」。本地复制（fs:copy）的总量是主进程
+    // 递归收集阶段结束后才知道的，任务入队时只能写 0（渲染层此刻还没法知道）。
+    // 原实现直接丢弃 total=0 的事件，导致复制行永远画成「不定进度」的滑块 ——
+    // 主进程明明在报真实数字，渲染层一次都没用上。只在「当前为 0」时采纳，
+    // 已经知道的总量不会被后续事件改小（文件不会越收越多，只会越收越少）。
+    if (data.total > 0 && t.total === 0) t.total = data.total
     t.transferred = data.transferred
-    t.total = data.total
   }
 
   return {
@@ -1693,7 +1883,9 @@ function removeTransfer(id: string): void {
     sshSessionId, connectionName, connectionHost, online, activeConnectionId,
     localCwd, remoteCwd, localEntries, remoteEntries,
     loadingLocal, loadingRemote, localError, remoteError,
-    selectedLocal, selectedRemote, transfers, clipboard,
+    selectedLocal, selectedRemote, lastSelectedLocal, lastSelectedRemote,
+    localSort, remoteSort, localFilter, remoteFilter, sortEntries, filterEntries, setSort,
+    transfers, clipboard,
     // computed
     activeTransfers, queueStats,
     // session
@@ -1704,12 +1896,14 @@ function removeTransfer(id: string): void {
     loadLocal, initLocalHome, getDrives, localUp, localRefresh, localMkdir, localRename, localDelete,
     localParent,
     // remote
-    loadRemote, remoteUp, remoteRefresh, remoteMkdir, remoteRename, remoteDelete,
+    loadRemote, remoteUp, remoteRefresh, remoteMkdir, remoteRename, remoteDelete, remoteChmod,
     remoteParent,
     // selection
-    toggleSelectLocal, toggleSelectRemote, clearSelection,
+    toggleSelectLocal, toggleSelectRemote, selectRange, selectAll, clearSelection,
     // transfer
     uploadFiles, downloadFiles, cancelTransfer, pauseTransfer, resumeTransfer, retryTransfer, removeTransfer, deleteTransfer, applyProgress, clearCompleted,
+    // S5-33：导出调度入口供测试直接驱动（自动清理的豁免判据是可测行为）
+    scheduleRemoveTransfer,
     // 传输队列单一写入者：addTransfer 是唯一「新增任务」入口（同时登记索引），
     // 导出供测试与任何需要直接入队的调用方复用，杜绝绕过索引的裸 push 造成 desync
     addTransfer,

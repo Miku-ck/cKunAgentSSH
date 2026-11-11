@@ -11,16 +11,19 @@ import {
 } from '../../shared/upload-task-core'
 
 /** 字段一一对上是刻意的最低映射：transferred/total 直接来自记录，续传入口据此
- *  显示断点进度；终态用 updatedAt 当 endTime，重启后「用时」不会从零重算。 */
+ *  显示断点进度；终态用 updatedAt 当 endTime，重启后「用时」不会从零重算。
+ *  S5-25：方向由记录的 kind 决定 —— 传输中心里的行方向与续传入口必须一致，
+ *  否则下载记录恢复成上传行会让「继续」按钮派发到错误的传输函数。 */
 export function toTransferItem(record: UploadTaskRecord): TransferItem {
   const restored = restoredStatusOf(record)
+  const isDownload = record.kind === 'download'
   const item: TransferItem = {
     id: record.id,
-    direction: 'up',
-    kind: 'upload',
+    direction: isDownload ? 'down' : 'up',
+    kind: isDownload ? 'download' : 'upload',
     name: record.name,
-    from: record.localPath,
-    to: record.remotePath,
+    from: isDownload ? record.remotePath : record.localPath,
+    to: isDownload ? record.localPath : record.remotePath,
     transferred: record.transferred,
     total: record.total,
     status: restored.status,

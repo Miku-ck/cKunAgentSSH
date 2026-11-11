@@ -177,6 +177,8 @@ class Harness:
         auto_skill_match: bool = True,
         permission_mode: str = "normal",
         await_approval: bool = False,
+        expert_skill_ids: Optional[list[str]] = None,
+        memory_scopes: Optional[list[str]] = None,
     ) -> AsyncIterator[TraceEvent]:
         """
         主入口 — yield TraceEvent
@@ -259,6 +261,13 @@ class Harness:
         # 审查 MINOR：per-run saddle 引用。PermissionGate 是进程级单例，
         # 其 saddle 字段会被后启动的并发 run 覆盖；拦截器改从 ctx.metadata 读取
         # 当前 run 的 Saddle，避免查错 ToolRegistry 误判"工具未注册"。
+        # 专家策略（可选）：None = 不干预，语义与引入前完全一致。
+        # 技能允许集供 SkillRein 过滤触发词自动匹配；记忆 scope 由 Saddle 透传给
+        # ToolContext，让预检索与 memory_search 工具读同一份范围。
+        if expert_skill_ids is not None:
+            ctx.metadata["expert_skill_ids"] = list(expert_skill_ids)
+        if memory_scopes is not None:
+            ctx.metadata["memory_scopes"] = list(memory_scopes)
         ctx.metadata["saddle"] = self._saddle
         # 侦察子 Agent 的治理通道：spawn_subagent 在自己的轻量 ReAct 循环里执行
         # 只读观测工具，PRE/POST 检查与 Saddle 执行必须复用主 run 的同一套拦截器

@@ -14,18 +14,29 @@
  */
 import { computed } from 'vue'
 import { useSSHStore } from '@/stores/ssh'
+import { DEFAULT_LOCAL_SHELL } from '@/stores/exec-target'
 
 export interface HomeTargetOption {
   sessionId: string
-  /** 标题与菜单主文案：远程为 username@host，本地为 shell 名 */
+  /** 标题与菜单主文案：远程为 username@host，本地为目录名（不是 shell 名；读不出目录时为空） */
   label: string
-  /** 副标题：连接名 / 「本地终端」 */
+  /** 副标题：连接名 / 本地目录全路径 */
   hint: string
   active: boolean
+  /** 本地会话落脚的目录：调用方按它去重、过滤、显示。空 = 这个会话没有绑定目录
+   *  （「不在项目中工作」那种），不该作为一行目录出现在列表里。 */
+  path?: string
 }
 
 /** 无会话时的占位字样 —— 指令仍要能下达，后端会按无终端上下文跑 */
 const NO_TARGET = '服务器'
+
+/** 路径末级名：本地会话靠目录区分，不靠 shell 名区分。 */
+function dirNameOf(p?: string): string {
+  if (!p) return ''
+  const parts = p.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || p
+}
 
 export function useHomeTarget() {
   const ssh = useSSHStore()
@@ -39,17 +50,18 @@ export function useHomeTarget() {
     ssh.activeSessionId ? labelOf(ssh.activeSessionId) : NO_TARGET,
   )
 
-  /** 底栏审批档右边那枚目标标记：远程给 shell 中 '@' 之后的地址段（落到哪台），
-   *  本地给 shell 名（落到哪个 shell，如 WSL）—— 本地留空时用户就看不到本轮落在哪。
-   *  远程拆不出地址（旧数据没有 shell、会话名里也没有 '@'）仍返回空：
-   *  不能把会话名印成像是 IP 的东西。 */
+  /** 底栏审批档右边那枚目标标记：**只给「chip 上没有的差量」**。
+   *  本地落点：只有非默认 shell（WSL / Git Bash / CMD）才亮 —— 那时命令语法真的换了
+   *  一套，是放行前值得看见的差量；默认 PowerShell 是产品默认设定，不是本轮信息
+   *  （2026-11-10 用户口径：选本地就不要显示 PowerShell）。
+   *  远程落点：不亮。第一枚 chip 已经写着这台机器（连接名或地址），再在右边印一遍
+   *  同一个地址纯属重复（2026-11-11 用户截图：`192.168.150.40` 在底栏出现两次）。
+   *  地址本身没丢 —— 它在第一枚 chip 的 title 里（targetHint: 连接名 · username@host）。 */
   const targetChip = computed(() => {
     const s = ssh.sessions.find(x => x.id === ssh.activeSessionId)
-    if (!s) return ''
-    if (s.type === 'local') return s.shell || s.name
-    const addr = s.shell || s.name
-    const at = addr.lastIndexOf('@')
-    return at >= 0 ? addr.slice(at + 1) : ''
+    if (!s || s.type !== 'local') return ''
+    const shell = s.shell || s.name || ''
+    return shell === DEFAULT_LOCAL_SHELL ? '' : shell
   })
 
   /** 悬停补全身份：地址是"落到哪台"，连接名才是用户认得的那台 */
@@ -60,14 +72,30 @@ export function useHomeTarget() {
   })
 
   const options = computed<HomeTargetOption[]>(() =>
-    ssh.sessions.map(s => ({
-      sessionId: s.id,
-      label: s.shell || s.name,
-      hint: s.type === 'local'
-        ? '本地终端'
-        : (ssh.connections.find(c => c.id === s.connectionId)?.name || s.name),
-      active: s.id === ssh.activeSessionId,
-    })),
+    ssh.sessions.map(s => {
+      // 本地会话的读数用目录，不用 shell 名：默认 shell 一律 PowerShell，
+      // 三行都写 PowerShell 等于没标签（2026-11-10 用户口径）。目录才是本地的身份。
+      // 目录取「实时 cwd 优先、建会话时的初始 cwd 兜底」；两个都空说明这个会话
+      // 没绑定目录 —— label 留空，由调用方决定不列这行，而不是编一个「本地终端」。
+      if (s.type === 'local') {
+        // 只有**绑定了目录**的会话才读 cwd：没绑定（「不在项目中工作」）的会话
+        // 终端也会同步上来主目录，读它等于把主目录当成用户选的文件夹。
+        const cwd = s.cwd ? ssh.sessionCwd(s.id) : ''
+        return {
+          sessionId: s.id,
+          label: dirNameOf(cwd),
+          hint: cwd,
+          path: cwd,
+          active: s.id === ssh.activeSessionId,
+        }
+      }
+      return {
+        sessionId: s.id,
+        label: s.shell || s.name,
+        hint: ssh.connections.find(c => c.id === s.connectionId)?.name || s.name,
+        active: s.id === ssh.activeSessionId,
+      }
+    }),
   )
 
   /** 只认已打开的会话：菜单项与真实状态之间不留"配了但没连上"的第三种目标 */

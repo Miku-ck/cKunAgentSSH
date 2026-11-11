@@ -43,7 +43,7 @@ from agent.memory import retriever as memory_retriever
 from agent.memory.embedding import get_embedding_client
 from agent.consciousness_tick import get_global_tick
 from agent.pending_delivery import PendingDeliveries
-from prompts import _current_time_str, SSH_MODE, SSH_MODE_PROMPT
+from prompts import _current_time_str, SSH_MODE, SSH_MODE_PROMPT, CHAT_MODE_PROMPT
 from safe_tokens import safe_max_tokens
 
 if TYPE_CHECKING:
@@ -213,8 +213,11 @@ def _build_agent_system_prompt(
         f"如用户询问日期/星期/时间，请以本信息为准，不要使用训练数据中的旧时间。"
     )
 
-    # 拼装：时间 + 模式基础 prompt + 用户 system_prompt + 画像块
-    parts = [time_injection, SSH_MODE_PROMPT]
+    # 拼装：时间 → 角色（运维/纯对话二选一）→ 用户 system_prompt → 画像块
+    # 角色段按任务性质切换而非无条件固定：SSH_MODE_PROMPT 里的"智能运维助手"是
+    # 产品身份，只在真正要动服务器时成立。用户没选专家 + 只发了句"你好"时注入它，
+    # 模型会把那段能力描述当成自我介绍念出来（实测复述六项运维清单）。
+    parts = [time_injection, CHAT_MODE_PROMPT if is_conversation_task else SSH_MODE_PROMPT]
     # 对话姿态：由前端模式选择器决定（goal=聚焦目标 / plan=先方案后动手）。
     # 仅对非纯对话型任务注入（纯问答不需要方法论姿态）。
     # workflow_mode 为 None = 用户未表态（前端 × 清掉后），此时不注入任何姿态段：
@@ -461,6 +464,10 @@ class AgentRunRequest(BaseModel):
     # 老客户端不传该字段时行为随之变化（原先默认注入 goal 前缀），这是有意的：
     # 没表态 ≠ 选了目标姿态。
     workflow_mode: Optional[Literal["goal", "plan"]] = None
+    # 专家（运行策略配置包）。None = 完全沿用现有行为；服务端按 id 读 DB，
+    # 禁用/不存在/配置损坏一律报错，不静默回落成默认专家（否则用户以为
+    # 在收紧，实际跑的是全权限默认档）。
+    expert_id: Optional[str] = None
 
 
 # ── Routes ──
@@ -573,10 +580,6 @@ def _release_run_slot_sync(conversation_id: str, run_id: str) -> None:
     if _in_flight_runs.get(conversation_id) == run_id:
         del _in_flight_runs[conversation_id]
 
-
-async def _release_run_slot(conversation_id: str, run_id: str) -> None:
-    """释放占位（兼容旧调用；实际为无 await 的同步操作）"""
-    _release_run_slot_sync(conversation_id, run_id)
 
 
 # ── run 级环境判定登记 ──────────────────────────────────────────────
@@ -752,9 +755,39 @@ async def agent_run(req: AgentRunRequest, request: Request):
 
     # C-review MINOR-12：进程启动后首次请求做滞留 run 对账
     await _reconcile_stale_runs_once()
+
+    # ── 专家策略（可选）──
+    # 只收紧六个运行面：模型 / 身份段 / 技能 / 工具 / 权限 / 迭代 / 记忆。
+    # 未选专家时 policy.is_legacy 为真，下方每个干预点都不产生任何字节变化，
+    # 守卫在 backend/tests/test_expert_policy_legacy_noop.py。
+    from agent.expert_policy import (
+        build_identity_section, build_snapshot, clamp_max_iterations,
+        clamp_permission_mode, filter_tool_names, resolve_expert,
+        resolve_memory_scopes, resolve_skill_ids,
+    )
+    expert_row = None
+    if req.expert_id:
+        expert_row = await asyncio.to_thread(db.get_expert, req.expert_id)
+        if not expert_row:
+            raise HTTPException(status_code=404, detail="专家不存在")
+        if not expert_row.get("enabled"):
+            raise HTTPException(status_code=400, detail="专家已被禁用")
+    try:
+        policy = resolve_expert(expert_row)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"专家配置损坏: {exc}") from exc
+
+    # 记忆范围在 setup 并行段与工具里必须是同一份口径；inherit 时不干预。
+    _inherited_scopes = memory_retriever.context_scopes(req.ssh_session_id or "")
+    final_memory_scopes = (
+        _inherited_scopes if policy.memory_scope == "inherit"
+        else resolve_memory_scopes(policy.memory_scope, req.ssh_session_id, _inherited_scopes)
+    )
+
     # ── 按 SSH 模式选择默认模型（兜底）──
     # 审查 M-13：db 同步调用放线程池，避免阻塞事件循环（卡住所有并发请求/心跳）
-    effective_model_id = req.model_id
+    # 专家锁定模型时忽略前端选择（面板会显示「由专家指定」）；否则沿用原链路
+    effective_model_id = policy.model_id_override or req.model_id
     if not effective_model_id:
         default_model = await asyncio.to_thread(db.get_default_model, SSH_MODE)
         if default_model:
@@ -791,15 +824,18 @@ async def agent_run(req: AgentRunRequest, request: Request):
             db.get_recent_messages, req.conversation_id, limit=req.context_window)
 
     async def _setup_skills():
-        # ── 按模式过滤显式 skill_ids ──
-        if not req.skill_ids:
+        # ── 按模式过滤显式 skill_ids；专家限定时再取允许集交集 ──
+        # 专家即使前端没显式选技能也会预挂载自己的技能集，所以早退条件必须
+        # 同时满足「前端没选」且「专家不干预」。
+        if not req.skill_ids and policy.skill_ids is None:
             return
         disabled_skill_ids = set(await asyncio.to_thread(db.list_disabled_skills_for_mode, SSH_MODE))
-        original_skill_ids = req.skill_ids
-        req.skill_ids = [sid for sid in req.skill_ids if sid not in disabled_skill_ids]
+        original_skill_ids = list(req.skill_ids or [])
+        req.skill_ids = resolve_skill_ids(
+            original_skill_ids, policy.skill_ids, disabled_skill_ids)
         if len(req.skill_ids) != len(original_skill_ids):
             logger.info(
-                "Agent 显式 skill_ids 按 mode=%s 过滤: %d -> %d",
+                "Agent 显式 skill_ids 按 mode=%s 与专家策略过滤: %d -> %d",
                 SSH_MODE, len(original_skill_ids), len(req.skill_ids),
             )
 
@@ -875,7 +911,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
             return []
         return await _retrieve_memory_contents(
             embed_client, query=req.task,
-            scopes=memory_retriever.context_scopes(req.ssh_session_id or ""),
+            scopes=final_memory_scopes,
             settings=mem_settings,
         )
 
@@ -939,6 +975,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
     # 结构化增强含新增写步骤时，auto 回落 normal（fail-closed，服务端不信任前端）。
     permission_mode = _structure_aware_permission_mode(
         req.enhanced_has_added_write_steps, permission_mode)
+    # 专家是最后一道收紧：必须在配对与结构化回落之后，否则「最严格者」
+    # 会算在已被降级的旧值上；也绝不把 plan 抬回 normal/auto。
+    permission_mode = clamp_permission_mode(permission_mode, policy.permission_ceiling)
 
     # M3 修复：提取 system prompt 构建为独立函数
     final_system_prompt = _build_agent_system_prompt(
@@ -949,6 +988,22 @@ async def agent_run(req: AgentRunRequest, request: Request):
         is_change=pre_intention.is_change if pre_intention else None,
         goal_text=goal_text,
     )
+    # 身份段只在专家配置了非空身份时追加；空串不加任何字节（连换行都不加）
+    _expert_identity = build_identity_section(policy)
+    if _expert_identity:
+        final_system_prompt = final_system_prompt + "\n\n" + _expert_identity
+
+    # ── 插件工具装配（MCP）──
+    # 只加载「已启用 + 已确认」且被专家允许的插件；单个插件失败只记 warning，
+    # 不阻断整个 run。工具实例此刻先备好，注册放到 tool_registry 创建之后。
+    from agent.run_assembly import (
+        PLUGIN_PROMPT_SECTION, build_plugin_tools, register_plugin_tools,
+    )
+    plugin_tools, plugin_warnings = await build_plugin_tools(policy)
+    for _warning in plugin_warnings:
+        logger.warning("插件装配: %s", _warning)
+    if plugin_tools:
+        final_system_prompt = final_system_prompt + "\n\n" + PLUGIN_PROMPT_SECTION
 
     # 应用演化配置（仅覆盖用户未显式传入的字段）
     # M3 修复：提取演化配置解析为独立函数
@@ -971,6 +1026,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
     _evo = _resolve_evolution_config(req, model_cfg, _safe_max, _evolved_cfg, thinking_on)
     effective_thinking = _evo["thinking"]
     effective_max_iter = _evo["max_iter"]
+    # 专家上限在演化配置之后取 min：动态预算同样不能突破它
+    effective_max_iter = clamp_max_iterations(effective_max_iter, policy.max_iterations)
     effective_temperature = _evo["temperature"]
     effective_top_p = _evo["top_p"]
     effective_max_tokens = _evo["max_tokens"]
@@ -997,6 +1054,21 @@ async def agent_run(req: AgentRunRequest, request: Request):
     # 否则 LLM 会被工具 schema 引导去调用工具，产生无关内容
     effective_enable_tools = req.enable_tools and not is_conversation_task
     tool_registry = create_registry() if effective_enable_tools else ToolRegistry()
+    # 专家工具集与「已按全局/SSH 模式过滤后」的注册表求交：
+    # 顺序上必须是 create_registry 之后，专家才无法复活被禁用的工具。
+    if policy.tool_names is not None and effective_enable_tools:
+        _allowed_tools = set(filter_tool_names(tool_registry.names(), policy.tool_names))
+        for _tool in list(tool_registry.names()):
+            if _tool not in _allowed_tools:
+                tool_registry.unregister(_tool)
+    # 插件工具：专家显式工具集对它们同样生效；命名冲突时整批不载入，
+    # 绝不覆盖内置工具（register_plugin_tools 内部先查重再注册）。
+    if plugin_tools and effective_enable_tools:
+        if policy.tool_names is not None:
+            plugin_tools = [t for t in plugin_tools if t.name in policy.tool_names]
+        _conflicts = register_plugin_tools(tool_registry, plugin_tools)
+        if _conflicts:
+            logger.warning("插件工具名冲突，整批未载入: %s", _conflicts)
     # 成本追踪器
     cost_tracker = CostTracker(model_id=model_cfg.get("model_id") or model_cfg["id"])
     # 组装
@@ -1029,14 +1101,31 @@ async def agent_run(req: AgentRunRequest, request: Request):
     _remember_run_environment(run_id, env_resolution)
     try:
         # 持久化 agent_run 记录（审查 M-13：放线程池）
+        # 专家快照：只记最终生效值与策略元数据，绝不记 api_key / 插件 env
+        import json as _json
+        _expert_snapshot = build_snapshot(
+            policy,
+            model_id=model_cfg.get("model_id") or model_cfg["id"],
+            permission_mode=permission_mode,
+            max_iterations=effective_max_iter,
+            tool_names=list(tool_registry.names()) if effective_enable_tools else [],
+            skill_ids=list(req.skill_ids or []),
+            memory_scopes=final_memory_scopes,
+        )
         await asyncio.to_thread(
             db.create_agent_run,
             run_id=run_id,
             conversation_id=req.conversation_id,
             task=req.task,
-            max_iterations=req.max_iterations,
+            # legacy 时保持原值，专家生效时记实际钳制后的迭代数
+            max_iterations=req.max_iterations if policy.is_legacy else effective_max_iter,
             mode=SSH_MODE,
             model_used=model_cfg.get("model_id") or model_cfg["id"],
+            expert_id=expert_row["id"] if expert_row else None,
+            expert_name=policy.expert_name,
+            expert_snapshot_json=(
+                _json.dumps(_expert_snapshot, ensure_ascii=False) if expert_row else None
+            ),
         )
 
         # 保存用户消息到 db（修复：原 Agent 模式未保存用户消息，导致 post_process 的标题生成检查 len(recent)==2 失败，
@@ -1065,7 +1154,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
         await asyncio.to_thread(db.update_conversation_status, req.conversation_id, "in_progress")
     except Exception:
         # 占位已得但落库失败 → 释放占位，避免该会话被永久锁死
-        await _release_run_slot(req.conversation_id, run_id)
+        _release_run_slot_sync(req.conversation_id, run_id)
         _forget_run_environment(run_id)
         raise
 
@@ -1126,6 +1215,14 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     skill_ids=req.skill_ids,
                     auto_skill_match=req.auto_skill_match,
                     permission_mode=permission_mode,
+                    # 技能允许集让 SkillRein 连触发词自动匹配也一起收紧；
+                    # memory_scopes 让预检索与 memory_search 工具读同一份范围。
+                    expert_skill_ids=(
+                        list(policy.skill_ids) if policy.skill_ids is not None else None
+                    ),
+                    memory_scopes=(
+                        final_memory_scopes if policy.memory_scope != "inherit" else None
+                    ),
                     # 交互式 run：审批卡弹出后 Driver 真的停住等用户点击。
                     # 不传的入口（定时任务）没人可点卡片，保持「拦截即返回」。
                     await_approval=True,
@@ -1750,13 +1847,22 @@ def update_tool_enabled(tool_name: str, req: UpdateToolEnabledRequest, mode: str
 class PermissionGrantRequest(BaseModel):
     # 与 AllowPermissionRequest 同口径限长：这个键会原样落进 allowlist.txt，
     # 不限长度就等于给授权清单文件开了一个无界写入入口（字符集校验管不住长度）
-    tool: str = Field(..., min_length=1, max_length=64, description="工具名")
+    tool: str = Field(..., min_length=1, max_length=160, description="工具名")
     # 审查 M-3：默认 scope 从 "always" 收紧为 "once"（仅放行下一次调用）。
     # 原默认 always 会在用户点一次后永久免审批。
     # Q-B4：裸 str 改枚举 —— 非法 scope 在请求模型层就被 422 拒掉，
     # 不再需要路由函数里的手工 if 白名单。
     scope: Literal["once", "session", "always"] = Field(
         "once", description="授权范围：once（仅本次）/ session（会话）/ always（永久）")
+
+    @field_validator("scope")
+    @classmethod
+    def no_permanent_for_mcp(cls, value: str, info) -> str:
+        # 插件配置变更会递增 config_rev 并撤销同意，一条「永久」allowlist
+        # 会跨配置代际继续放行同名工具 —— 那等于授权了一个已经换掉的进程。
+        if value == "always" and str(info.data.get("tool") or "").startswith("mcp__"):
+            raise ValueError("插件工具不提供永久授权（仅本次 / 本会话）")
+        return value
     # 命令执行工具（shell_exec）时传入被批准的具体命令，
     # 授权绑定到命令哈希（同命令免审批，其他 dangerous 命令仍需审批）
     command: Optional[str] = Field(None, description="命令执行工具的具体命令（用于命令级绑定）")
@@ -1938,7 +2044,14 @@ async def list_tool_permissions():
 
 class AllowPermissionRequest(BaseModel):
     """手动登记永久授权（免去先触发审批弹窗再点"始终允许"的路径）"""
-    tool: str = Field(..., min_length=1, max_length=64, description="工具名")
+    tool: str = Field(..., min_length=1, max_length=160, description="工具名")
+
+    @field_validator("tool")
+    @classmethod
+    def reject_mcp(cls, value: str) -> str:
+        if value.startswith("mcp__"):
+            raise ValueError("插件工具不提供永久授权，请在审批卡里逐次授权")
+        return value
     command: Optional[str] = Field(None, max_length=4096,
                                    description="命令执行工具的绑定命令；省略 = 工具级授权")
     host: Optional[str] = Field(

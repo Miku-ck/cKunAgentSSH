@@ -987,3 +987,73 @@ export function interpretPull(stdout: string, stderr: string, exitCode: number |
   }
   return { kind: 'failed', message: friendlyGitError(stderr) || firstLine(stdout) || `退出码 ${exitCode ?? 'null'}` }
 }
+
+// ─── git worktree（任务台「工作树」执行落点） ───
+
+export interface GitWorktree {
+  /** 工作树绝对路径（porcelain 的 worktree 行，可能含空格） */
+  path: string
+  /** HEAD sha；detached 时同样有值 */
+  head: string
+  /** 分支名（refs/heads/x → x）；detached / bare 时为 null */
+  branch: string | null
+  detached: boolean
+  bare: boolean
+  /** locked [reason] —— 锁定的工作树不该被当成可随意切换的落点 */
+  locked: boolean
+  prunable: boolean
+  /** 列表首项通常是主工作树；用它给 UI 标「主仓」 */
+  main: boolean
+}
+
+/**
+ * 解析 `git -C <repo> worktree list --porcelain`。
+ *
+ * 空行分块，但 git 版本差异下末块可能不带空行；路径含空格时不能按空白切，
+ * 一律取 "key " 之后的整段。未知键忽略（新版本加字段不该让整个列表失效）。
+ * 纯函数：不碰文件系统、不依赖 Electron，主进程与渲染层共用。
+ */
+export function parseWorktreeList(raw: string): GitWorktree[] {
+  const out: GitWorktree[] = []
+  let cur: Partial<GitWorktree> | null = null
+
+  const flush = () => {
+    if (cur && cur.path) {
+      out.push({
+        path: cur.path,
+        head: cur.head || '',
+        branch: cur.branch ?? null,
+        detached: !!cur.detached,
+        bare: !!cur.bare,
+        locked: !!cur.locked,
+        prunable: !!cur.prunable,
+        main: out.length === 0,
+      })
+    }
+    cur = null
+  }
+
+  for (const line of String(raw || '').replace(/\r\n/g, '\n').split('\n')) {
+    if (!line.trim()) {
+      flush()
+      continue
+    }
+    const at = line.indexOf(' ')
+    const key = at < 0 ? line : line.slice(0, at)
+    const val = at < 0 ? '' : line.slice(at + 1)
+    if (key === 'worktree') {
+      if (cur && cur.path) flush()
+      cur = { path: val }
+      continue
+    }
+    if (!cur) continue
+    if (key === 'HEAD') cur.head = val
+    else if (key === 'branch') cur.branch = val.replace(/^refs\/heads\//, '')
+    else if (key === 'detached') cur.detached = true
+    else if (key === 'bare') cur.bare = true
+    else if (key === 'locked') cur.locked = true
+    else if (key === 'prunable') cur.prunable = true
+  }
+  flush()
+  return out
+}

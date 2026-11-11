@@ -417,6 +417,8 @@ class Saddle:
             # spawn_subagent 用它跑自己的轻量 ReAct 循环，工具调用过同一套
             # Reins/Saddle。未注入时为 None —— spawn_subagent 拒绝启动。
             governance=ctx.metadata.get("governance"),
+            # 专家策略限定的记忆 scope：None 表示不干预，[] 表示明确禁用记忆检索
+            memory_scopes=ctx.metadata.get("memory_scopes"),
         )
 
     def schemas(self) -> list[dict[str, Any]]:

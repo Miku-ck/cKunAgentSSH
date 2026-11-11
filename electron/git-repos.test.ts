@@ -316,3 +316,42 @@ describe('GitReposService 三仓同步（probe / catchup / merge / 主仓切换�
   })
 
 })
+
+describe('GitReposService 工作树创建与清理（Trae 式任务驱动）', () => {
+  it('createWorktree：建分支 + 仓库旁目录，返回可落点的 worktree', async () => {
+    const wt = await svc.createWorktree(repoA, 'feat/ai-test1')
+    expect(wt.branch).toBe('feat/ai-test1')
+    expect(wt.main).toBe(false)
+    expect(wt.locked).toBe(false)
+    // 目录建在仓库旁，名 = 仓库名-分支名（/ 换 -）；path 是 porcelain 口径（可能正斜杠）
+    expect(wt.path.replace(/\\/g, '/')).toContain('repo-a-feat-ai-test1')
+    expect(require('node:fs').existsSync(wt.path)).toBe(true)
+    // 返回的是 worktree list 的权威条目：与刷新后的列表逐字一致（同路径复用靠它）
+    const list = await svc.listWorktrees(repoA)
+    const hit = list.find(w => w.path === wt.path)
+    expect(hit?.branch).toBe('feat/ai-test1')
+    expect(list.some(w => w.main)).toBe(true)
+  })
+
+  it('createWorktree：分支重名被拒，不动磁盘', async () => {
+    await expect(svc.createWorktree(repoA, 'feat/ai-test1')).rejects.toThrow('分支已存在')
+  })
+
+  it('createWorktree：非法分支名与目标目录已存在被拒', async () => {
+    await expect(svc.createWorktree(repoA, '-bad')).rejects.toThrow('非法分支名')
+    mkdirSync(join(workDir, 'repo-a-feat-taken'), { recursive: true })
+    await expect(svc.createWorktree(repoA, 'feat/taken')).rejects.toThrow('目标目录已存在')
+  })
+
+  it('pruneWorktrees：目录被手动删除后，prune 把失效记录清出', async () => {
+    const wt = await svc.createWorktree(repoB, 'feat/gone')
+    expect(wt.path).toContain('repo-b-feat-gone')
+    rmSync(wt.path, { recursive: true, force: true })
+    const stale = await svc.listWorktrees(repoB)
+    expect(stale.some(w => w.prunable)).toBe(true)
+    const res = await svc.pruneWorktrees(repoB)
+    expect(res.code).toBe(0)
+    const clean = await svc.listWorktrees(repoB)
+    expect(clean.some(w => w.path === wt.path)).toBe(false)
+  })
+})

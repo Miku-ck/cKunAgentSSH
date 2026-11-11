@@ -6,6 +6,7 @@ import { api, agentApi, toFriendlyMessage, type ModelConfig, type ModelConfigPay
 // 而 useAppearance 要取本文件的 store —— 那是个真运行时环，细节见那个叶子模块的头注。
 import type { Accent, GradientDirection, GradientMode, TerminalBgMode, Theme } from '@/utils/appearance-tokens'
 import { ACCENT_MAP, isHexColor } from '@/utils/appearance-tokens'
+import { readJson, writeJson } from '@/utils/storage-json'
 import { useToastStore } from './toast'
 
 /**
@@ -31,6 +32,8 @@ export type SettingCategory =
   | 'chat'
   | 'appearance'
   | 'skills'
+  | 'experts'
+  | 'plugins'
   | 'agent'
   | 'memory'
   | 'ops'
@@ -154,12 +157,7 @@ export const BUDGET_LIMITS = {
 } as const
 
 function loadFromLocalStorage(): Partial<AppSettings> | null {
-  try {
-    const raw = localStorage.getItem(LS_KEY)
-    return raw ? JSON.parse(raw) : null
-  } catch {
-    return null
-  }
+  return readJson<Partial<AppSettings> | null>(LS_KEY, null)
 }
 
 const saved = loadFromLocalStorage()
@@ -299,14 +297,10 @@ export const useSettingsStore = defineStore('settings', () => {
   }, { deep: true })
 
   function persistSettings() {
-    // 审查R2修复：与 useChatPersistence 同款裸 setItem —— 配额满时 QuotaExceeded
-    // 会在防抖定时器/pagehide 回调里抛出未捕获异常。设置体量小，无需淘汰逻辑，
-    // 捕获并记日志即可（不能让持久化失败掀翻调用栈）。
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(settings.value))
-    } catch (e) {
+    // 设置体量小，无容量淘汰逻辑；写入失败只记日志，不掀翻防抖/pagehide 调用栈。
+    writeJson(LS_KEY, settings.value, e => {
       console.warn('[settings] 设置持久化失败（localStorage 可能已满或被禁用）:', e)
-    }
+    })
   }
 
   /**

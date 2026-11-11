@@ -23,6 +23,37 @@
         <button class="pane-btn" title="上一级" :disabled="!canUp" @click="goUp">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
+        <!-- S5-30 / S5-32：筛选的图标与输入框同一排 —— 点图标就地展开，不另起一行。
+             原实现是常驻在列头上方的独立横条（约 30px 高，两栏各一条），屏幕上半
+             部被「标题/面包屑/筛选/列头」四根横条吃掉近 120px。收进按钮行后默认
+             只多一个 22px 图标；展开时输入框插在图标与路径收藏之间，视觉上仍是
+             「一组按钮」而不是「多出来的一条」。 -->
+        <div v-if="filterOpen" class="filter-inline">
+          <input
+            ref="filterInputRef"
+            :value="filterText"
+            class="filter-input"
+            type="text"
+            placeholder="筛选名称…"
+            spellcheck="false"
+            @input="onFilterInput"
+            @keydown.esc="clearFilter"
+          />
+          <button v-if="filterText" class="filter-clear" title="清除筛选" @click="clearFilter">×</button>
+          <!-- S5-28：计数取 filteredEntries（筛选后的真实总数），不是 displayEntries
+               （已被 RENDER_LIMIT 截断）。原实现在筛选结果超过 2000 条时显示
+               「2000 / 5000」，而下方提示条又写「共 5000 个」—— 同一屏里两个数字
+               打架，用户无法判断到底是筛选没生效还是渲染被截断。 -->
+          <span v-if="filterText" class="filter-count">{{ filteredEntries.length }} / {{ entries.length }}</span>
+        </div>
+        <button
+          class="pane-btn"
+          :class="{ active: filterText }"
+          :title="filterText ? `筛选: ${filterText}` : '筛选'"
+          @click="toggleFilter"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </button>
         <SftpBookmarkMenu :side="side" :cwd="cwd" :online="store.online" :host-key="store.connectionHost" />
         <button class="pane-btn" title="刷新" @click="refresh">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
@@ -87,11 +118,38 @@
     </div>
 
     <!-- 文件列表 -->
-    <div class="file-list">
+    <!-- S5-31：导航中保留上一目录的内容并压暗，而不是整个列表消失换成「加载中...」。
+         原实现在 loading 时用 v-if 把 v-for 整个换掉 —— 双击文件夹后列表瞬
+         间清空、中心浮一行字、再整批冒出来，目录一大就是一次明显的闪。保留
+         旧内容既让导航「有反馈但不闪」，也能在加载失败时看出刚才在看哪里。
+         顶部加一条 2px 的进度条，比居中的文字更早给出「正在加载」的信号。 -->
+    <div class="file-list" :class="{ 'is-loading': loading }">
+      <div v-if="loading" class="pane-loading-bar"></div>
       <div class="file-list-head">
-        <div>名称</div>
-        <div>大小</div>
-        <div>修改时间</div>
+        <div
+          class="col-sortable"
+          :class="{ sorted: sortState.key === 'name' }"
+          title="点击排序"
+          @click="onSortClick('name')"
+        >
+          名称 <span class="th-arrow">{{ sortArrow('name') }}</span>
+        </div>
+        <div
+          class="col-sortable"
+          :class="{ sorted: sortState.key === 'size' }"
+          title="点击排序"
+          @click="onSortClick('size')"
+        >
+          大小 <span class="th-arrow">{{ sortArrow('size') }}</span>
+        </div>
+        <div
+          class="col-sortable"
+          :class="{ sorted: sortState.key === 'modified' }"
+          title="点击排序"
+          @click="onSortClick('modified')"
+        >
+          修改时间 <span class="th-arrow">{{ sortArrow('modified') }}</span>
+        </div>
         <div>权限</div>
       </div>
       <!-- 未连接占位移进列表区：列头（名称/大小/修改时间/权限）与面包屑保持可见，
@@ -99,8 +157,10 @@
       <div v-if="side === 'remote' && !store.online" class="pane-empty-overlay">
         <div class="empty-title">未连接远程服务器</div>
       </div>
-      <div v-else-if="loading" class="pane-loading">加载中...</div>
-      <div v-else-if="error" class="pane-error">{{ error }}</div>
+      <!-- S5-31：错误是「这一屏读不出来」，与压暗的旧列表并排显示会又挤又矛盾。
+           错误态独占列表区（同原实现的 v-else-if 语义），压暗只服务导航中。 -->
+      <div v-if="error" class="pane-error">{{ error }}</div>
+      <template v-else>
       <div
         v-for="entry in displayEntries"
         :key="entry.path"
@@ -122,10 +182,12 @@
              本地兜底的 'drwx'/'-rw'），这里再拼一个 'd' 会显示成 ddrwxr-xr-x -->
         <div class="file-perm">{{ permText(entry) || '-' }}</div>
       </div>
-      <!-- B16 修复：全量 v-for 无虚拟化 — 超大目录只渲染前 2000 行，超出给提示 -->
-      <div v-if="entries.length > RENDER_LIMIT" class="pane-list-limit">
-        仅显示前 {{ RENDER_LIMIT }} 个条目，共 {{ entries.length }} 个（请用筛选或进入子目录）
+      <!-- B16 修复：全量 v-for 无虚拟化 — 超大目录只渲染前 2000 行，超出给提示。
+           计数取筛选后的总量（S5-24），否则筛选生效时提示里的分母与实际可见集不符 -->
+      <div v-if="filteredEntries.length > RENDER_LIMIT" class="pane-list-limit">
+        仅显示前 {{ RENDER_LIMIT }} 个条目，共 {{ filteredEntries.length }} 个（请用筛选或进入子目录）
       </div>
+      </template>
     </div>
 
     <!-- 新增文件夹对话框（F-2 修复：替代 Electron 下恒返回 null 的 window.prompt） -->
@@ -205,9 +267,11 @@ function closeDriveDropdown(): void {
 // 点击外部关闭盘符下拉
 onMounted(() => {
   document.addEventListener('click', closeDriveDropdown)
+  document.addEventListener('keydown', onGlobalKeydown)
 })
 onUnmounted(() => {
   document.removeEventListener('click', closeDriveDropdown)
+  document.removeEventListener('keydown', onGlobalKeydown)
 })
 
 // 拖拽悬停提示文案
@@ -224,9 +288,70 @@ const entries = computed<any[]>(() =>
   props.side === 'local' ? store.localEntries : store.remoteEntries
 )
 
+// ─── 排序 / 筛选（S5-23 / S5-24） ────────────
+// 管线固定为 筛选 → 排序 → 截断：先缩小集合再排序（省掉对筛掉项的排序），
+// 截断放最后，保证「前 2000」是排序后的前 2000 而非原始序的前 2000。
+// S5-29：兜底默认值。sortState 的 getter 读 store.localSort / remoteSort，
+// 这两个 ref 在 Pinia setup store 里会被自动解包成对象。但模板首次求值若早于
+// store 完成初始化（或 HMR 热更期间拿到半初始化实例），getter 会返回
+// undefined，模板里的 sortState.key 直接崩在 "Cannot read properties of
+// undefined (reading 'key')"。排序是纯展示状态，缺省落到与 store 初始值同
+// 一份的 { name, asc }，既不让 UI 崩，也不会与用户已选的方向不一致。
+const DEFAULT_SORT = { key: 'name' as const, dir: 'asc' as const }
+const sortState = computed(() =>
+  (props.side === 'local' ? store.localSort : store.remoteSort) ?? DEFAULT_SORT
+)
+const filterText = computed(() =>
+  props.side === 'local' ? store.localFilter : store.remoteFilter
+)
+
+// S5-30：筛选栏的展开态。独立于 filterText —— 清空关键字后输入框仍开着，
+// 用户可能还要继续输入；只有再点一次图标或 Esc 才收。有筛选关键字时图标
+// 亮起（pane-btn.active），让收起的栏也能看出「这一栏正在筛」。
+const filterOpen = ref(false)
+const filterInputRef = ref<HTMLInputElement | null>(null)
+
+function toggleFilter(): void {
+  filterOpen.value = !filterOpen.value
+  if (filterOpen.value) {
+    nextTick(() => filterInputRef.value?.focus())
+  }
+}
+
+function onSortClick(key: 'name' | 'size' | 'modified'): void {
+  store.setSort(props.side, key)
+}
+
+function sortArrow(key: 'name' | 'size' | 'modified'): string {
+  if (sortState.value.key !== key) return ''
+  return sortState.value.dir === 'asc' ? '▲' : '▼'
+}
+
+function onFilterInput(e: Event): void {
+  const v = (e.target as HTMLInputElement).value
+  if (props.side === 'local') store.localFilter = v
+  else store.remoteFilter = v
+}
+
+function clearFilter(): void {
+  if (props.side === 'local') store.localFilter = ''
+  else store.remoteFilter = ''
+  // Esc 的语义是「退出筛选」：清空关键字后把输入框也收起来，否则用户按 Esc
+  // 只是让计数消失，输入框还占着一条横带，得再按一次才收。
+  filterOpen.value = false
+}
+
 // B16 修复：渲染上限（不引第三方虚拟滚动库），超大目录只显示前 N 行
 const RENDER_LIMIT = 2000
-const displayEntries = computed<any[]>(() => entries.value.slice(0, RENDER_LIMIT))
+const filteredEntries = computed<any[]>(() =>
+  store.filterEntries(entries.value, filterText.value)
+)
+const displayEntries = computed<any[]>(() => {
+  const sorted = store.sortEntries(filteredEntries.value, sortState.value.key, sortState.value.dir)
+  return sorted.slice(0, RENDER_LIMIT)
+})
+/** 当前可见项的路径序列 —— Shift 区间选与 Ctrl+A 的口径基准（与渲染行逐一对齐） */
+const visiblePaths = computed<string[]>(() => displayEntries.value.map(e => e.path))
 const loading = computed(() =>
   props.side === 'local' ? store.loadingLocal : store.loadingRemote
 )
@@ -402,6 +527,11 @@ function cancelMkdir(): void {
 }
 
 function onRowClick(entry: any, e: MouseEvent): void {
+  // S5-23：Shift 优先于 Ctrl —— 按住 Shift 再点即区间选择，此时 Ctrl 不改变语义
+  if (e.shiftKey) {
+    store.selectRange(props.side, entry.path, visiblePaths.value)
+    return
+  }
   if (e.ctrlKey || e.metaKey) {
     if (props.side === 'local') store.toggleSelectLocal(entry.path)
     else store.toggleSelectRemote(entry.path)
@@ -412,6 +542,17 @@ function onRowClick(entry: any, e: MouseEvent): void {
     if (props.side === 'local') store.toggleSelectLocal(entry.path)
     else store.toggleSelectRemote(entry.path)
   }
+}
+
+// Ctrl/Cmd+A 全选（S5-23）：焦点在筛选框里时不劫持 —— 那里全选的是文本
+function onGlobalKeydown(e: KeyboardEvent): void {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'a') return
+  const el = document.activeElement
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
+  // 只有本栏有内容才接管：两栏都空时不该拦掉浏览器默认行为
+  if (visiblePaths.value.length === 0) return
+  e.preventDefault()
+  store.selectAll(props.side, visiblePaths.value)
 }
 
 async function onRowDblClick(entry: any): Promise<void> {
@@ -563,6 +704,8 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 }
 .pane-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-secondary); }
 .pane-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* S5-30：筛选有内容时图标常亮 —— 输入框收起后仍要看得出这一栏正在筛 */
+.pane-btn.active { color: var(--accent-cyan); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
 .pane-btn svg { width: 12px; height: 12px; }
 
 .breadcrumb-bar {
@@ -655,6 +798,29 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
   display: flex; flex-direction: column;
 }
 .file-list::-webkit-scrollbar { width: var(--pane-scrollbar-w); }
+/* S5-31：导航中的压暗层。旧列表仍在 DOM 里（v-for 不被 v-if 换掉），
+   用 opacity 表达「这一屏暂时只读」—— 比整批清空再冒出更跟手 */
+.file-list.is-loading .file-list-head,
+.file-list.is-loading .file-row,
+.file-list.is-loading .pane-list-limit {
+  opacity: 0.45;
+}
+/* 顶部 2px 进度条：横向扫光，表示目录正在拉取 */
+.pane-loading-bar {
+  position: sticky;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 3;
+  background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+  background-size: 200% 100%;
+  animation: pane-loading-sweep 1.1s linear infinite;
+}
+@keyframes pane-loading-sweep {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
 /* 列头与行都是 flex 子项，默认 flex-shrink:1 会在条目溢出时被压到行盒高度
    （26→18、28→18），而未连接的另一侧仍是标称高度 —— 两栏的横线逐行错位 */
 .file-list-head, .file-row, .pane-list-limit { flex-shrink: 0; }
@@ -684,6 +850,43 @@ function onRowContextMenu(e: MouseEvent, entry: any): void {
 }
 .file-row:hover { background: var(--bg-hover); }
 .file-row.selected { background: color-mix(in srgb, var(--accent-primary) 15%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
+
+/* 筛选内联行（S5-24 / S5-32）：与按钮同排，展开时插在图标与路径收藏之间。
+   宽度钳在 60~100px —— 太宽会把右侧的刷新/新建按钮挤出可视区，
+   太窄则输入一两个词就开始横向撑。 */
+.filter-inline {
+  display: flex; align-items: center; gap: var(--spacing-4);
+  width: clamp(60px, 11vw, 100px);
+}
+.filter-input {
+  flex: 1; min-width: 0;
+  padding: var(--spacing-2) var(--spacing-6);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 0.8462rem;
+  outline: none;
+}
+.filter-input::placeholder { color: var(--text-tertiary); }
+.filter-input:focus { border-color: var(--accent-primary); }
+.filter-clear {
+  width: 1.25rem; height: 1.25rem; line-height: 1;
+  border: none; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-tertiary);
+  cursor: pointer; font-size: 1rem;
+}
+.filter-clear:hover { color: var(--text-primary); background: var(--bg-hover); }
+.filter-count { font-size: 0.7692rem; color: var(--text-tertiary); white-space: nowrap; }
+
+/* 可点击列头（S5-23） */
+.col-sortable {
+  display: flex; align-items: center; gap: var(--spacing-4);
+  cursor: pointer; user-select: none;
+}
+.col-sortable:hover { color: var(--text-primary); }
+.col-sortable.sorted { color: var(--text-primary); }
+.th-arrow { font-size: 0.6154rem; opacity: 0.8; }
 
 .file-name { display: flex; align-items: center; gap: var(--spacing-8); overflow: hidden; }
 .file-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

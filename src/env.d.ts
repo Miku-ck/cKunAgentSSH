@@ -202,6 +202,8 @@ interface ElectronAPI {
   sshDuplicateConnection: (id: string) => Promise<SSHConnectionRecord>
   sshTestConnection: (config: Omit<SSHConnectionRecord, 'tags' | 'createdAt' | 'updatedAt'>) => Promise<SSHTestResult>
   sshMigrateLegacy: (legacy: any[]) => Promise<number>
+  /** 打开 ~/.ssh/config（不存在时先建空文件再打开），返回实际路径 */
+  sshOpenConfig: () => Promise<string>
   // SSH 隧道（端口转发）
   tunnelList: () => Promise<TunnelRule[]>
   tunnelSave: (rule: TunnelRule) => Promise<TunnelRule>
@@ -303,6 +305,12 @@ interface ElectronAPI {
     Promise<import('../shared/github-accel-core').GithubAccelConfig>
   // Git 仓库管理（主进程实现见 electron/git-repos.ts；命令/解析纯逻辑在 shared/git-repos-core.ts）
   gitreposGetRegistry: () => Promise<import('../shared/git-repos-core').GitReposRegistry>
+  /** 只读：枚举某本机仓库的全部 git worktree（任务台「工作树」落点用） */
+  gitreposListWorktrees: (path: string) => Promise<import('../shared/git-repos-core').GitWorktree[]>
+  /** 新建工作树：自动建分支 + 仓库旁目录，返回可直接落点的 worktree */
+  gitreposCreateWorktree: (path: string, branch: string) => Promise<import('../shared/git-repos-core').GitWorktree>
+  /** 清理失效工作树记录（git worktree prune，不碰现存目录） */
+  gitreposPruneWorktrees: (path: string) => Promise<import('../shared/git-repos-core').GitRawResult>
   gitreposAddLocal: (path: string) => Promise<import('../shared/git-repos-core').GitReposRegistry>
   gitreposRemoveLocal: (path: string) => Promise<import('../shared/git-repos-core').GitReposRegistry>
   gitreposSetRemotePaths: (connectionId: string, paths: string[]) => Promise<import('../shared/git-repos-core').GitReposRegistry>
@@ -352,11 +360,12 @@ interface ElectronAPI {
   sftpMkdir: (sshSessionId: string, remotePath: string) => Promise<void>
   sftpMkdirRecursive: (sshSessionId: string, remotePath: string) => Promise<void>
   sftpExists: (sshSessionId: string, remotePath: string) => Promise<boolean>
-  sftpStat: (sshSessionId: string, remotePath: string) => Promise<{ size: number; isDirectory: boolean; modified: number }>
+  sftpStat: (sshSessionId: string, remotePath: string) => Promise<{ size: number; isDirectory: boolean; isSymbolicLink: boolean; modified: number }>
   sftpRename: (sshSessionId: string, oldPath: string, newPath: string) => Promise<void>
   sftpDelete: (sshSessionId: string, remotePath: string) => Promise<void>
+  sftpChmod: (sshSessionId: string, remotePath: string, mode: number) => Promise<void>
   sftpUpload: (transferId: string, sshSessionId: string, localPath: string, remotePath: string, meta?: import('../shared/upload-task-core').UploadTaskMeta) => Promise<void>
-  sftpDownload: (transferId: string, sshSessionId: string, remotePath: string, localPath: string) => Promise<void>
+  sftpDownload: (transferId: string, sshSessionId: string, remotePath: string, localPath: string, meta?: import('../shared/upload-task-core').UploadTaskMeta) => Promise<void>
   sftpCancel: (transferId: string) => Promise<void>
   sftpRegisterUploadTasks: (sshSessionId: string, tasks: import('../shared/upload-task-core').RegisteredUploadTask[]) => Promise<void>
   sftpListUploadTasks: (connectionId: string) => Promise<import('../shared/upload-task-core').UploadTaskRecord[]>

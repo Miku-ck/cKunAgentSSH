@@ -138,6 +138,9 @@
         <div class="ctx-item" @click="handleCtxAction('copyPath')">
           复制路径
         </div>
+        <div v-if="ctxMenu.side === 'remote'" class="ctx-item" @click="handleCtxAction('chmod')">
+          修改权限
+        </div>
         <div class="ctx-item" @click="handleCtxAction('rename')">
           重命名
         </div>
@@ -213,6 +216,16 @@
       :ssh-session-id="store.sshSessionId"
       @close="imagePreview.visible = false"
     />
+
+    <!-- 权限修改（S5-22：仅远端可用） -->
+    <SftpChmodDialog
+      :visible="chmodDialog.visible"
+      :name="chmodDialog.name"
+      :path="chmodDialog.path"
+      :current-bits="chmodDialog.currentBits"
+      @apply="onChmodApply"
+      @cancel="chmodDialog.visible = false"
+    />
   </div>
 </template>
 
@@ -224,12 +237,14 @@ import SftpFileEditor from './SftpFileEditor.vue'
 import SftpTransferDialog from './SftpTransferDialog.vue'
 import SftpConflictDialog from './SftpConflictDialog.vue'
 import SftpImagePreview from './SftpImagePreview.vue'
+import SftpChmodDialog from './SftpChmodDialog.vue'
 import { useSftpStore } from '@/stores/sftp'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useModalFocusTrap } from '@/composables/useModalFocusTrap'
 import { isPreviewable, isImagePreviewable } from '@/utils/language'
+import { rwxStringToMode } from '../../../shared/mode-bits-core'
 import { toFriendlyMessage } from '@/api/client'
 import { buildTransferPlan, type ConflictDecision, type ConflictItem, type ConflictMeta } from '@/utils/transfer-conflict'
 
@@ -368,7 +383,7 @@ async function handleDisconnect(): Promise<void> {
 // 且两批传输交叉时覆盖检查基于陈旧 cwd。用 Promise 链把所有拖拽请求
 // 排队执行，保证"确认 → 传输"原子串行。
 let transferQueue: Promise<unknown> = Promise.resolve()
-function onTransfer(payload: { side: 'local' | 'remote'; paths: string[] }): Promise<void> {
+function onTransfer(payload: { side: 'local' | 'remote'; paths: string[]; targetDir?: string; copy?: boolean }): Promise<void> {
   const run = transferQueue.then(() => doTransfer(payload))
   // 队列链吞掉单个失败，避免一次失败阻塞后续拖拽
   transferQueue = run.then(() => undefined, () => undefined)
@@ -402,6 +417,11 @@ function cancelConflicts(): void {
 function baseName(p: string): string {
   return p.split(/[\\/]/).pop() || p
 }
+/** 同侧复制的目标路径：targetDir 已确定，只需按侧拼名（本地异步走 fs:pathJoin 归一化） */
+async function joinTarget(targetDir: string | undefined, name: string, isRemote: boolean): Promise<string> {
+  if (isRemote) return store.joinRemotePath(name, targetDir)
+  return await store.joinLocalPath(name, targetDir)
+}
 /** 源侧元信息：优先命中已加载目录条目缓存，未命中再 stat 一次（OS 拖拽时不在缓存） */
 async function sourceMeta(lpOrRp: string, isRemote: boolean): Promise<ConflictMeta> {
   const cache = isRemote ? store.remoteEntries : store.localEntries
@@ -411,25 +431,29 @@ async function sourceMeta(lpOrRp: string, isRemote: boolean): Promise<ConflictMe
   return { size: st?.size || 0, modified: st?.modified || 0 }
 }
 
-async function doTransfer(payload: { side: 'local' | 'remote'; paths: string[] }): Promise<void> {
+async function doTransfer(payload: { side: 'local' | 'remote'; paths: string[]; targetDir?: string; copy?: boolean }): Promise<void> {
   // 逐顶层项检查目标是否已存在；命中则连同源/目标元信息组成一条冲突项，
   // 交给弹窗逐项决策。目标不存在（stat 返回 null）即无冲突，不进列表。
   const items: ConflictItem[] = []
   if (payload.side === 'local') {
-    // 上传：源=本地项，目标=远程 cwd 下同名
+    // 上传：源=本地项，目标=远程 cwd 下同名（copy 时目标侧是本地 targetDir）
     for (const lp of payload.paths) {
       const name = baseName(lp)
-      const targetPath = store.joinRemotePath(name)
-      const target = await store.statRemote(targetPath)
+      const targetPath = payload.copy
+        ? await joinTarget(payload.targetDir, name, false)
+        : store.joinRemotePath(name)
+      const target = payload.copy ? await store.statLocal(targetPath) : await store.statRemote(targetPath)
       if (!target) continue
       items.push({ id: targetPath, path: lp, name, targetPath, source: await sourceMeta(lp, false), target })
     }
   } else {
-    // 下载：源=远程项，目标=本地 cwd 下同名
+    // 下载：源=远程项，目标=本地 cwd 下同名（copy 时目标侧是远程 targetDir）
     for (const rp of payload.paths) {
       const name = baseName(rp)
-      const targetPath = await store.joinLocalPath(name)
-      const target = await store.statLocal(targetPath)
+      const targetPath = payload.copy
+        ? store.joinRemotePath(name, payload.targetDir)
+        : await store.joinLocalPath(name)
+      const target = payload.copy ? await store.statRemote(targetPath) : await store.statLocal(targetPath)
       if (!target) continue
       items.push({ id: targetPath, path: rp, name, targetPath, source: await sourceMeta(rp, true), target })
     }
@@ -447,6 +471,14 @@ async function doTransfer(payload: { side: 'local' | 'remote'; paths: string[] }
     if (paths.length === 0) { toast.info('已全部跳过，没有需要传输的文件'); return }
   }
 
+  if (payload.copy) {
+    // S5-21：同侧复制与跨栏传输共用同一条冲突确认路径 —— 此前 localCopy/
+    // remoteCopy 由右键「粘贴」直调，绕过确认，同名项被静默覆盖。
+    if (payload.side === 'local') store.localCopy(paths, payload.targetDir!, renameMap)
+    else store.remoteCopy(paths, payload.targetDir!, renameMap)
+    return
+  }
+
   if (payload.side === 'local') {
     store.uploadFiles(paths, undefined, renameMap)
   } else {
@@ -454,8 +486,25 @@ async function doTransfer(payload: { side: 'local' | 'remote'; paths: string[] }
   }
 }
 
+// ─── 权限修改（S5-22） ─────────────────────
+const chmodDialog = reactive({
+  visible: false,
+  path: '',
+  name: '',
+  currentBits: 0,
+})
+
+/**
+ * 远端 mode 字符串（如 "drwxr-xr-x" / "-rwsr-xr-x"）→ 权限位。
+ * 实现已抽到 shared/mode-bits-core.ts（S5-27）：必须与主进程的渲染同源，
+ * 否则高位权限（SUID/SGID/sticky）会在编辑权限时被静默清零。
+ */
+function modeTextToBits(modeText: string): number {
+  return rwxStringToMode(modeText)
+}
+
 // ─── 右键菜单 ─────────────────────────
-interface AnyEntry { name: string; path: string; isDirectory: boolean }
+interface AnyEntry { name: string; path: string; isDirectory: boolean; mode?: string }
 const ctxMenu = reactive({
   visible: false,
   x: 0, y: 0,
@@ -519,8 +568,9 @@ async function handleCtxAction(action: string): Promise<void> {
     const targetDir = entry?.isDirectory
       ? entry.path
       : (side === 'local' ? store.localCwd : store.remoteCwd)
-    if (side === 'local') await store.localCopy(cb.paths, targetDir)
-    else await store.remoteCopy(cb.paths, targetDir)
+    // S5-21：同侧复制并入 doTransfer 的冲突确认路径（此前直调 localCopy/remoteCopy，
+    // 同名项被静默覆盖）。与跨栏传输共用同一个串行队列。
+    await onTransfer({ side, paths: cb.paths, targetDir, copy: true })
     return
   }
 
@@ -573,6 +623,15 @@ async function handleCtxAction(action: string): Promise<void> {
     return
   }
 
+  if (action === 'chmod' && entry && side === 'remote') {
+    // S5-22：权限位取自列表里现成的 mode 字符串，不必再 stat 一次
+    chmodDialog.path = entry.path
+    chmodDialog.name = entry.name
+    chmodDialog.currentBits = modeTextToBits(entry.mode || '')
+    chmodDialog.visible = true
+    return
+  }
+
   if (action === 'rename' && entry) {
     openRenameDialog(false, entry.name, side, entry.path)
     return
@@ -580,11 +639,27 @@ async function handleCtxAction(action: string): Promise<void> {
 
   if (action === 'delete' && entry) {
     const paths = getCtxPaths(side, entry)
+    // S5-26：远端目录走递归删除（rm -rf），本地目录进回收站 —— 两者的可逆性
+    // 完全不同，确认文案必须分开说，否则「此操作不可撤销」对本地是句假话，
+    // 对远端又低估了后果（用户以为只是删一个空目录）。
+    const hasDir = paths.some(p => {
+      const list = side === 'local' ? store.localEntries : store.remoteEntries
+      return list.find(e => e.path === p)?.isDirectory
+    })
+    const message = side === 'local'
+      ? (paths.length === 1
+        ? `确认删除「${entry.name}」?\n将移入回收站，可恢复。`
+        : `确认删除 ${paths.length} 项?\n将移入回收站，可恢复。`)
+      : hasDir
+        ? (paths.length === 1
+          ? `确认删除「${entry.name}」?\n目录将连同其全部内容一并删除，此操作不可撤销。`
+          : `确认删除 ${paths.length} 项?\n其中包含目录，将连同全部内容一并删除，此操作不可撤销。`)
+        : (paths.length === 1
+          ? `确认删除「${entry.name}」?\n此操作不可撤销。`
+          : `确认删除 ${paths.length} 项?\n此操作不可撤销。`)
     const ok = await confirm({
       title: '删除',
-      message: paths.length === 1
-        ? `确认删除「${entry.name}」?\n此操作不可撤销。`
-        : `确认删除 ${paths.length} 项?\n此操作不可撤销。`,
+      message,
       confirmText: '删除',
       danger: true,
     })
@@ -800,6 +875,17 @@ function onOpenFile(payload: { side: 'local' | 'remote'; entry: AnyEntry }): voi
 async function onFileSaved(): Promise<void> {
   if (fileEditor.side === 'local') await store.localRefresh()
   else await store.remoteRefresh()
+}
+
+async function onChmodApply(mode: number): Promise<void> {
+  const path = chmodDialog.path
+  chmodDialog.visible = false
+  try {
+    await store.remoteChmod(path, mode)
+    toast.success('权限已修改')
+  } catch (err: any) {
+    toast.error(toFriendlyMessage(err, '修改权限失败'))
+  }
 }
 </script>
 
