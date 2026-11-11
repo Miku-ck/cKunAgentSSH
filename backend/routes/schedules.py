@@ -36,7 +36,8 @@ class ScheduleIn(BaseModel):
     # spec 2026-10-27-schedule-task-type：任务分类，仅影响模板与列表分区，不改执行
     task_type: Literal["ops", "daily"] = "ops"
     # spec §6.2：任务绑定的专家 slug，新建默认通用（general）；存量迁移回填 general_ops
-    expert_slug: str = "general"
+    # 上限与 experts.slug 同口径（routes/experts.py:26 / db/experts.py:29 均为 64）
+    expert_slug: str = Field(default="general", max_length=64)
     schedule_type: str = "interval"
     # 审查修复：加范围校验 — 0/负值入库后 compute_next_run 算出 ≤now 的时间，
     # 每 30s tick 都触发无头 SSH Agent 运行，持续消耗模型调用与 SSH 连接
@@ -59,7 +60,8 @@ class SchedulePatch(BaseModel):
     # spec 2026-10-27-schedule-task-type：类型创建后不可变，此字段仅用于拒绝变更（见 update_schedule）
     task_type: Optional[Literal["ops", "daily"]] = None
     # spec §6.2：专家 slug 可改（与 task_type 不同，绑定关系允许后续调整）
-    expert_slug: Optional[str] = None
+    # 约束与 ScheduleIn 逐字对齐（同 name 的教训：POST 挡住的超长值不得从 PATCH 绕过）
+    expert_slug: Optional[str] = Field(default=None, max_length=64)
     schedule_type: Optional[str] = None
     # 审查修复：与 ScheduleIn 一致的范围校验
     interval_minutes: Optional[int] = Field(default=None, ge=1, le=525600)
@@ -92,6 +94,10 @@ async def create_schedule(req: ScheduleIn):
     # model_dump 对未变的 req 是确定性的，序列化一次复用即可
     data = req.model_dump()
     _validate_fields(data)
+    # spec §6.2：expert_slug 必须指向已存在的专家。否则无头 run 解析时 fail-closed 抛错，
+    # 任务每个 tick 都失败 —— 把校验左移到创建入口，与 headless 的 fail-closed 同口径。
+    if await asyncio.to_thread(db.get_expert_by_slug, req.expert_slug) is None:
+        raise HTTPException(status_code=400, detail=f"专家不存在: {req.expert_slug}")
     from agent.schedule_engine import get_schedule_engine, compute_next_run
     next_at = compute_next_run(data)
     created = await asyncio.to_thread(
@@ -126,6 +132,11 @@ async def update_schedule(schedule_id: str, req: SchedulePatch):
     if explicit_type is not None and explicit_type != existing.get("task_type"):
         raise HTTPException(status_code=422, detail="任务类型创建后不可修改")
     patch.pop("task_type", None)
+    # spec §6.2：改绑专家时同样校验存在性（与 create 同口径）。drop_nulls 已丢显式 null，
+    # 故只在真的传了 expert_slug 时查库，未传则不动原绑定。
+    if "expert_slug" in patch:
+        if await asyncio.to_thread(db.get_expert_by_slug, patch["expert_slug"]) is None:
+            raise HTTPException(status_code=400, detail=f"专家不存在: {patch['expert_slug']}")
     merged = {**existing, **patch}
     if merged.get("schedule_type") not in _SCHEDULE_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的周期类型: {merged.get('schedule_type')}")
