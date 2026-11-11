@@ -43,7 +43,7 @@ The app has no separate "chat mode". Conversations and executions in the task co
 
 - The ReAct decision loop is driven by the Harness; the interceptor chain covers skill injection, filesystem protection, loop detection, permission gates, auditing, dynamic step budgets, cost and wall-clock circuit breakers, confidence, reflection and review, clarification, and plan discipline.
 - Step budgets are allocated dynamically by task complexity; as the limit approaches, the model is prompted to converge, and on the final iteration tools are physically disabled to avoid "fake completion"; completion verification and goal self-check run before finishing.
-- Before a run, read-only probing detects the target machine's distro, init, package manager, and login identity and writes them into the host profile; the corresponding operating discipline is injected for change versus read-only tasks.
+- Before a run, read-only probing detects the target machine's distro, init, package manager, and login identity and writes them into the host profile; task nature (read-only / potential change) is injected as universal metadata up front, while ops methodology rides the Ops Expert identity section in full.
 - Reflection is triggered after a run finishes or fails; the policy engine evolves iteration limits, temperature, and thinking switches based on recent completion, efficiency, robustness, and cost, with bounds to prevent oscillation. A background heartbeat reconciles memory and trims decay every 5 minutes, and distills repeated failure patterns into experience candidates.
 
 **Tools and remote execution**
@@ -84,6 +84,14 @@ The app has no separate "chat mode". Conversations and executions in the task co
 
 - After a single conversation turn ends, the system can automatically generate a session title, extract memories, and distill skills; skill generation is triggered every 3 turns with a count cap, all of which can be disabled in Settings.
 - Enabled skills can be matched automatically by trigger words; three ops skills are built in: `linux-ops-triage`, `nginx-service-diagnose`, and `ops-change-safety`.
+
+**Experts and general identity**
+
+- The default identity is a general-purpose AI assistant; ops, research, and copywriting are optional expert packs — domains are not hard-coded and can be added or removed.
+- Four built-in experts: general (inherits all defaults), Ops Expert (general_ops: ops role + change/read-only methodology + ops tool discipline), research, and copywriting. Research and copywriting are restricted to no execution tools, no plugins, and global-only memory scope.
+- Experts can only tighten, never loosen: tools/skills intersect, permissions take the stricter side, iterations take min, memory scope only shrinks; corrupted config fails closed.
+- When no expert is selected and an ops signal is detected (change verb or ops noun), a non-blocking suggestion chip appears above the input area with "Switch & re-run" or "Dismiss"; no silent switching.
+- Unattended runs: runbooks always use the Ops Expert; scheduled tasks can bind an expert — legacy tasks are migrated to Ops Expert, new tasks default to general.
 
 **Cross-page AI entry points**
 
