@@ -1,17 +1,24 @@
-"""Agent system prompt 拼装测试（routes/agent.py::_build_agent_system_prompt）。
+"""Agent system prompt 组装测试（routes/agent.py::_build_agent_system_prompt）。
 
-本文件锁住"运维方法论 + 目标机环境画像"两条新增注入的契约：
-  - 变更任务 → OPS_METHOD_CHANGE（含影响说明/回滚），只读任务 → OPS_METHOD_READONLY；
-  - is_change=None（未做意图识别）→ 按变更处理（两条误判路径代价不对称）；
-  - 环境画像紧跟角色设定注入，且对话型任务不注入；
-  - 原有工具/拆分/子Agent/输出格式引导不得被挤掉。
+通用 harness 化后的新契约（spec §5/§8）：
+  - 核心中性：general（identity_section=""）下不含运维身份/方法论/运维工具纪律；
+  - 组装新序：时间 → 任务性质提示（仅非对话）→ 中性基础身份 → 专家身份段 → 姿态 → goal → 画像 → 用户 prompt → 分支引导；
+  - 专家身份段紧随基础身份、先于 goal/画像（不再末尾追加）；
+  - 任务性质提示：非对话含且先于身份段，None→按变更，对话分支不含；
+  - 运维语义等价：传入运维身份段时角色 + 方法论两变体 + 工具纪律齐全；
+  - 通用引导（记忆/拆分/子Agent/输出格式）不得被挤掉。
 """
+import inspect
+
 import pytest
 
-from prompts import OPS_METHOD_CHANGE, OPS_METHOD_READONLY
+from agent.expert_policy import build_identity_section, builtin_general_ops, resolve_expert
+from prompts import BASE_IDENTITY_PROMPT, OPS_METHOD_CHANGE, OPS_METHOD_READONLY
 from routes.agent import AgentRunRequest, _build_agent_system_prompt
 
 PROFILE = "[目标机环境] 发行版: Ubuntu 22.04.3 LTS; init: systemd; 包管理器: apt-get"
+OPS_SECTION = build_identity_section(resolve_expert(builtin_general_ops()))
+
 
 def _req(**kw) -> AgentRunRequest:
     base = dict(task="重启 nginx", conversation_id="c1")
@@ -19,163 +26,133 @@ def _req(**kw) -> AgentRunRequest:
     return AgentRunRequest(**base)
 
 
-# ── 运维方法论二选一 ───────────────────────────────────────────────────────
+# ── 核心中性（general 策略）─────────────────────────────────────────────────
 
-def test_change_task_gets_change_method():
-    prompt = _build_agent_system_prompt(_req(), "", False, is_change=True)
-    assert OPS_METHOD_CHANGE in prompt
-    assert OPS_METHOD_READONLY not in prompt
-
-
-def test_readonly_task_gets_readonly_method():
-    prompt = _build_agent_system_prompt(_req(), "", False, is_change=False)
-    assert OPS_METHOD_READONLY in prompt
-    assert OPS_METHOD_CHANGE not in prompt
-    assert "变更任务" not in prompt
+@pytest.mark.parametrize("fragment", [
+    "智能运维助手", "远程运维方法", "log_cleanup", "读文件用 file_read",
+])
+def test_core_prompt_is_domain_neutral(fragment):
+    """证伪：把 SSH_MODE_PROMPT 注回核心 → 红。"""
+    prompt = _build_agent_system_prompt(_req(), PROFILE, False, is_change=True)
+    assert fragment not in prompt
 
 
-def test_unknown_is_change_defaults_to_change_method():
-    """未做意图识别时按变更处理：宁可多说影响说明，不可给出"不改变目标机状态"的错误前提"""
+def test_core_uses_neutral_base_identity():
     prompt = _build_agent_system_prompt(_req(), "", False)
-    assert OPS_METHOD_CHANGE in prompt
-    assert OPS_METHOD_READONLY not in prompt
+    assert BASE_IDENTITY_PROMPT in prompt
 
 
-def test_change_method_is_self_conditioning():
-    """变更方法论第 0 条允许模型在探测后判定为纯只读并自行降级 ——
-    这是"宁滥勿缺"判定策略不至于污染只读追问的关键"""
-    assert "纯只读" in OPS_METHOD_CHANGE
+# ── 任务性质提示 ───────────────────────────────────────────────────────────
+
+def test_task_nature_hint_readonly():
+    prompt = _build_agent_system_prompt(_req(), "", False, is_change=False)
+    assert "[任务性质] 只读" in prompt
+
+
+def test_task_nature_hint_change():
     prompt = _build_agent_system_prompt(_req(), "", False, is_change=True)
+    assert "[任务性质] 可能变更" in prompt
+
+
+def test_task_nature_hint_unknown_defaults_to_change():
+    """证伪：删掉 None 分支 → 红。"""
+    prompt = _build_agent_system_prompt(_req(), "", False)
+    assert "[任务性质] 未判定（按变更对待）" in prompt
+
+
+def test_task_nature_hint_before_identity_and_absent_in_conversation():
+    prompt = _build_agent_system_prompt(_req(), "", False, is_change=True, identity_section=OPS_SECTION)
+    assert prompt.index("[任务性质]") < prompt.index(OPS_SECTION)
+    conv = _build_agent_system_prompt(_req(task="你好"), "", True)
+    assert "[任务性质]" not in conv
+
+
+# ── 专家身份段位置 ─────────────────────────────────────────────────────────
+
+def test_identity_section_right_after_base_before_goal_and_profile():
+    """证伪：挪回末尾追加 → 红。"""
+    prompt = _build_agent_system_prompt(
+        _req(), PROFILE, False, is_change=True,
+        goal_text="[当前目标] 梳理索引", identity_section=OPS_SECTION,
+    )
+    assert prompt.index(BASE_IDENTITY_PROMPT) < prompt.index(OPS_SECTION)
+    assert prompt.index(OPS_SECTION) < prompt.index("[当前目标]")
+    assert prompt.index(OPS_SECTION) < prompt.index(PROFILE)
+
+
+def test_empty_identity_section_adds_no_bytes():
+    with_empty = _build_agent_system_prompt(_req(), "", False, identity_section="")
+    without = _build_agent_system_prompt(_req(), "", False)
+    assert with_empty == without
+
+
+# ── 运维语义等价（传入运维身份段）──────────────────────────────────────────
+
+def test_ops_section_carries_role_and_both_methods():
+    prompt = _build_agent_system_prompt(_req(), "", False, is_change=True, identity_section=OPS_SECTION)
+    assert "智能运维助手" in prompt
+    assert OPS_METHOD_READONLY in prompt
+    assert OPS_METHOD_CHANGE in prompt
     assert "纯只读" in prompt
 
 
-# ── 目标机环境画像注入 ─────────────────────────────────────────────────────
+# ── 画像注入 ───────────────────────────────────────────────────────────────
 
 def test_host_profile_injected():
-    prompt = _build_agent_system_prompt(_req(), PROFILE, False)
-    assert PROFILE in prompt
+    assert PROFILE in _build_agent_system_prompt(_req(), PROFILE, False)
 
 
-def test_host_profile_placed_before_methodology_and_tool_guidance():
+def test_host_profile_before_general_tool_guidance():
     prompt = _build_agent_system_prompt(_req(), PROFILE, False)
-    assert prompt.index(PROFILE) < prompt.index(OPS_METHOD_CHANGE)
     assert prompt.index(PROFILE) < prompt.index("工具使用效率")
 
 
 def test_host_profile_omitted_when_empty():
-    prompt = _build_agent_system_prompt(_req(), "", False)
-    assert "[目标机环境]" not in prompt
+    assert "[目标机环境]" not in _build_agent_system_prompt(_req(), "", False)
 
 
-def test_host_profile_not_injected_for_conversation_task():
-    """对话型任务即便传了画像也不注入（不调工具，环境事实无意义）"""
+def test_host_profile_not_injected_for_conversation():
     prompt = _build_agent_system_prompt(_req(task="你好"), PROFILE, True)
     assert PROFILE not in prompt
-    assert "[目标机环境]" not in prompt
 
 
-# ── 对话型分支 ─────────────────────────────────────────────────────────────
+# ── 对话分支 ───────────────────────────────────────────────────────────────
 
-def test_conversation_task_skips_methodology_and_tool_guidance():
+def test_conversation_skips_tools_and_uses_neutral_identity():
     prompt = _build_agent_system_prompt(_req(task="你好"), "", True, is_change=False)
-    assert OPS_METHOD_CHANGE not in prompt
-    assert OPS_METHOD_READONLY not in prompt
+    assert "智能运维助手" not in prompt
     assert "工具使用效率" not in prompt
     assert "子 Agent" not in prompt
     assert "纯对话型问题" in prompt
+    assert BASE_IDENTITY_PROMPT in prompt
 
 
-# ── 原有引导不得被挤掉（回归守护）─────────────────────────────────────────
+# ── 通用引导回归守护 ───────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("fragment", [
-    "工具使用效率",
-    "长任务规则",
-    "任务拆分",
-    "子 Agent",
-    "输出格式",
-])
-def test_existing_guidance_preserved(fragment):
-    prompt = _build_agent_system_prompt(_req(), PROFILE, False, is_change=True)
-    assert fragment in prompt
+@pytest.mark.parametrize("fragment", ["工具使用效率", "记忆使用", "任务拆分", "子 Agent", "输出格式"])
+def test_general_guidance_preserved(fragment):
+    assert fragment in _build_agent_system_prompt(_req(), PROFILE, False, is_change=True)
 
 
-def test_time_and_ops_role_present_for_ops_task():
-    prompt = _build_agent_system_prompt(_req(), "", False)
-    assert "[系统时间]" in prompt
-    assert "cKunAgentSSH 的智能运维助手" in prompt
+def test_memory_tool_guidance_names_tools():
+    prompt = _build_agent_system_prompt(_req(), "", False, is_change=True)
+    for name in ("memory_search", "memory_add", "block_update", "memory_invalidate"):
+        assert name in prompt
 
 
-def test_conversation_task_uses_neutral_identity():
-    """纯对话不得自称"智能运维助手"，也不得复述运维能力清单。
-
-    旧实现里角色段是一段固定常量（MODE_PROMPTS["ssh"] 坍缩后的产物），无条件
-    注入到每一轮 run。用户没选专家、只发一句"你好"时，模型手里唯一的身份描述
-    就是那段文本，于是把这六项能力当成自我介绍念出来。角色段现在按任务性质
-    二选一：运维任务用 SSH_MODE_PROMPT，纯对话用 CHAT_MODE_PROMPT。
-    """
-    prompt = _build_agent_system_prompt(_req(task="你好"), "", True, is_change=False)
-    assert "智能运维助手" not in prompt
-    assert "Linux 系统管理" not in prompt
-    assert "请用中文直接回答" in prompt
-    # 输出约定必须在两个分支都保留：代码块包裹 + 风险说明
-    assert "```bash" in prompt
+def test_time_injection_present():
+    assert "[系统时间]" in _build_agent_system_prompt(_req(), "", False)
 
 
-def test_ops_role_absent_from_conversation_even_with_profile():
-    """带画像/目标/自定义 prompt 的对话轮同样不能把运维身份漏回来"""
-    prompt = _build_agent_system_prompt(
-        _req(task="你是谁", system_prompt="[自定义] 严格模式"), PROFILE, True,
-        goal_text="[当前目标] 梳理数据库索引",
-    )
-    assert "智能运维助手" not in prompt
-    assert "[自定义] 严格模式" in prompt
-
-
-def test_user_system_prompt_appended_and_reflection_backdoor_gone():
-    """v2 反思记忆走统一检索（[相关记忆]），不再有 system prompt 的独立注入参数。
-
-    原 reflection_injection 后门会把 agent_strategies 的近 3 条反思无条件拼进
-    系统提示 —— 与记忆库同源却绕过去重/相关性/预算三道闸，两通道迟早互相矛盾。
-    """
-    import inspect
-
-    prompt = _build_agent_system_prompt(
-        _req(system_prompt="[自定义] 严格模式"),
-        PROFILE,
-        False,
-    )
+def test_user_system_prompt_appended_and_no_backdoor_params():
+    prompt = _build_agent_system_prompt(_req(system_prompt="[自定义] 严格模式"), PROFILE, False)
     assert "[自定义] 严格模式" in prompt
     params = inspect.signature(_build_agent_system_prompt).parameters
     assert "reflection_injection" not in params
     assert "host_profile_text" not in params
 
 
-def test_memory_tool_guidance_present():
-    """记忆双通道的用法引导必须随运维任务注入，否则模型不知道有工具可主动查/记"""
-    prompt = _build_agent_system_prompt(_req(), "", False, is_change=True)
-    assert "记忆使用" in prompt
-    for name in ("memory_search", "memory_add", "block_update", "memory_invalidate"):
-        assert name in prompt
-    conv = _build_agent_system_prompt(_req(task="你好"), "", True)
-    assert "记忆使用" not in conv
-
-
-def test_log_cleanup_guidance_present():
-    """清理日志必须指向 log_cleanup 预览，而不是 find -delete / rm 变体。
-
-    2026-10-27 事故：模型没想起来有 log_cleanup，先 find -exec 再 pip cache
-    再 rm，连环撞 prod 策略拒绝与澄清向导。
-    """
-    prompt = _build_agent_system_prompt(_req(), "", False, is_change=True)
-    assert "log_cleanup" in prompt
-    assert "dry_run" in prompt
-    assert "find -delete" in prompt
-    assert "不要构造删除命令的变体" in prompt
-    conv = _build_agent_system_prompt(_req(task="你好"), "", True)
-    assert "log_cleanup" not in conv
-
-
-# ── 对话姿态（workflow_mode：goal / plan / 未表态）──────────────────────────
+# ── 对话姿态（workflow_mode）──────────────────────────────────────────────
 
 def test_goal_posture_injects_goal_prompt():
     prompt = _build_agent_system_prompt(_req(workflow_mode="goal"), "", False)
@@ -189,23 +166,14 @@ def test_plan_posture_injects_plan_prompt():
     assert "「目标」姿态" not in prompt
 
 
-def test_absent_posture_injects_neither_prompt():
-    """未表态（字段缺省 → None）时两种姿态都不注入。
-
-    这是「目标」chip 的 × 能真正关掉的前提：若 None 退化成 goal，前端关掉姿态
-    与保持原样发出的是同一份提示词 —— 开关能拨，但拨的是个摆设。
-    """
+def test_absent_posture_injects_neither():
     prompt = _build_agent_system_prompt(_req(), "", False)
     assert "「目标」姿态" not in prompt
     assert "「计划」姿态" not in prompt
-    # 姿态缺席不影响其余注入
-    assert OPS_METHOD_CHANGE in prompt
 
 
 def test_workflow_mode_field_accepts_null_and_rejects_unknown():
-    """Optional[Literal] —— null 合法，脏值 422 而不是静默退化成某个姿态。"""
     from pydantic import ValidationError
-
     assert _req(workflow_mode=None).workflow_mode is None
     for junk in ("Goal", "goals", "any"):
         with pytest.raises(ValidationError):

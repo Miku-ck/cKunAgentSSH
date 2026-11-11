@@ -43,7 +43,7 @@ from agent.memory import retriever as memory_retriever
 from agent.memory.embedding import get_embedding_client
 from agent.consciousness_tick import get_global_tick
 from agent.pending_delivery import PendingDeliveries
-from prompts import _current_time_str, SSH_MODE, SSH_MODE_PROMPT, CHAT_MODE_PROMPT
+from prompts import _current_time_str, SSH_MODE
 from safe_tokens import safe_max_tokens
 
 if TYPE_CHECKING:
@@ -187,84 +187,59 @@ def _build_agent_system_prompt(
     is_conversation_task: bool,
     is_change: Optional[bool] = None,
     goal_text: str = "",
+    identity_section: str = "",
 ) -> str:
-    """构建 Agent 系统提示
+    """构建 Agent 系统提示（通用 harness 新序，spec §5）
 
-    拼装顺序：时间 → 模式角色 → **当前目标** → 画像块 → 用户 prompt
-              → 运维方法论 → 工具/输出引导
+    拼装顺序：时间 → 任务性质提示（仅非对话）→ 中性基础身份 → 专家身份段
+              → workflow 姿态 → goal → 画像块 → 用户 system_prompt
+              → [对话引导 | 通用工具纪律 + 记忆/拆分/子Agent/输出格式]
 
-    Args:
-        profile_text: 画像块渲染结果（agent.memory.blocks.render_for_context），
-            含用户偏好、操作规则与目标机环境事实，已按 memory.blocks_budget_tokens
-            裁剪；空串不注入
-        is_change: 任务是否可能改变目标机状态。None 表示未做意图识别，
-            此时按"变更"处理 —— 方向性取舍见下方注释。
-        goal_text: 会话当前工作流阶段注入段（含当前阶段与相应工件），空串不注入。
-            紧跟角色设定插入：目标是「任务目的」，与角色同属身份层，放最靠前
-            以获得最高注意力；环境事实、用户 prompt 等方法层信息排其后。
-            对话型任务同样注入 —— 用户一旦声明目标即为全程约束，纪律第 4 条
-            处理的正是「新要求与目标冲突」，纯问答场景同样适用。
+    identity_section: 专家身份段（build_identity_section(policy) 的结果），空串不追加任何字节。
+        紧随基础身份注入（身份层放最靠前以获得最高注意力），不再末尾追加。
+    is_change: 任务是否可能改变状态。None=未做意图识别，提示文案按「未判定（按变更对待）」，
+        不对称取舍保留（运维包选择规则消费该提示）。
     """
-    from prompts import OPS_METHOD_CHANGE, OPS_METHOD_READONLY
+    from prompts import BASE_IDENTITY_PROMPT, GENERAL_TOOL_DISCIPLINE
 
-    # 开头注入当前时间（解决 LLM 训练数据截止导致日期/星期回答过时的问题）
     time_injection = (
         f"[系统时间] 当前时间：{_current_time_str()}。"
         f"如用户询问日期/星期/时间，请以本信息为准，不要使用训练数据中的旧时间。"
     )
+    parts = [time_injection]
 
-    # 拼装：时间 → 角色（运维/纯对话二选一）→ 用户 system_prompt → 画像块
-    # 角色段按任务性质切换而非无条件固定：SSH_MODE_PROMPT 里的"智能运维助手"是
-    # 产品身份，只在真正要动服务器时成立。用户没选专家 + 只发了句"你好"时注入它，
-    # 模型会把那段能力描述当成自我介绍念出来（实测复述六项运维清单）。
-    parts = [time_injection, CHAT_MODE_PROMPT if is_conversation_task else SSH_MODE_PROMPT]
-    # 对话姿态：由前端模式选择器决定（goal=聚焦目标 / plan=先方案后动手）。
-    # 仅对非纯对话型任务注入（纯问答不需要方法论姿态）。
-    # workflow_mode 为 None = 用户未表态（前端 × 清掉后），此时不注入任何姿态段：
-    # 若退化成 goal，× 就只是个能让 chip 消失、却什么都不关的摆设。
+    # 任务性质提示：通用元数据，前置在身份层之前；运维身份段的选择规则引用它。
+    if not is_conversation_task:
+        if is_change is False:
+            nature = "只读"
+        elif is_change is True:
+            nature = "可能变更"
+        else:
+            nature = "未判定（按变更对待）"
+        parts.append(f"[任务性质] {nature}")
+
+    # 中性基础身份（领域无关，恒注入）+ 专家身份段（空串不加字节）
+    parts.append(BASE_IDENTITY_PROMPT)
+    if identity_section:
+        parts.append(identity_section)
+
+    # workflow 姿态：仅非对话 + 用户显式表态（None=未表态不注入，× 才能真关掉）
     if not is_conversation_task and req.workflow_mode is not None:
         parts.append(_WORKFLOW_MODE_PROMPTS[req.workflow_mode])
-    # 会话目标：每轮 run 都复现，是「目标不漂移」的主手段
     if goal_text:
         parts.append(goal_text)
-    # 画像块：常驻的已知事实（用户偏好 / 操作规则 / 目标机环境），让"这是台什么机器、
-    # 用户要什么"先于任何命令生成进入上下文，避免模型凭训练数据印象对 Ubuntu 发 yum。
-    # 无 SSH 会话时主机块文案会显式声明"运维工具不在本机执行"。
-    # 对话型任务不注入（不调工具，环境与操作规则无意义）——即便调用方传了也在此拦掉。
     if profile_text and not is_conversation_task:
         parts.append(profile_text)
     if req.system_prompt:
         parts.append(req.system_prompt)
 
     if is_conversation_task:
-        # 对话型任务：跳过工具效率/任务拆分/子Agent/输出格式等大段引导
         parts.append(
             "本任务为纯对话型问题，请直接简洁回答，不要调用任何工具，不要做长篇规划。"
             "回答应基于你自身的身份和能力，避免引用无关上下文或记忆。"
         )
     else:
-        # 运维方法论：变更类任务与只读任务的处置方式不同（见 prompts.py）。
-        # is_change=None（未做意图识别）时按"变更"处理 —— 两条误判路径代价不对称：
-        # 对只读任务多说一段影响说明，顶多啰嗦；对变更任务注入"本任务不改变目标机状态"
-        # 则是给出错误前提。OPS_METHOD_CHANGE 第 0 条本身要求模型在纯只读时自行降级。
-        parts.append(
-            OPS_METHOD_READONLY if is_change is False else OPS_METHOD_CHANGE
-        )
-        # 工具使用效率指引：优先专用运维工具，减少 shell 拼命令与重复读取
-        parts.append(
-            "工具使用效率：优先使用专用工具而非 shell_exec 拼命令——读文件用 file_read、"
-            "改文件用 file_edit、搜内容用 file_grep、找文件用 file_glob、看日志用 log_read、"
-            "查进程用 process_inspect、看资源用 sys_overview、探端口用 network_probe、"
-            "管服务用 service_manage。基于返回内容直接推理，避免短时间内重复读取同一内容；"
-            "查看大文件的不同位置时优先指定 offset/limit 读取相关片段。"
-            "清理日志用 log_cleanup（默认 dry_run 只列出匹配文件，把清单给用户确认后"
-            "再用 dry_run=false 删除），不要用 find -delete / rm -rf 手工拼删除命令；"
-            "生产环境删除需预先在 allowlist 登记 log_cleanup，但试运行预览无需登记。"
-            "若目标目录不在 log_cleanup 允许范围（/tmp、/var/tmp、/var/log 应用子目录、"
-            "agent 托管日志目录）内，直接告知用户该目录需人工清理并给出命令，"
-            "不要构造删除命令的变体。"
-        )
-        # 记忆通道引导：预检索注入是"被动想起来"，工具是"主动查/记/纠错"
+        parts.append(GENERAL_TOOL_DISCIPLINE)
         parts.append(
             "记忆使用：上下文里 [画像] 是常驻已知事实、[相关记忆] 是本轮检索到的历史经验，"
             "可直接引用无需再调工具。需要更多历史经验、或判断某做法在其他主机上的先例时用 "
@@ -272,31 +247,12 @@ def _build_agent_system_prompt(
             "本轮不生效）；用户给出持久偏好、或要修正 [画像] 里的既有内容时用 block_update；"
             "发现 [相关记忆] 里的事实已被证伪时用 memory_invalidate 作废它，不要留着互相矛盾的记忆。"
         )
-        # 探测命令构建规范：多段探测用 ; 串联而非 &&；exit 非零属预期，不是连接异常
-        parts.append(
-            "探测命令规则：一次执行多段探测/排查命令时用 ; 串联各段，不要用 &&——"
-            "du/find/ls 遇到无权限路径会以非零码退出（属预期），&& 链会因此中断后续段落。"
-            "命令 exit code 非零不等于连接或执行异常：先看已捕获的输出内容再下结论"
-            "（du 仍会输出可读部分的大小）。"
-            "注意：末段 `echo ...:$?` 捕获的是整行最后一条命令的退出码，多段探测时"
-            "末段若因权限报错会把整行标成失败。对以探测/统计为主的命令链，建议在结尾追加"
-            "`; true` 使整体退出码收敛为 0，避免把可读的探测结果误报为失败；对真正需要"
-            "判断成败的关键命令则不要追加。"
-        )
-        # 长任务指引：>60s 的任务必须走后台，禁止 shell_exec 同步死等
-        parts.append(
-            "长任务规则：预计执行超过 60 秒的任务（大文件传输、构建、批量巡检、等待类操作）"
-            "必须用 job_run(target='remote') 后台启动，再用 job_output(job_id, wait=10~30) "
-            "轮询输出，需要停止时用 job_kill。不要用 shell_exec 同步等待（超时上限 120 秒）。"
-        )
-        # 任务拆分指引：鼓励 Agent 把大任务拆成可独立验证的子任务
         parts.append(
             "任务拆分：面对复杂任务（涉及多文件修改、多步骤验证、跨模块重构等），请先在首轮输出一个简短的"
             "子任务清单（用编号列表），然后逐个完成并验证。每完成一个子任务就明确标注"
             "'✓ 子任务 N 完成'，便于追踪进度。若某个子任务卡住，先跳过并继续后续子任务，"
             "最后统一汇报未完成项。这样即使迭代数耗尽，也能保证部分成果交付。"
         )
-        # 子 Agent 指引：告知可用 spawn_subagent 工具委派独立子任务
         parts.append(
             "子 Agent：你可以使用 spawn_subagent 工具把独立子任务（如代码审查、方案设计、文档生成、"
             "测试用例生成等）交给一个子 Agent 处理。子 Agent 是一次无工具的 LLM 推理调用，"
@@ -304,7 +260,6 @@ def _build_agent_system_prompt(
             "可选 extra_context 提供代码片段等上下文。子 Agent 返回结果后，你负责整合并执行后续操作。"
             "合理使用子 Agent 可以避免主上下文被细节淹没，提高复杂任务的执行效率。"
         )
-        # 输出格式约束：避免中英文混排、过程性内容污染最终报告
         parts.append(
             "输出格式：在工具调用迭代过程中保持输出简洁，避免把每一步的内心独白、英文碎碎念或执行日志写入正文。"
             "完成所有操作后，用结构化中文报告总结：先给总体结论，再用 ## 二级标题分节，每个修复点独立成段，"
@@ -980,18 +935,15 @@ async def agent_run(req: AgentRunRequest, request: Request):
     permission_mode = clamp_permission_mode(permission_mode, policy.permission_ceiling)
 
     # M3 修复：提取 system prompt 构建为独立函数
+    # 专家身份段在组装器内紧随基础身份注入（spec §5），不再末尾追加。
     final_system_prompt = _build_agent_system_prompt(
         req,
         profile_text,
         is_conversation_task,
-        # pre_intention 为 None 表示本次未做意图识别（enable_intention_guide=False）
         is_change=pre_intention.is_change if pre_intention else None,
         goal_text=goal_text,
+        identity_section=build_identity_section(policy),
     )
-    # 身份段只在专家配置了非空身份时追加；空串不加任何字节（连换行都不加）
-    _expert_identity = build_identity_section(policy)
-    if _expert_identity:
-        final_system_prompt = final_system_prompt + "\n\n" + _expert_identity
 
     # ── 插件工具装配（MCP）──
     # 只加载「已启用 + 已确认」且被专家允许的插件；单个插件失败只记 warning，
