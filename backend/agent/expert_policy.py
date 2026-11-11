@@ -13,9 +13,9 @@
 - 迭代上限取 min，且对动态预算同样是硬顶；
 - 记忆 scope 只允许收缩到 global / host / none，永远碰不到 `persona:*`。
 
-`general_ops`（通用运维）是全继承的内置专家：未选专家与选中它，在 prompt、
-模型、工具、权限、迭代、记忆六个面上必须完全一致。差别只允许出现在归因
-元数据（快照里有没有专家名）——这条由 test_expert_policy_legacy_noop.py 钉住。
+`general`（通用）是全继承的内置专家：未选专家与选中它完全一致；`general_ops`
+是真运维包（身份段含运维角色与方法论）。这条由 test_expert_policy_legacy_noop.py
+与 test_expert_builtin_packs.py 钉住。
 
 配置损坏一律 fail-closed 抛 ValueError，绝不把「解析失败的 JSON」当成
 「继承现状」：那会把一个被截断的工具白名单悄悄放大成全部工具。
@@ -26,8 +26,14 @@ import json
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Optional, Sequence
 
-DEFAULT_EXPERT_SLUG = "general_ops"
-DEFAULT_EXPERT_NAME = "通用运维"
+from prompts import (
+    COPYWRITING_IDENTITY_PROMPT,
+    OPS_IDENTITY_PROMPT,
+    RESEARCH_IDENTITY_PROMPT,
+)
+
+DEFAULT_EXPERT_SLUG = "general"
+DEFAULT_EXPERT_NAME = "通用"
 
 # 权限严格度：数值越大越严格。未知值按 normal 处理（不放宽、也不误升级成 plan）。
 _PERMISSION_STRICTNESS = {"auto": 0, "normal": 1, "plan": 2}
@@ -84,12 +90,22 @@ def _parse_json_list(raw: object, field: str) -> Optional[tuple]:
     return tuple(str(x) for x in value)
 
 
-def builtin_general_ops() -> dict:
-    """内置默认专家种子行：全继承，选中它等价于没有专家。"""
+# 研究/文案包共享的「无执行」工具允许集：联网检索 + 待办 + 技能 + 子Agent + 记忆 + 经验检索。
+# 不含 shell_exec / ops_* / file_* / job_* / undo_restore / read_image —— 执行工具物理缺席。
+_DOMAIN_READONLY_TOOLS = (
+    "web_search", "web_fetch",
+    "todo_write", "load_skill", "spawn_subagent",
+    "memory_search", "memory_add", "memory_invalidate", "block_update",
+    "runbook_search",
+)
+
+
+def _builtin_base(slug: str, name: str, description: str) -> dict:
+    """内置种子行骨架：全继承 + 启用 + builtin 标记。各领域包按需收紧。"""
     return {
-        "slug": DEFAULT_EXPERT_SLUG,
-        "name": DEFAULT_EXPERT_NAME,
-        "description": "默认运维智能体：模型、工具、技能、权限与记忆全部继承全局设置。",
+        "slug": slug,
+        "name": name,
+        "description": description,
         "identity_prompt": "",
         "model_id": None,
         "tool_names_json": None,
@@ -102,6 +118,50 @@ def builtin_general_ops() -> dict:
         "is_builtin": 1,
         "revision": 1,
     }
+
+
+def builtin_general() -> dict:
+    """内置默认专家「通用」：全继承，选中它等价于没有专家（新红线基准）。"""
+    return _builtin_base(
+        DEFAULT_EXPERT_SLUG, DEFAULT_EXPERT_NAME,
+        "通用助手（默认）：模型、工具、技能、权限与记忆全部继承全局设置。",
+    )
+
+
+def builtin_general_ops() -> dict:
+    """内置运维专家：运维角色 + 方法论两变体 + 运维工具纪律全文进身份段；工具/权限全继承。"""
+    row = _builtin_base(
+        "general_ops", "运维专家",
+        "Linux 运维专家：运维角色 + 变更/只读方法论 + 运维工具纪律；工具与权限全继承。",
+    )
+    row["identity_prompt"] = OPS_IDENTITY_PROMPT
+    return row
+
+
+def builtin_research() -> dict:
+    """内置研究专家：收紧到无执行工具集，插件显式空集，记忆限 global。"""
+    row = _builtin_base(
+        "research", "研究",
+        "研究员：联网检索 + 记忆 + 待办，无执行工具与插件，记忆限 global。",
+    )
+    row["identity_prompt"] = RESEARCH_IDENTITY_PROMPT
+    row["tool_names_json"] = json.dumps(list(_DOMAIN_READONLY_TOOLS))
+    row["plugin_ids_json"] = "[]"
+    row["memory_scope"] = "global"
+    return row
+
+
+def builtin_copywriting() -> dict:
+    """内置文案专家：收紧到无执行工具集，插件显式空集，记忆限 global。"""
+    row = _builtin_base(
+        "copywriting", "文案",
+        "文案助手：联网检索 + 记忆 + 待办，无执行工具与插件，记忆限 global。",
+    )
+    row["identity_prompt"] = COPYWRITING_IDENTITY_PROMPT
+    row["tool_names_json"] = json.dumps(list(_DOMAIN_READONLY_TOOLS))
+    row["plugin_ids_json"] = "[]"
+    row["memory_scope"] = "global"
+    return row
 
 
 def resolve_expert(expert: Optional[Mapping[str, object]]) -> ResolvedRunPolicy:

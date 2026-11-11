@@ -9,7 +9,7 @@ import pytest
 from agent.expert_policy import (
     build_identity_section,
     build_snapshot,
-    builtin_general_ops,
+    builtin_general,
     clamp_max_iterations,
     clamp_permission_mode,
     filter_tool_names,
@@ -22,7 +22,7 @@ REGISTERED = ["shell_exec", "file_read", "file_edit", "web_search"]
 
 
 def make_expert(**overrides):
-    row = dict(builtin_general_ops())
+    row = dict(builtin_general())
     row.update({"slug": "custom", "name": "自定义", "is_builtin": 0})
     row.update(overrides)
     return row

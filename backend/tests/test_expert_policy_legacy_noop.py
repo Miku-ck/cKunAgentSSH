@@ -1,4 +1,4 @@
-"""专家策略的兼容性红线：未选专家 / 选中 general_ops，运行行为与现状完全一致。
+"""专家策略的兼容性红线：未选专家 / 选中 general，运行行为与现状完全一致。
 
 「一致」指六个运行面 —— system prompt 追加段、模型解析、工具集、技能选择、
 权限姿态、迭代上限、记忆范围。归因元数据（快照里的专家名/revision）允许不同，
@@ -11,7 +11,7 @@ from agent.expert_policy import (
     ResolvedRunPolicy,
     build_identity_section,
     build_snapshot,
-    builtin_general_ops,
+    builtin_general,
     clamp_max_iterations,
     clamp_permission_mode,
     filter_tool_names,
@@ -37,9 +37,9 @@ def test_none_expert_is_fully_inherited():
     assert policy.memory_scope == "inherit"
 
 
-def test_general_ops_matches_none_on_every_runtime_dimension():
+def test_general_matches_none_on_every_runtime_dimension():
     legacy = resolve_expert(None)
-    default = resolve_expert(builtin_general_ops())
+    default = resolve_expert(builtin_general())
 
     assert default.expert_slug == DEFAULT_EXPERT_SLUG
     assert default.is_legacy
@@ -81,18 +81,18 @@ def test_legacy_memory_scope_uses_inherited_scopes():
 
 def test_legacy_identity_section_is_empty_string():
     assert build_identity_section(resolve_expert(None)) == ""
-    assert build_identity_section(resolve_expert(builtin_general_ops())) == ""
-    blank = dict(builtin_general_ops(), identity_prompt="   \n  ")
+    assert build_identity_section(resolve_expert(builtin_general())) == ""
+    blank = dict(builtin_general(), identity_prompt="   \n  ")
     assert build_identity_section(resolve_expert(blank)) == ""
 
 
-def test_general_ops_snapshot_differs_only_in_attribution():
+def test_general_snapshot_differs_only_in_attribution():
     common = dict(
         model_id="model-1", permission_mode="normal", max_iterations=100,
         tool_names=ALL_TOOLS, skill_ids=["skill-a"], memory_scopes=["global"],
     )
     legacy_snap = build_snapshot(resolve_expert(None), **common)
-    default_snap = build_snapshot(resolve_expert(builtin_general_ops()), **common)
+    default_snap = build_snapshot(resolve_expert(builtin_general()), **common)
     assert legacy_snap["slug"] is None
     assert default_snap["slug"] == DEFAULT_EXPERT_SLUG
     for key in ("model_id", "permission_mode", "max_iterations",
@@ -101,7 +101,7 @@ def test_general_ops_snapshot_differs_only_in_attribution():
 
 
 def test_builtin_seed_is_enabled_and_readonly_marked():
-    seed = builtin_general_ops()
+    seed = builtin_general()
     assert seed["enabled"] == 1
     assert seed["is_builtin"] == 1
     assert seed["plugin_ids_json"] is None
