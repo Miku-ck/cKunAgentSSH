@@ -130,6 +130,8 @@ class SSEAdapter:
         "clarification_done": "clarification_done",
         # plan 档下写操作被拦：只落 trace，前端暂无 case（新增事件请一并补 agent.ts）
         "plan_mode_block": "plan_mode_block",
+        # 路由层直发（routes/agent.py，不经 harness TraceEvent）：运维专家建议 chip
+        "expert_suggestion": "expert_suggestion",
     }
 
     @classmethod

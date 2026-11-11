@@ -187,6 +187,11 @@ def _union_kinds(line: str) -> set[str]:
     return set(re.findall(r"'(\w+)'", line))
 
 
+# 路由层直发的事件（不经 harness TraceEvent，与 routes/agent.py 初始 state 事件同模式）：
+# 不是死条目，只是发射点在路由而非 harness，故从「死条目」检查里豁免。
+ROUTE_LEVEL_KINDS = {"expert_suggestion"}
+
+
 def test_kind_map_covers_every_emitted_kind():
     emitted = _emitted_kinds()
     assert {"clarification_needed", "plan_mode_block", "budget_extended"} <= emitted, (
@@ -196,7 +201,9 @@ def test_kind_map_covers_every_emitted_kind():
     assert not missing, (
         f"这些 kind 上了 Wire 却不在 _KIND_MAP 里（只靠恒等兜底，清单不再是全集）: "
         f"{sorted(missing)}")
-    unused = declared - emitted
+    assert ROUTE_LEVEL_KINDS <= declared, (
+        f"路由层事件必须在 _KIND_MAP 登记: {sorted(ROUTE_LEVEL_KINDS - declared)}")
+    unused = declared - emitted - ROUTE_LEVEL_KINDS
     assert not unused, f"_KIND_MAP 里有 harness 从不发出的死条目: {sorted(unused)}"
 
 

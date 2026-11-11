@@ -1241,6 +1241,28 @@ async def agent_run(req: AgentRunRequest, request: Request):
         # 这期间前端 UI 完全空白，用户以为卡住了
         yield sse_event({"type": "state", "state": "thinking", "iteration": 0, "run_id": run_id})
 
+        # 运维专家建议（非阻塞增益，spec §6.3）：未选专家 + 非纯对话 + 运维信号 → chip。
+        # 判定失败静默 no-op，绝不拖 run。当前 run 继续以通用身份跑（能力不缺，只缺方法论纪律）。
+        try:
+            from agent.expert_policy import builtin_general_ops
+            from agent.expert_suggest import should_suggest_ops
+            if should_suggest_ops(
+                req.task or "",
+                expert_selected=bool(req.expert_id),
+                is_conversation=is_conversation_task,
+            ):
+                _ops = builtin_general_ops()
+                yield sse_event({
+                    "type": "expert_suggestion",
+                    "slug": _ops["slug"],
+                    "name": _ops["name"],
+                    "reason": "检测到运维任务，建议切到运维专家",
+                    "task": req.task or "",
+                    "run_id": run_id,
+                })
+        except Exception as e:
+            logger.warning("运维专家建议判定失败（跳过）: %s", e)
+
         try:
             while True:
                 event = await queue.get()
