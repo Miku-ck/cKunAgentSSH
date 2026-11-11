@@ -33,13 +33,21 @@ def _builtin(client):
 
 
 def test_builtin_general_ops_is_seeded_on_init(client):
-    row = _builtin(client)
+    rows = client.get("/api/experts").json()
+    row = next(r for r in rows if r["slug"] == "general_ops")
     assert row["is_builtin"] == 1
     assert row["enabled"] == 1
     assert row["tool_names_json"] is None       # 继承，不是空集
     assert row["plugin_ids_json"] is None       # 内置继承：允许加载已启用插件
     assert row["permission_ceiling"] == "inherit"
     assert row["memory_scope"] == "inherit"
+    assert "智能运维助手" in row["identity_prompt"]  # 升级为运维包
+
+
+def test_all_four_builtins_seeded(client):
+    rows = client.get("/api/experts").json()
+    slugs = {r["slug"] for r in rows if r["is_builtin"] == 1}
+    assert {"general", "general_ops", "research", "copywriting"} <= slugs
 
 
 def test_create_defaults_to_inherit_everything(client):

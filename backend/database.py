@@ -101,7 +101,7 @@ _CONN_IDLE_PROBE_SECONDS = 30.0
 # 核心表齐全就跳过那 360 行 DDL。迁移与一次性数据修复不在此短路段内（见 init_db）。
 # 铁律：改动下方 init_db 的 DDL 或 _migrate_db 的任何迁移，必须 _SCHEMA_VERSION += 1，
 # 否则老库永远不会执行新结构（backend/tests/test_startup_critical_path.py 有守卫）。
-_SCHEMA_VERSION = 9
+_SCHEMA_VERSION = 10
 
 # 短路前提的核心表。版本号可能被外部工具清零、或迁移脚本自己写错，仅凭
 # user_version 就认定「结构已就绪」，会把缺表的库永久锁在坏状态 —— 再核一遍实表。
@@ -651,6 +651,8 @@ def init_db(db_path: str) -> None:
                 task_prompt     TEXT DEFAULT '',
                 -- spec 2026-10-27-schedule-task-type：任务分类，'ops' | 'daily'，存量归运维
                 task_type       TEXT NOT NULL DEFAULT 'ops',
+                -- 通用 harness 化：任务绑定的专家 slug；存量回填 general_ops，新建默认 general
+                expert_slug     TEXT NOT NULL DEFAULT 'general',
                 enabled         INTEGER DEFAULT 1,
                 next_run_at     TEXT,
                 last_run_at     TEXT,
@@ -725,6 +727,20 @@ def init_db(db_path: str) -> None:
             conn.execute(
                 "ALTER TABLE agent_jobs ADD COLUMN out_offset INTEGER NOT NULL DEFAULT 0"
             )
+        # schedules 补 expert_slug（旧库）：列不存在才加，幂等。
+        cur = conn.execute("PRAGMA table_info(schedules)")
+        sched_cols = {row[1] for row in cur.fetchall()}
+        if "expert_slug" not in sched_cols:
+            conn.execute(
+                "ALTER TABLE schedules ADD COLUMN expert_slug TEXT NOT NULL DEFAULT 'general'"
+            )
+        # 存量定时任务一次性回填 general_ops（保持旧运维行为）。只在版本不命中
+        # （_ddl_applied=False，即本次是升级/建库）时跑：已是最新版本的库跳过，
+        # 否则会把用户新建的 general 任务每次重启都重置成 general_ops。
+        if not _ddl_applied:
+            conn.execute(
+                "UPDATE schedules SET expert_slug = 'general_ops' WHERE expert_slug = 'general'"
+            )
         _migrate_db(conn)
         # experts 建表刻意放在版本化 executescript **之外**：结构版本已是最新时
         # init_db 会整段跳过 executescript，只跑这一片增量区。把新表留在脚本里
@@ -788,22 +804,36 @@ def init_db(db_path: str) -> None:
             "WHERE NOT EXISTS (SELECT 1 FROM bot_personas WHERE is_builtin = 1)",
             (_new_id(),),
         )
-        # 内置默认专家「通用运维」：全继承，选中它等价于没有专家。
-        # 按 slug 判存在（而非 is_builtin）：用户复制出的自定义专家不该挡住种子落库。
-        # 局部 import：expert_policy 不依赖 database，但避免在模块加载期拉起 agent 包。
-        from agent.expert_policy import DEFAULT_EXPERT_NAME, DEFAULT_EXPERT_SLUG
+        # 四个内置专家种子（spec §6.1）。按 slug 判存在（而非 is_builtin）：用户复制出的
+        # 自定义专家不该挡住种子落库。局部 import：避免模块加载期拉起 agent 包。
+        from agent.expert_policy import (
+            builtin_copywriting, builtin_general, builtin_general_ops, builtin_research,
+        )
+        for _factory in (builtin_general, builtin_general_ops, builtin_research, builtin_copywriting):
+            _seed = _factory()
+            conn.execute(
+                "INSERT INTO experts "
+                "(id, slug, name, description, identity_prompt, model_id, tool_names_json, "
+                " plugin_ids_json, skill_ids_json, permission_ceiling, max_iterations, "
+                " memory_scope, enabled, is_builtin, revision) "
+                "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? "
+                "WHERE NOT EXISTS (SELECT 1 FROM experts WHERE slug = ?)",
+                (
+                    _new_id(), _seed["slug"], _seed["name"], _seed["description"],
+                    _seed["identity_prompt"], _seed["model_id"], _seed["tool_names_json"],
+                    _seed["plugin_ids_json"], _seed["skill_ids_json"], _seed["permission_ceiling"],
+                    _seed["max_iterations"], _seed["memory_scope"], _seed["enabled"],
+                    _seed["is_builtin"], _seed["revision"], _seed["slug"],
+                ),
+            )
+        # 内置运维包升级：旧库 general_ops 行（空身份）→ 代码权威的运维包配置。
+        # 只碰 is_builtin=1；用户复制行（is_builtin=0）逐字节不动。每次 init 都跑且幂等
+        # （内置配置以代码为权威，API 不可编辑内置行）。
+        _ops = builtin_general_ops()
         conn.execute(
-            "INSERT INTO experts "
-            "(id, slug, name, description, identity_prompt, model_id, tool_names_json, "
-            " plugin_ids_json, skill_ids_json, permission_ceiling, max_iterations, "
-            " memory_scope, enabled, is_builtin, revision) "
-            "SELECT ?, ?, ?, ?, '', NULL, NULL, NULL, NULL, 'inherit', NULL, 'inherit', 1, 1, 1 "
-            "WHERE NOT EXISTS (SELECT 1 FROM experts WHERE slug = ?)",
-            (
-                _new_id(), DEFAULT_EXPERT_SLUG, DEFAULT_EXPERT_NAME,
-                "默认运维智能体：模型、工具、技能、权限与记忆全部继承全局设置。",
-                DEFAULT_EXPERT_SLUG,
-            ),
+            "UPDATE experts SET name = ?, description = ?, identity_prompt = ?, "
+            " updated_at = datetime('now') WHERE slug = ? AND is_builtin = 1",
+            (_ops["name"], _ops["description"], _ops["identity_prompt"], _ops["slug"]),
         )
         # 审查修复（P2 E9）：_seed_models（含同步 httpx.get）已移至独立异步入口
         # seed_models_async，从 lifespan 调用，避免阻塞事件循环
@@ -4924,7 +4954,7 @@ def delete_agent_strategy(strategy_id: str) -> bool:
 # ── 定时任务（schedules） ───────────────────────────────────────────────────────
 
 _SCHEDULE_COLS = (
-    "id, name, task_type, schedule_type, interval_minutes, time_hour, time_minute, "
+    "id, name, task_type, expert_slug, schedule_type, interval_minutes, time_hour, time_minute, "
     "weekday, day_of_month, target_host, task_prompt, enabled, next_run_at, "
     "last_run_at, last_status, last_run_id, last_abnormal_at, created_at, updated_at"
 )
