@@ -484,6 +484,18 @@ class ScheduleEngine:
         if not model_cfg:
             raise RuntimeError("未配置默认模型，无法执行定时任务")
 
+        # 专家接线：存量任务迁移时已绑 general_ops，新建默认 general（spec §6.2）。
+        # 解析必须先于 SSH 建连 fail-closed（与 headless_run.run_headless_once 同序）：
+        # slug 非法抛 ValueError 若落在 connect_ssh 之后、try/finally 之外，
+        # 已建会话无人断开 —— 每个 tick 泄漏一条连接。
+        from agent.expert_policy import build_identity_section, resolve_expert
+        _expert_slug = (sched.get("expert_slug") or "general").strip() or "general"
+        _expert_row = await asyncio.to_thread(db.get_expert_by_slug, _expert_slug)
+        if _expert_row is None:
+            raise ValueError(f"定时任务绑定的专家不存在: {_expert_slug}")
+        _identity_section = build_identity_section(resolve_expert(_expert_row))
+        system_prompt = _build_schedule_system_prompt(sched, _identity_section)
+
         model_name = model_cfg.get("model_id") or model_cfg.get("id") or ""
         ctx_limit = int(model_cfg.get("max_tokens") or 16384)
 
@@ -602,14 +614,6 @@ class ScheduleEngine:
             enable_intention_guide=False,
             enable_dynamic_budget=False,
         )
-        # 专家接线：存量任务迁移时已绑 general_ops，新建默认 general（spec §6.2）
-        from agent.expert_policy import build_identity_section, resolve_expert
-        _expert_slug = (sched.get("expert_slug") or "general").strip() or "general"
-        _expert_row = await asyncio.to_thread(db.get_expert_by_slug, _expert_slug)
-        if _expert_row is None:
-            raise ValueError(f"定时任务绑定的专家不存在: {_expert_slug}")
-        _identity_section = build_identity_section(resolve_expert(_expert_row))
-        system_prompt = _build_schedule_system_prompt(sched, _identity_section)
         conversation_id = _SCHEDULE_CONVERSATION_PREFIX + (sched["id"] or "")
 
         done_content = ""

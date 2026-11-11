@@ -96,3 +96,41 @@ async def test_headless_unknown_slug_fail_closed(base_db, monkeypatch):
         await hr.run_headless_once(
             "t", run_id="r2", conversation_id="c", expert_slug="no-such-expert",
         )
+
+
+@pytest.mark.asyncio
+async def test_runbook_call_sites_pin_general_ops(monkeypatch):
+    """runbook_engine 两处调用点（步骤 run / 诊断 run）都必须显式绑 general_ops（spec §6.2）。
+
+    共享装配测试（test_runbook_engine_headless_shared）直调 run_headless_once 走
+    缺省 slug，钉不住剧本调用点；这里把 run_headless_once 打桩捕获 kwargs，驱动
+    真实执行体走「步骤缺标记 → fail-closed 判失败 → 自动诊断」路径，两处都验。
+    证伪：把任一调用点的 expert_slug 改回缺省 general → 红。
+    """
+    import agent.audit as audit_mod
+    import agent.headless_run as hr
+    import runbook_engine as rb_engine
+    import runbook_store as rstore
+
+    captured: list[dict] = []
+
+    async def fake_run(task, **kwargs):
+        captured.append(kwargs)
+        # 无标记行 → 步骤 fail-closed 判失败 → 触发诊断 run（第二处调用点）
+        return hr.HeadlessRunResult(content="ok", state="completed")
+
+    async def fake_audit(**kwargs):
+        return None
+
+    monkeypatch.setattr(hr, "run_headless_once", fake_run)
+    monkeypatch.setattr(rstore, "update_runbook_run", lambda *a, **k: None)
+    monkeypatch.setattr(rstore, "finish_runbook_run", lambda *a, **k: None)
+    monkeypatch.setattr(audit_mod, "append_record_async", fake_audit)
+
+    engine = rb_engine.RunbookEngine()
+    runbook = {"id": "rb-1", "name": "剧本", "target_host": "",
+               "steps": [{"command": "echo ok", "assertCommand": "", "note": ""}]}
+    await engine._run_task_inner(runbook, "rrb-1")
+
+    assert len(captured) == 2, "应各跑一次步骤 run 与诊断 run"
+    assert [kw["expert_slug"] for kw in captured] == ["general_ops", "general_ops"]
