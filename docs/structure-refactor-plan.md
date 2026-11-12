@@ -16,6 +16,7 @@
 | 基线验证 | 前端测试 193 文件 / 2332 测试全通过；electron-vite build 成功 | ✅ 基线健康 |
 | `backend/db/` 包（2026-11-11） | P0 阶段 1-2：`_conn` / `_util` / `experts` / `plugins` 骨架与试点，函数体原样复制，`database.py` 仍是公共入口 | ✅ 冒烟校验与 database 行为一致；相关 pytest 全过 |
 | P0 阶段 3 增量（2026-11-12） | `conversations`（会话/消息/工具配置）与 `skills`（技能/按模式配置）迁入 `db/` 包，`database.py` 仍是公共入口；**顺带修复 `get_messages` 的先在缺陷**——外层 `ORDER BY rowid` 引用派生表不存在的列（SQLite 3.51 实测必错，此前无测试覆盖），两处同步改为内层显式投影 `rowid AS msg_rowid`，新增 `tests/test_conversation_messages_paging.py` 回归 | ✅ 冒烟校验通过；lint 与相关 pytest 全过 |
+| P0 阶段 3 增量（2026-11-12） | `schedules`（定时任务 + 执行历史）迁入 `db/schedules.py`；`prune_agent_runs` / `prune_conversations` 等跨域清理维护留待对应域迁移时一并处理 | ✅ 冒烟校验通过（含 time_hour=0 不被 or 吞掉等边界） |
 | `src/stores/sftp.ts` 拆分（2026-11-12） | P1：文件面拆到 `src/composables/useSftpFiles.ts`、传输面拆到 `src/composables/useSftpTransfer.ts`，store 收敛为会话态 + 门面（1952 → 225 行），公开接口不变 | ✅ typecheck 通过；sftp 相关 66 测试全过 |
 | `electron/` 重组（2026-11-12） | P1：根级模块按 core / managers / services / stores 归位，`tunnel-transport.ts` 归入 `transports/`、`ssh-error.ts` 归入 `utils/`，测试跟随源码移动；`main.ts` / `preload.ts` / `preload-helpers.ts` 留根（构建入口不动）；测 shared 核心的 4 个测试移入 `shared/` | ✅ typecheck 清零；electron+shared 68 文件 / 678 测试全过；electron-vite build 成功 |
 
