@@ -1824,13 +1824,15 @@ def get_messages(
         # 取窗口（offset 语义保持为"从新到旧"窗口内偏移），外层再按时间正序输出。
         # C-review MINOR-3：同秒消息用 rowid（插入序）兜底 — id 是随机 uuid，
         # 按 id 排序不是时间序，同秒消息仍可能乱序。
+        # 修复：rowid 必须由内层显式投影（AS msg_rowid）—— 派生表没有隐式 rowid，
+        # 外层直接 ORDER BY rowid 在 SQLite 3.51 实测报 "no such column: rowid"。
         rows = conn.execute(
             "SELECT id, conversation_id, role, content, reasoning, model_used, tokens_used, run_id, agent_trace, created_at "
             "FROM ("
-            "  SELECT id, conversation_id, role, content, reasoning, model_used, tokens_used, run_id, agent_trace, created_at "
+            "  SELECT id, conversation_id, role, content, reasoning, model_used, tokens_used, run_id, agent_trace, created_at, rowid AS msg_rowid "
             "  FROM messages WHERE conversation_id = ? "
             "  ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?"
-            ") ORDER BY created_at ASC, rowid ASC",
+            ") ORDER BY created_at ASC, msg_rowid ASC",
             (conversation_id, limit, offset),
         ).fetchall()
         result = []

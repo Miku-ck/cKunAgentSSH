@@ -11,5 +11,7 @@ from db._conn import (  # noqa: F401
     init_db,
 )
 from db._util import _new_id, _now  # noqa: F401
+from db.conversations import *  # noqa: F401,F403
 from db.experts import *  # noqa: F401,F403
 from db.plugins import *  # noqa: F401,F403
+from db.skills import *  # noqa: F401,F403
