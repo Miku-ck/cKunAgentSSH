@@ -5,8 +5,29 @@ prune_agent_runs / prune_conversations 等跨域清理维护暂留 database.py�
 """
 from typing import Optional
 
-from db._conn import _get_conn
+from db._conn import _assert_sql_ident, _get_conn
 from db._util import _new_id, _now
+
+# star import（db/__init__.py 的 `from db.schedules import *`）只导出本模块的
+# 公共 CRUD 函数；不钉住的话 typing 的 Optional 等会跟着漏进 db 包命名空间。
+__all__ = [
+    "list_schedules",
+    "get_schedule",
+    "list_enabled_schedules",
+    "create_schedule",
+    "update_schedule",
+    "set_schedule_next_run",
+    "mark_schedule_run",
+    "set_schedule_last_abnormal",
+    "delete_schedule",
+    "create_schedule_run",
+    "update_schedule_run",
+    "fail_running_schedule_runs",
+    "list_schedule_runs",
+    "prune_schedule_runs",
+    "clear_schedule_runs",
+    "has_running_schedule_run",
+]
 
 _SCHEDULE_COLS = (
     "id, name, task_type, expert_slug, schedule_type, interval_minutes, time_hour, time_minute, "
@@ -49,7 +70,10 @@ def list_enabled_schedules() -> list[dict]:
         conn.close()
 
 
-def create_schedule(data: dict) -> dict:
+def create_schedule(data: dict) -> Optional[dict]:
+    """落库一条定时任务并读回。并发删除竞态下（INSERT 成功后另一连接把该行
+    删掉）读回为 None —— 签名诚实标注，调用方自行决断；外部可传 data["id"]
+    指定主键，重复时 sqlite3.IntegrityError 原样抛出，不做幂等吞并。"""
     now = _now()
     sid = data.get("id") or _new_id()
     conn = _get_conn()
@@ -211,8 +235,14 @@ def update_schedule_run(
     status: Optional[str] = None,
     summary: Optional[str] = None,
     error: Optional[str] = None,
-) -> None:
-    """run_key 既可能是 schedule_runs.id 也可能是 harness run_id"""
+) -> int:
+    """run_key 既可能是 schedule_runs.id 也可能是 harness run_id。
+
+    按两个键各发一条单键 UPDATE（先 id 后 run_id），返回两段受影响行数之和；
+    替代原先 `WHERE id = ? OR run_id = ?` 的双键一句 —— 调用方拿不到可靠的
+    rowcount（OR 命中多行时无从核对），写丢失只能静默。两键命中不同行时
+    两条 UPDATE 都生效，语义与原句一致。
+    """
     cols, vals = [], []
     if status is not None:
         cols.append("status = ?")
@@ -227,17 +257,21 @@ def update_schedule_run(
         cols.append("error = ?")
         vals.append(error)
     if not cols:
-        return
-    vals.append(run_key)
+        return 0
+    touched = 0
     conn = _get_conn()
     try:
-        conn.execute(
-            f"UPDATE schedule_runs SET {', '.join(cols)} WHERE id = ? OR run_id = ?",
-            vals + [run_key],
-        )
+        for key_col in ("id", "run_id"):
+            _assert_sql_ident(key_col)
+            cur = conn.execute(
+                f"UPDATE schedule_runs SET {', '.join(cols)} WHERE {key_col} = ?",
+                vals + [run_key],
+            )
+            touched += max(cur.rowcount, 0)
         conn.commit()
     finally:
         conn.close()
+    return touched
 
 
 def fail_running_schedule_runs(schedule_id: str, error: str) -> int:
@@ -274,6 +308,11 @@ def prune_schedule_runs(max_count: int = 2000) -> int:
     """删除最旧的 schedule_runs，每个 schedule 各保留最近 max_count 条，
     返回删除数量。
 
+    只在终态行（status != 'running'）里数序号：running 是唯一非终态，混进
+    删除集合会把仍在写回的执行记录连根拔掉，后续回写 UPDATE 命中 0 行，
+    面板那行就永远停在 running。created_at 只有秒级精度，同秒多行时加
+    rowid DESC 做稳定 tie-break，避免"保留最近 N 条"删错行。
+
     每次到期触发都会插一行（interval 任务 1 分钟一次 = 一天 1440 行），
     不清理会随运行时间无界增长。由调度引擎低频调用（每 6h），不放在
     热路径上。
@@ -286,9 +325,10 @@ def prune_schedule_runs(max_count: int = 2000) -> int:
                        SELECT id,
                               ROW_NUMBER() OVER (
                                   PARTITION BY schedule_id
-                                  ORDER BY created_at DESC
+                                  ORDER BY created_at DESC, rowid DESC
                               ) AS rn
                        FROM schedule_runs
+                       WHERE status != 'running'
                    ) WHERE rn > ?
                )""",
             (max_count,),
@@ -299,21 +339,37 @@ def prune_schedule_runs(max_count: int = 2000) -> int:
         conn.close()
 
 
-def clear_schedule_runs(schedule_id: str) -> int:
+def clear_schedule_runs(schedule_id: str) -> Optional[int]:
     """清空某任务的全部执行历史（保留任务本身），返回删除行数。
 
     与 delete_schedule 的区分：那条删整实体、由 FK CASCADE 顺带带走历史；本函数
-    只清历史列表行。不做 running 检查（由路由层的 has_running_schedule_run 闸把关，
-    避免删掉仍在写回的执行记录）。SQL 静态字面量 + 参数绑定。
+    只清历史列表行。SQL 静态字面量 + 参数绑定。
+
+    进行中闸在本函数内原子完成：BEGIN IMMEDIATE 拿写锁后先查 running 再删，
+    检查与删除同锁，其他连接无法在两步之间插入新 running 行（原先把闸放在
+    路由层的两次独立 to_thread 之间，是可被调度触发穿透的 TOCTOU 窗口）。
+    返回 None 表示闸拒绝（存在 running 行），调用方据此回 409。
     """
     conn = _get_conn()
     try:
-        cur = conn.execute(
-            "DELETE FROM schedule_runs WHERE schedule_id = ?",
-            (schedule_id,),
-        )
-        conn.commit()
-        return cur.rowcount
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            busy = conn.execute(
+                "SELECT 1 FROM schedule_runs WHERE schedule_id = ? AND status = 'running' LIMIT 1",
+                (schedule_id,),
+            ).fetchone()
+            if busy is not None:
+                conn.rollback()
+                return None
+            cur = conn.execute(
+                "DELETE FROM schedule_runs WHERE schedule_id = ?",
+                (schedule_id,),
+            )
+            conn.commit()
+            return cur.rowcount
+        except Exception:
+            conn.rollback()
+            raise
     finally:
         conn.close()
 

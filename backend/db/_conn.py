@@ -94,6 +94,15 @@ def _get_conn() -> _PooledConnection:
     后续调用直接返回包装后的连接。
     close() 被包装为 no-op，所以 `finally: conn.close()` 不会真正关闭连接。
     """
+    # fail-fast 守卫：_db_path 为空说明没人初始化过本包连接池，此时
+    # sqlite3.connect("") 会打开一个临时空库 —— 查什么都是 no such table，
+    # 报错完全指向不了真实原因。初始化入口有两条：db.init_db()，或生产
+    # 入口 database.init_db()（其末尾会把路径同步给本包）。
+    if not _db_path:
+        raise RuntimeError(
+            "db 包连接池未初始化（_db_path 为空）：请先调用 db.init_db(db_path)，"
+            "或经生产入口 database.init_db() 启动（它会同步路径到本包）。"
+        )
     import time as _time
     now = _time.monotonic()
     conn = getattr(_thread_local, "conn", None)

@@ -137,13 +137,15 @@ def test_prune_schedule_runs_keeps_latest_per_schedule(tmp_path):
         # schedule_runs.schedule_id 有外键 → 先建父 schedule
         db.create_schedule({"id": "A", "name": "A"})
         db.create_schedule({"id": "B", "name": "B"})
-        # schedule A：5 条（created_at 递增，直接 SQL 控制时间）；schedule B：1 条
+        # schedule A：5 条（created_at 递增，直接 SQL 控制时间；顺带置终态——
+        # prune 只在终态行 status != 'running' 里数序号，running 行不可清）；
+        # schedule B：1 条（保持 running，供下方断言"prune 不吃 running 行"）
         for i in range(5):
             db.create_schedule_run("A", f"ra{i}")
         db.create_schedule_run("B", "rb0")
         for i in range(5):
             conn.execute(
-                "UPDATE schedule_runs SET created_at=? WHERE run_id=?",
+                "UPDATE schedule_runs SET created_at=?, status='completed' WHERE run_id=?",
                 (f"2026-01-0{i+1} 00:00:00", f"ra{i}"),
             )
         conn.commit()
@@ -157,6 +159,12 @@ def test_prune_schedule_runs_keeps_latest_per_schedule(tmp_path):
             "SELECT run_id FROM schedule_runs WHERE schedule_id='B'").fetchall()}
         assert a_ids == {"ra2", "ra3", "ra4"}, a_ids
         assert b_ids == {"rb0"}, b_ids
+
+        # 审查改进：prune 不吃 running 行 —— rb0 是 running，配额压到 0 也不删
+        assert db.prune_schedule_runs(max_count=0) == 3      # A 的 3 条终态行全清
+        b_after = {r[0] for r in conn.execute(
+            "SELECT run_id FROM schedule_runs").fetchall()}
+        assert b_after == {"rb0"}, b_after
     finally:
         conn.close()
 
