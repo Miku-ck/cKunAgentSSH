@@ -396,10 +396,13 @@ async def _one_shot_llm(messages: list[dict], ctx: "RunContext") -> Optional[str
         model_cfg=model_cfg,
         model_id=ctx.llm_model,
         temperature=0.2,
+        # 80 tokens：思考型模型仅思考阶段就会耗尽 → 命令解释功能静默失效。
+        # 一句话解释是机械任务，显式关思考，80 只约束解释本身。
         max_tokens=80,
         chunk_timeout=_LLM_CHUNK_TIMEOUT_S,
         total_timeout=_LLM_TOTAL_TIMEOUT_S,
         task_name="perm_explain",
+        thinking="off",
     )
 
 

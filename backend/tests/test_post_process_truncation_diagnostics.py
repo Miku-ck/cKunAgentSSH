@@ -166,6 +166,8 @@ def test_extract_memories_retries_once_with_larger_budget(monkeypatch):
 
     assert [c.get("max_tokens") for c in calls] == [1024, 2048], "未按首查/一次重试的预算执行"
     assert [c.get("task_name") for c in calls] == ["memory", "memory_retry"]
+    assert all(c.get("thinking") == "off" for c in calls), \
+        "结构化提取未声明关思考：思考型模型首查必然空、每轮白烧一次重试"
     assert len(enqueued) == 1
     items = enqueued[0][1]["items"]
     assert len(items) == 1 and items[0]["title"] == "重试记忆"

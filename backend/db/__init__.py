@@ -11,7 +11,7 @@ from db._conn import (  # noqa: F401
     init_db,
 )
 from db._util import _mask_api_key, _new_id, _now  # noqa: F401
-from db._secrets import protect_secret, unprotect_secret  # noqa: F401
+from db._secrets import SecretStorageError, protect_secret, unprotect_secret  # noqa: F401
 from db.agent_runs import *  # noqa: F401,F403
 from db.agent_strategies import *  # noqa: F401,F403
 from db.conversations import *  # noqa: F401,F403

@@ -1,20 +1,27 @@
 """群聊「可参与期」：@ 之后的 5 分钟窗口、接话节流、近期上下文。
 
-全部是进程内状态，不落库（spec 2026-10-30-qq-group-ambient §1）：
-窗口只有 5 分钟、上下文只服务这一次接话，重启丢掉没有任何长期损失。
+可参与期窗口（at_until / last_spoken_at / seen 事件台账）仍是进程内状态：
+窗口只有 5 分钟、节流只服务本次接话，重启丢掉没有长期损失。近期上下文
+（lines）则经 `bot_ambient_lines` 表 write-through 落库（M9-5）：重启后把
+TTL 窗口内的行灌回内存，群里刚聊过什么不会因为后端重启就「失忆」；
+at_until 不持久化 —— 重启后不主动接话，等新的 @（保守正确）。
 
 跨线程：这张表是进程内单例，而每个机器人各有一条 `ckunbot-qq-*` 收包线程，
 多个机器人的事件会落进同一个 dict（key 带 channel_id），所以读写都要过锁。
 
-档位判定（`ambient_allowed`）只是纯函数：取人格字段由入站管线做，这里不碰库。
+档位判定（`ambient_allowed`）只是纯函数：取人格字段由入站管线做。
 """
 
 from __future__ import annotations
 
+import logging
 import threading
+import time as _time_mod
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 # 平台被动回复窗口：群里 5 分钟 / 每条消息最多 5 次。超出窗口的接话不再是
 # 「回复」而是主动消息，要群主单独授权 —— 所以窗口一关就闭嘴，不拿主动消息顶上去。
@@ -87,7 +94,7 @@ def note_line(
     *,
     now: "datetime | None" = None,
 ) -> None:
-    """记一条群消息（含机器人自己的发言），只用于接话时的临时上下文。"""
+    """记一条群消息进内存上下文（不落库；落库走 note_line_persisted）。"""
     text = (text or "").strip()
     if not text:
         return
@@ -95,6 +102,79 @@ def note_line(
     name = (speaker or "").strip() or "群友"
     with _lock:
         _state(_key(channel_id, group_openid)).lines.append((stamp, name, text))
+
+
+# 过期行清理的节流：活跃群里每条消息都写一行，TTL 清理最多 5 分钟一次就够
+_PURGE_THROTTLE_S = 300.0
+_last_purge_at: "float | None" = None
+
+
+def note_line_persisted(
+    channel_id: str,
+    group_openid: str,
+    speaker: str,
+    text: str,
+    *,
+    now: "datetime | None" = None,
+) -> None:
+    """记一条群消息：内存上下文 + `bot_ambient_lines` 落库（write-through）。
+
+    落库失败只留痕 —— ambient 是增强项，降级为仅内存与旧行为完全一致；
+    内存上下文无论如何都更新（生成失败也该记得群里说了什么）。
+    """
+    stamp = _now(now)
+    note_line(channel_id, group_openid, speaker, text, now=stamp)
+    text = (text or "").strip()
+    if not text:
+        return
+    try:
+        # created_at 显式传 UTC 时间戳（datetime('now') 同格式），恢复侧按 UTC 读回
+        from database import add_bot_ambient_line, purge_ambient_lines
+
+        global _last_purge_at
+        add_bot_ambient_line(
+            channel_id or "", group_openid or "", (speaker or "").strip(), text,
+            stamp.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        now_mono = _time_mod.monotonic()
+        if (_last_purge_at is None
+                or now_mono - _last_purge_at >= _PURGE_THROTTLE_S):
+            _last_purge_at = now_mono
+            purge_ambient_lines()
+    except Exception as exc:  # noqa: BLE001 —— 落库失败降级为仅内存
+        logger.warning("群环境上下文落库失败（仅保留内存）: %s", exc)
+
+
+def restore_from_db() -> None:
+    """重启恢复：把 TTL 窗口内的落库行灌回内存上下文（跨 channel 一次完成）。
+
+    at_until / 节流台账不恢复 —— 重启后不主动接话，等新的 @（保守正确：
+    重启后的主动接话比沉默危险）。
+    """
+    try:
+        from database import list_recent_ambient_lines, purge_ambient_lines
+
+        purge_ambient_lines()
+        rows = list_recent_ambient_lines(minutes=CONTEXT_TTL_MIN)
+    except Exception as exc:  # noqa: BLE001 —— 恢复失败退化为纯内存启动
+        logger.warning("群环境上下文恢复失败（按空上下文启动）: %s", exc)
+        return
+    for row in rows:
+        try:
+            stamp = datetime.strptime(
+                row.get("created_at") or "", "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        note_line(
+            row.get("channel_id") or "",
+            row.get("group_openid") or "",
+            row.get("speaker") or "",
+            row.get("content") or "",
+            now=stamp,
+        )
+    if rows:
+        logger.info("群环境上下文已恢复 %d 行", len(rows))
 
 
 def is_open(channel_id: str, group_openid: str, *, now: "datetime | None" = None) -> bool:

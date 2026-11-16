@@ -214,3 +214,77 @@ async def test_private_chat_keeps_two_beats(monkeypatch):
 
     assert text.count("\n\n") == 1
     assert "群里" not in seen["prompt"]
+
+
+# ── 第一批优化（借鉴 dsh-pet）的钉子测试 ──
+
+def test_get_recent_bot_messages_carries_created_at(base_db):
+    """P0-1：历史查询必须带出 created_at。
+
+    曾漏掉这一列，chat_service 读到的 user_created_at 全是 None，
+    状态层的 burst 判定（60s 内 ≥3 条）在真实链路上永远不触发。
+    单测之前只注入时间戳给 turn_events，所以没暴露这个断链。
+    """
+    import database as db
+    from datetime import datetime, timedelta, timezone
+
+    persona = db.create_bot_persona(name="晚风")
+    conv = db.create_bot_conversation(persona_id=persona["id"], channel="local")
+    for i in range(3):
+        db.add_bot_message(conv["id"], "user", f"msg-{i}")
+    rows = db.get_recent_bot_messages(conv["id"], 10)
+    assert len(rows) == 3
+    for row in rows:
+        assert row.get("created_at"), f"历史条目缺 created_at: {row}"
+        # 格式必须能被 bot.timeutil.parse_ts 解析（state 层同款口径）
+        from bot.timeutil import parse_ts
+        assert parse_ts(row["created_at"]) is not None
+
+
+def test_history_time_anchor_only_on_user_after_gap():
+    """P1-1：时间前缀只标 user、且间隔 ≥30min 才标；assistant 永不标。"""
+    from datetime import datetime, timedelta, timezone
+    from bot.timeutil import fmt_ts
+
+    t0 = datetime(2026, 11, 16, 2, 0, tzinfo=timezone.utc)
+    svc = BotChatService()
+
+    # 间隔 5 分钟：不标
+    near = svc._to_llm_message(
+        {"role": "user", "content": "在吗", "created_at": fmt_ts(t0 + timedelta(minutes=5))},
+        prev_ts=t0,
+    )
+    assert near["content"] == "在吗"
+
+    # 间隔 31 分钟：标（格式 [MM-DD HH:MM]）
+    far = svc._to_llm_message(
+        {"role": "user", "content": "还在吗", "created_at": fmt_ts(t0 + timedelta(minutes=31))},
+        prev_ts=t0,
+    )
+    assert far["content"].endswith("还在吗")
+    assert far["content"].startswith("[")
+
+    # assistant 即便隔了很久也不标（防模型照抄时间戳）
+    assist = svc._to_llm_message(
+        {"role": "assistant", "content": "在的", "created_at": fmt_ts(t0 + timedelta(hours=3))},
+        prev_ts=t0,
+    )
+    assert assist["content"] == "在的"
+
+
+@pytest.mark.asyncio
+async def test_memory_recall_times_out_without_blocking(monkeypatch):
+    """P1-2：召回卡住时 1.5s 硬超时降级为空，不拖垮首字。"""
+    import asyncio
+    import time
+
+    async def stuck_recall(*a, **kw):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(cs_mod.memory_mod, "recall", stuck_recall)
+    t0 = time.monotonic()
+    note = await BotChatService._memory_note("p1", "在吗")
+    elapsed = time.monotonic() - t0
+
+    assert note == ""
+    assert elapsed < 3.0, f"召回超时保护失效，耗时 {elapsed:.1f}s"

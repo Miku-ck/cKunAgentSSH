@@ -1,8 +1,7 @@
 <template>
   <div class="panel">
     <header class="panel-header">
-      <h3>运维</h3>
-      <p class="panel-desc">出站代理、上游超时与重试、后端日志级别和诊断快照 —— 这一页的值只存在后端，改完即时生效，不需要重启</p>
+      <h3>运维 <InfoTip text="这一页的值只存在后端，改完即时生效，不需要重启。" /></h3>
     </header>
 
     <div class="panel-body">
@@ -13,7 +12,7 @@
       <p v-if="loadError" class="panel-error">{{ loadError }}</p>
 
       <section class="section">
-        <h4 class="section-title">出站网络</h4>
+        <h4 class="section-title">出站网络 <InfoTip text="代理地址只单向提交，页面读回的是脱敏值（不含口令）。保存后已建立的模型连接会按新策略重建；库里有值时它压过环境变量 CKUN_HTTP_PROXY。「清除」是把库里那行留空——若部署注入了该变量，重启后会重新走它，要彻底直连得两边都清。" /></h4>
 
         <SettingRow label="出站代理" desc="作用于模型调用、embedding 与网络搜索；web_fetch 按已校验的 IP 直连，刻意不走代理">
           <span class="state-text">
@@ -40,11 +39,6 @@
           <button class="btn" :disabled="savingProxy" @click="saveProxy()">应用代理</button>
           <button class="btn btn-ghost" :disabled="!proxySet || savingProxy" @click="clearProxy()">清除</button>
         </div>
-        <p class="hint">
-          代理地址只单向提交，页面读回的是脱敏值（不含口令）。保存后已建立的模型连接会按新策略重建；
-          库里有值时它压过环境变量 CKUN_HTTP_PROXY。「清除」是把库里那行留空——
-          若部署注入了该变量，重启后会重新走它，要彻底直连得两边都清。
-        </p>
 
         <SettingRow label="上游请求超时" desc="0 = 各端点沿用自己的默认（模型读 300s、连接测试 10s）；非 0 统一按此值，连接阶段仍不超过 10s">
           <div class="num-row">
@@ -77,7 +71,7 @@
       </section>
 
       <section class="section">
-        <h4 class="section-title">后端日志</h4>
+        <h4 class="section-title">后端日志 <InfoTip text="改的是后端进程内 root logger 的级别，即时生效且落库；uvicorn 自身的访问日志不受影响。" /></h4>
         <SettingRow label="日志级别" desc="默认 warning（引入本设置前的实际输出）；debug 非常吵，排查完建议调回">
           <select
             :value="logLevel"
@@ -88,7 +82,6 @@
             <option v-for="lv in logLevels" :key="lv" :value="lv">{{ lv }}</option>
           </select>
         </SettingRow>
-        <p class="hint">改的是后端进程内 root logger 的级别，即时生效且落库；uvicorn 自身的访问日志不受影响。</p>
       </section>
 
       <section class="section">
@@ -119,11 +112,7 @@
       </section>
 
       <section class="section">
-        <h4 class="section-title">实时告警监控</h4>
-        <p class="hint">
-          告警诊断不再默认开启。必须先在此显式新增「监控任务」并指定主机，应用才会在该主机
-          内存/CPU/磁盘持续越限时自动发起只读诊断；没有任何任务时，监控会话完全不会触发告警。
-        </p>
+        <h4 class="section-title">实时告警监控 <InfoTip text="告警诊断不默认开启：必须显式新增监控任务并指定主机，应用才会在该主机内存/CPU/磁盘持续越限时自动发起只读诊断；没有任何任务时，监控会话完全不会触发告警。" /></h4>
 
         <div class="inline-form">
           <input
@@ -174,20 +163,18 @@
             </div>
           </div>
         </div>
-        <p v-else class="hint">暂无告警监控任务。新增后才会对指定主机生效。</p>
+        <p v-else class="hint">暂无告警监控任务</p>
       </section>
 
       <section class="section">
         <div class="diag-head">
-          <h4 class="section-title">诊断快照</h4>
+          <h4 class="section-title">诊断快照 <InfoTip text="显示后端实际连的库文件、各表行数、意识 tick 与 Bridge 连接状态。只读，密钥一律脱敏。" /></h4>
           <button class="btn btn-ghost" :disabled="diagLoading" @click="refreshDiagnostics()">
             {{ diagLoading ? '读取中…' : '刷新' }}
           </button>
         </div>
         <p v-if="diagError" class="panel-error">{{ diagError }}</p>
-        <p v-else-if="!diagnostics" class="hint">
-          显示后端实际连的库文件、各表行数、意识 tick 与 Bridge 连接状态。只读，密钥一律脱敏。
-        </p>
+        <p v-else-if="!diagnostics" class="hint">尚未读取诊断快照</p>
 
         <dl v-else class="diag-grid">
           <template v-for="group in diagGroups" :key="group.title">
@@ -204,11 +191,7 @@
            这里收的是主进程自己的现场（userData 下的日志与崩溃转储），出问题时
            用户和我们都得有一份能直接看的文件。 -->
       <section class="section">
-        <h4 class="section-title">诊断包</h4>
-        <p class="hint">
-          把主进程日志（各留尾部 4MB、凭据已抹）、最近的崩溃转储与 system.json 打成一个 tar.gz，
-          落在应用数据目录的 diagnostics/ 里。只为现场排障生成，不会上传到任何地方。
-        </p>
+        <h4 class="section-title">诊断包 <InfoTip text="把主进程日志（各留尾部 4MB、凭据已抹）、最近的崩溃转储与 system.json 打成一个 tar.gz，落在应用数据目录的 diagnostics/ 里。只为现场排障生成，不会上传到任何地方。" /></h4>
         <div class="row-actions">
           <button class="btn" :disabled="!bundleSupported || bundleExporting" @click="exportBundle()">
             {{ bundleExporting ? '导出中…' : '导出诊断包' }}
@@ -233,6 +216,7 @@
  * 面板只做渲染与展示派生，不直接碰 api / IPC。
  */
 import { computed, onMounted, ref } from 'vue'
+import InfoTip from '@/components/common/InfoTip.vue'
 import SettingRow from '@/components/settings/fields/SettingRow.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 import {

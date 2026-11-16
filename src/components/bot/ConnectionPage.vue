@@ -29,7 +29,7 @@
       />
 
       <p v-if="!channels.length && !draftOpen && !error" class="empty-hint">
-        还没有机器人：新增一个 QQ 或微信机器人，填好凭据并选一个要绑的人格。
+        还没有机器人
       </p>
       <p v-if="error" class="page-error">{{ error }}</p>
     </section>

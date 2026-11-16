@@ -1,8 +1,7 @@
 <template>
   <div class="panel">
     <header class="panel-header">
-      <h3>技能管理</h3>
-      <p class="panel-desc">Agent 的专项知识包 —— 内置运维技能开箱即用，触发词命中的技能会注入执行上下文</p>
+      <h3>技能管理 <InfoTip text="Agent 的专项知识包：每轮运行按触发词智能匹配（词边界 + 短语加权），命中的技能以目录形式暴露给模型，模型判断相关时调 load_skill 拉取正文（最多 12000 字符）在后续轮次遵循执行。对话里的技能选择器可显式挂载技能，优先级高于自动匹配。" /></h3>
     </header>
 
     <div class="panel-body">
@@ -10,16 +9,16 @@
         <button class="grp-head" @click="open.list = !open.list">
           <span class="grp-caret" :class="{ open: open.list }">▸</span>
           <span class="grp-title">技能库</span>
+          <InfoTip :focusable="false" text="按「运维模式」隔离启用状态；关闭的技能不再参与触发词匹配与目录暴露。包内运维技能启动时自动同步，升级后可手动「同步包内技能」刷新。" />
           <span class="grp-badge">{{ enabledCount }}/{{ rows.length }} 启用</span>
         </button>
         <div v-show="open.list" class="grp-body">
-          <p class="hint">
-            按「运维模式」隔离启用状态；关闭的技能不再参与触发词匹配与目录暴露。
+          <div class="grp-tools">
             <button class="link-btn" :disabled="loading" @click="load">{{ loading ? '加载中…' : '刷新' }}</button>
             <button class="link-btn" :disabled="syncing" @click="onSyncPackaged">{{ syncing ? '同步中…' : '同步包内技能' }}</button>
-          </p>
+          </div>
           <p v-if="error" class="hint err">{{ error }}</p>
-          <p v-else-if="!rows.length" class="hint muted">暂无技能（包内运维技能启动时自动同步；若为空可点上方「同步包内技能」）</p>
+          <p v-else-if="!rows.length" class="hint muted">暂无技能</p>
           <template v-for="r in rows" :key="r.id">
             <div class="skill-row" :class="{ off: !r.on }">
               <div class="tool-info">
@@ -42,19 +41,6 @@
           </template>
         </div>
       </section>
-
-      <section class="grp static">
-        <div class="grp-head">
-          <span class="grp-title">技能如何生效</span>
-        </div>
-        <div class="grp-body">
-          <p class="hint">
-            每轮运行时后端按触发词智能匹配（词边界 + 短语加权），命中的技能以目录形式暴露给模型，
-            模型判断相关时调 <code>load_skill</code> 拉取正文（最多 12000 字符）在后续轮次遵循执行。
-            对话里的技能选择器可显式挂载技能，优先级高于自动匹配。
-          </p>
-        </div>
-      </section>
     </div>
   </div>
 </template>
@@ -69,6 +55,7 @@
  */
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api, toFriendlyMessage } from '@/api/client'
+import InfoTip from '@/components/common/InfoTip.vue'
 import { useToastStore } from '@/stores/toast'
 import { useSkillStore } from '@/stores/skills'
 import { useConfirm } from '@/composables/useConfirm'

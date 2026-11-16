@@ -16,13 +16,24 @@ function worktree(path: string, branch: string | null = 'main'): GitWorktree {
   return { path, head: 'abc123', branch, detached: false, bare: false, locked: false, prunable: false, main: false }
 }
 
+/** SSH 落点只认 AI 专属会话（与用户终端隔离）：种一条 ai 标记的远程会话并选中它，
+ *  不碰用户活动 tab。chip 读数 / 探测 / 回拨这些守卫都从这个事实源出发。 */
+function seedAi(
+  landing: ReturnType<typeof useExecTargetStore>,
+  ssh: ReturnType<typeof useSSHStore>,
+  session: { id: string; name?: string; type: 'remote'; shell: string; connectionId?: string; reconnectGaveUp?: boolean; unavailable?: boolean },
+) {
+  ssh.sessions = [...ssh.sessions, { name: 'prod', ...session, ai: true }]
+  landing.aiSessionId = session.id
+}
+
 beforeEach(() => {
   setActivePinia(createPinia())
   g.window = { electronAPI: undefined }
 })
 
 describe('落点判定 kind', () => {
-  it('无会话为 null；本地 / 远程会话分别映射 local / ssh', () => {
+  it('无会话为 null；本地映射 local；用户远程活动会话不算 AI 落点，AI 专属会话才是 ssh', () => {
     const ssh = useSSHStore()
     const landing = useExecTargetStore()
     expect(landing.kind).toBeNull()
@@ -31,8 +42,13 @@ describe('落点判定 kind', () => {
     ssh.activeSessionId = 'l1'
     expect(landing.kind).toBe('local')
 
+    // 隔离：用户终端页开着远程 tab，AI 也借不到 —— kind 不因 remote activeSession 变 ssh
     ssh.sessions = [...ssh.sessions, { id: 'r1', name: 'prod', type: 'remote', shell: 'root@10.0.0.1' }]
     ssh.activeSessionId = 'r1'
+    expect(landing.kind).toBeNull()
+
+    // 只有 AI 专属会话才是 ssh 落点
+    seedAi(landing, ssh, { id: 'ai1', type: 'remote', shell: 'root@10.0.0.1' })
     expect(landing.kind).toBe('ssh')
   })
 
@@ -60,8 +76,8 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
     ssh.activeSessionId = 'w1'
     expect(landing.activeShell).toBe('WSL')
 
-    ssh.sessions = [{ id: 'r1', name: 'prod', type: 'remote', shell: 'root@10.0.0.1' }]
-    ssh.activeSessionId = 'r1'
+    // AI 专属远程会话：shell 读数属本地落点，远程返回空
+    seedAi(landing, ssh, { id: 'r1', type: 'remote', shell: 'root@10.0.0.1' })
     expect(landing.activeShell).toBe('')
   })
 
@@ -76,8 +92,7 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
     expect(landing.showBranch).toBe(false)
 
     // SSH：另一台机器，分支读数属无中生有
-    ssh.sessions = [{ id: 'r1', name: 'prod', type: 'remote', shell: 'root@10.0.0.1' }]
-    ssh.activeSessionId = 'r1'
+    seedAi(landing, ssh, { id: 'r1', type: 'remote', shell: 'root@10.0.0.1' })
     expect(landing.showBranch).toBe(false)
   })
 
@@ -97,9 +112,8 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
     ssh.activeSessionId = 'l2'
     expect(landing.activeDirLabel).toBe('')
 
-    // 远程会话没有采集远程 cwd：落 ~ 而不是把本地路径张冠李戴
-    ssh.sessions = [{ id: 'r1', name: 'prod', type: 'remote', shell: 'root@10.0.0.1' }]
-    ssh.activeSessionId = 'r1'
+    // AI 专属远程会话没有采集远程 cwd：落 ~ 而不是把本地路径张冠李戴
+    seedAi(landing, ssh, { id: 'r1', type: 'remote', shell: 'root@10.0.0.1' })
     expect(landing.activeDirLabel).toBe('~')
 
     // 远程读到了真实目录：chip 只印末级名（`/home/ckun/www` 会把这枚 chip 挤爆），
@@ -119,8 +133,7 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
     g.window = { electronAPI: { sshExec: exec } }
     const ssh = useSSHStore()
     const landing = useExecTargetStore()
-    ssh.sessions = [{ id: 'r2', name: 'prod', type: 'remote', shell: 'root@10.0.0.1' }]
-    ssh.activeSessionId = 'r2'
+    seedAi(landing, ssh, { id: 'r2', type: 'remote', shell: 'root@10.0.0.1' })
 
     // OSC 7 只在终端页可见时轮询上报；刚连上就回首页时这张表是空的 —— 不补探测
     // 目录 chip 就永远停在 `~`（用户反馈的「连接成功但不显示目录」）。
@@ -129,8 +142,8 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
     expect(landing.activeDirPath).toBe('/opt/app')
 
     // 已有读数就不再往返：切走再切回来不该重发 pwd
-    ssh.activeSessionId = ''
-    ssh.activeSessionId = 'r2'
+    landing.aiSessionId = ''
+    landing.aiSessionId = 'r2'
     await Promise.resolve()
     expect(exec).toHaveBeenCalledTimes(1)
   })
@@ -141,8 +154,7 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
     g.window = { electronAPI: { sshGetCwd: getCwd, sshExec: exec } }
     const ssh = useSSHStore()
     const landing = useExecTargetStore()
-    ssh.sessions = [{ id: 'r3', name: 'prod', type: 'remote', shell: 'root@10.0.0.1' }]
-    ssh.activeSessionId = 'r3'
+    seedAi(landing, ssh, { id: 'r3', type: 'remote', shell: 'root@10.0.0.1' })
 
     await vi.waitFor(() => expect(getCwd).toHaveBeenCalledWith('r3'))
     await vi.waitFor(() => expect(landing.activeDirLabel).toBe('www'))
@@ -157,16 +169,15 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
     g.window = { electronAPI: { sshGetCwd: async () => '', sshExec: exec } }
     const ssh = useSSHStore()
     const landing = useExecTargetStore()
-    ssh.sessions = [{ id: 'r4', name: 'prod', type: 'remote', shell: 'root@10.0.0.1' }]
-    ssh.activeSessionId = 'r4'
+    seedAi(landing, ssh, { id: 'r4', type: 'remote', shell: 'root@10.0.0.1' })
     expect(landing.activeDirLabel).toBe('~')
 
     await vi.waitFor(() => expect(landing.activeDirLabel).toBe('未连接'))
     expect(landing.activeDirUnavailable).toBe(true)
 
     // 反证之后不再反复探测（否则每切一次落点就多一条 SESSION_NOT_FOUND 错误日志）
-    ssh.activeSessionId = ''
-    ssh.activeSessionId = 'r4'
+    landing.aiSessionId = ''
+    landing.aiSessionId = 'r4'
     await Promise.resolve()
     expect(exec).toHaveBeenCalledTimes(1)
 
@@ -191,14 +202,14 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
     const ssh = useSSHStore()
     const landing = useExecTargetStore()
     ssh.connections = [{ id: 'c1', name: 'prod', host: '10.0.0.1', port: 22, username: 'root' } as never]
-    ssh.sessions = [{ id: 'r6', name: 'prod', type: 'remote', shell: 'root@10.0.0.1', connectionId: 'c1' }]
-    ssh.activeSessionId = 'r6'
+    seedAi(landing, ssh, { id: 'r6', type: 'remote', shell: 'root@10.0.0.1', connectionId: 'c1' })
 
     await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(1))
-    // 新连接顶在同一个标签位上，不是另开一个：会话数不变、active 跟着换 id
-    await vi.waitFor(() => expect(ssh.activeSessionId).toBe('r6b'))
+    // 新连接顶在同一个标签位上，不是另开一个：会话数不变、AI 落点跟着换 id（不抢用户活动 tab）
+    await vi.waitFor(() => expect(landing.aiSessionId).toBe('r6b'))
     expect(ssh.sessions.length).toBe(1)
     expect(ssh.sessions[0].unavailable).toBeFalsy()
+    expect(ssh.sessions[0].ai).toBe(true)
     expect(disconnect).toHaveBeenCalledWith('r6')
 
     // 回拨成功后 chip 立刻有目录，不必等终端页 OSC 7
@@ -206,8 +217,8 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
     expect(landing.activeDirUnavailable).toBe(false)
 
     // 同一轮不再重复回拨（失败会让用户自己点「重新连接…」，不自动刷）
-    ssh.activeSessionId = ''
-    ssh.activeSessionId = 'r6b'
+    landing.aiSessionId = ''
+    landing.aiSessionId = 'r6b'
     await Promise.resolve()
     expect(connect).toHaveBeenCalledTimes(1)
   })
@@ -219,8 +230,7 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
     const ssh = useSSHStore()
     const landing = useExecTargetStore()
     ssh.connections = [{ id: 'c2', name: 'prod', host: '10.0.0.2', port: 22, username: 'root' } as never]
-    ssh.sessions = [{ id: 'r7', name: 'prod', type: 'remote', shell: 'root@10.0.0.2', connectionId: 'c2' }]
-    ssh.activeSessionId = 'r7'
+    seedAi(landing, ssh, { id: 'r7', type: 'remote', shell: 'root@10.0.0.2', connectionId: 'c2' })
 
     await vi.waitFor(() => expect(connect).toHaveBeenCalled())
     await vi.waitFor(() => expect(landing.error).toContain('认证失败'))
@@ -233,8 +243,7 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
     g.window = { electronAPI: { sshGetCwd: async () => '', sshExec: exec } }
     const ssh = useSSHStore()
     const landing = useExecTargetStore()
-    ssh.sessions = [{ id: 'r5', name: 'prod', type: 'remote', shell: 'root@10.0.0.1', reconnectGaveUp: true }]
-    ssh.activeSessionId = 'r5'
+    seedAi(landing, ssh, { id: 'r5', type: 'remote', shell: 'root@10.0.0.1', reconnectGaveUp: true })
     expect(landing.activeDirLabel).toBe('未连接')
     expect(exec).not.toHaveBeenCalled()
   })
@@ -248,16 +257,15 @@ describe('activeShell（本地落点的 shell 跟读）', () => {
       id: 'c1', name: '生产库', host: '10.0.0.1', port: 22, username: 'root',
       authType: 'password', tags: [], createdAt: 0, updatedAt: 0,
     }]
-    ssh.sessions = [{ id: 'r1', name: 'prod', type: 'remote', shell: 'root@10.0.0.1', connectionId: 'c1' }]
-    ssh.activeSessionId = 'r1'
+    seedAi(landing, ssh, { id: 'r1', type: 'remote', shell: 'root@10.0.0.1', connectionId: 'c1' })
     expect(landing.activeRemoteLabel).toBe('生产库')
 
     // 没有对应连接记录（连接被删/手工开的会话）时退到会话自带的 username@host
-    ssh.sessions = [{ id: 'r2', name: 'x', type: 'remote', shell: 'dev@10.0.0.2' }]
-    ssh.activeSessionId = 'r2'
+    seedAi(landing, ssh, { id: 'r2', name: 'x', type: 'remote', shell: 'dev@10.0.0.2' })
     expect(landing.activeRemoteLabel).toBe('dev@10.0.0.2')
 
     // 本地落点不进这个读数（本地 chip 只写「本地」）
+    landing.aiSessionId = ''
     ssh.sessions = [{ id: 'l1', name: 'PowerShell', type: 'local', shell: 'PowerShell' }]
     ssh.activeSessionId = 'l1'
     expect(landing.activeRemoteLabel).toBe('')

@@ -167,6 +167,25 @@
   max-width: 150px;
 }
 
+/* AI 专属会话徽标：强调色 alpha 描边 + 等宽小字，不铺实底（DESIGN.md 禁实心 CTA），
+   与首页落点 chip 选中态同一外观语言。文字读 --text-primary：--accent-text 在浅色
+   主题是白色（给实心按钮用的），透明底徽标读它会隐形；--accent-primary 当文字又过不了
+   variables.test.ts 的对比度守卫 —— 颜色交给描边，文字保证可读。 */
+.tab-ai-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 4px;
+  border: 1px solid rgba(var(--accent-primary-rgb), .4);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.6923rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
 .tab-close {
   width: 16px;
   height: 16px;

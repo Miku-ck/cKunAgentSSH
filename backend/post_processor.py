@@ -388,10 +388,12 @@ async def _call_llm_with_timeout(
     model_cfg: dict,
     model_id: str,
     temperature: float,
-    max_tokens: int,
-    chunk_timeout: float,
-    total_timeout: float,
-    task_name: str,
+    max_tokens: int | None = None,
+    chunk_timeout: float = 30.0,
+    total_timeout: float = 90.0,
+    task_name: str = "post_process",
+    thinking: str = "model_default",
+    thinking_budget: int | None = None,
 ) -> Optional[str]:
     """带双层超时的 LLM 调用
 
@@ -399,7 +401,40 @@ async def _call_llm_with_timeout(
     total_timeout: 总超时（整个 LLM 调用不能超过此值）
 
     超时/异常后显式 aclose() generator，避免 httpx stream 连接泄漏。
+
+    路线 B（按模型动态调整预算与思考强度）：
+    - max_tokens=None → 读 models_config 的 per-model max_output_tokens
+      （后台任务不再写死常量，换模型零改动）；解析失败兜底 1024。
+    - thinking 调用点只声明策略，数值随模型配置走：
+        "off"           → 机械结构化任务：显式下发 enable_thinking=False。
+                          注意 enable_thinking=False（默认值）在 llm_adapter 语义
+                          是「不下发参数」，关不掉思考；必须走 disable_thinking=True。
+                          思考型模型不再把输出预算烧在 reasoning 上
+                          （finish_reason=length + 空内容的根因）。
+        "limited"       → 保留思考但限额：thinking_budget 未给 → per-model
+                          reasoning_tokens（0/缺失 → 不下发 = 模型自决）。
+        "model_default" → 不下发任何思考参数（旧行为）。
     """
+    # ── 动态预算与思考策略解析 ──────────────────────────────────────
+    if max_tokens is None:
+        try:
+            max_tokens = int(model_cfg.get("max_output_tokens") or 0) or 1024
+        except (TypeError, ValueError):
+            max_tokens = 1024
+    disable_thinking = False
+    enable_thinking = False
+    reasoning_budget: Optional[int] = None
+    if thinking == "off":
+        disable_thinking = True
+    elif thinking == "limited":
+        enable_thinking = True
+        if thinking_budget is not None:
+            reasoning_budget = thinking_budget
+        else:
+            try:
+                reasoning_budget = int(model_cfg.get("reasoning_tokens") or 0) or None
+            except (TypeError, ValueError):
+                reasoning_budget = None
     full_text = ""
     finish_reason = ""
     completion_tokens = 0
@@ -411,7 +446,9 @@ async def _call_llm_with_timeout(
         messages=messages,
         temperature=temperature,
         max_tokens=max_tokens,
-        enable_thinking=False,
+        enable_thinking=enable_thinking,
+        disable_thinking=disable_thinking,
+        reasoning_max_tokens=reasoning_budget,
     )
 
     deadline = asyncio.get_event_loop().time() + total_timeout
@@ -457,11 +494,22 @@ async def _call_llm_with_timeout(
             task_name, max_tokens, completion_tokens,
         )
     if not full_text or not full_text.strip():
-        logger.warning(
-            "[post_process:%s] LLM 返回空内容 "
-            "(finish_reason=%s, completion_tokens=%s, reasoning_len=%d)",
-            task_name, finish_reason or "unknown", completion_tokens, reasoning_len,
-        )
+        # 「思考耗尽预算」专项诊断：reasoning 有产出但 content 为空且 length 结束，
+        # 是思考型模型把 max_tokens 烧在 reasoning 上的确定形态 —— 提示上层
+        # 对该任务声明 thinking="off" 或调大预算，而不是盲目重试撞同一堵墙。
+        if reasoning_len and finish_reason == "length":
+            logger.warning(
+                "[post_process:%s] 思考耗尽输出预算：reasoning_len=%d 占满 max_tokens=%s，"
+                "内容为空。建议对该任务声明 thinking='off' 或调大预算 "
+                "(finish_reason=length, completion_tokens=%s)",
+                task_name, reasoning_len, max_tokens, completion_tokens,
+            )
+        else:
+            logger.warning(
+                "[post_process:%s] LLM 返回空内容 "
+                "(finish_reason=%s, completion_tokens=%s, reasoning_len=%d)",
+                task_name, finish_reason or "unknown", completion_tokens, reasoning_len,
+            )
         return None
     return full_text
 
@@ -568,12 +616,14 @@ async def _generate_title(ctx: TurnContext, config: PostProcessConfig) -> None:
         model_cfg=model_cfg,
         model_id=title_model,
         temperature=0.3,
-        # 50 会被推理模型的思考阶段耗尽（enable_thinking=False 未必被服务端执行），
-        # 提高到 128 换取标题稳定产出；标题仍很短，成本可接受。
+        # 50 会被推理模型的思考阶段耗尽（旧 enable_thinking=False 是"不下发"语义，
+        # 关不掉思考），曾靠提到 128 续命；thinking="off" 显式下发关思考后，
+        # 思考型模型不再烧预算，128 只约束标题本身的长度。
         max_tokens=128,
         chunk_timeout=config.chunk_timeout,
         total_timeout=config.title_total_timeout,
         task_name="title",
+        thinking="off",
     )
     if not full_text:
         # LLM 失败时降级为本地规则摘要，避免会话名始终为 New Chat
@@ -701,6 +751,9 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
         chunk_timeout=config.chunk_timeout,
         total_timeout=config.memory_total_timeout,
         task_name="memory",
+        # 结构化提取是机械任务：关思考，预算全部留给 JSON 输出
+        # （否则思考型模型首查必然空、每轮白烧一次重试调用）
+        thinking="off",
     )
     if not full_text:
         return
@@ -719,6 +772,7 @@ async def _extract_memories(ctx: TurnContext, config: PostProcessConfig) -> None
             chunk_timeout=config.chunk_timeout,
             total_timeout=config.memory_total_timeout,
             task_name="memory_retry",
+            thinking="off",
         )
         if retry_text:
             memories = _parse_memories_payload(retry_text)
@@ -852,6 +906,8 @@ async def _generate_skill(ctx: TurnContext, config: PostProcessConfig) -> None:
         chunk_timeout=config.chunk_timeout,
         total_timeout=config.skill_total_timeout,
         task_name="skill",
+        # 结构化产出（JSON）+ 长输出预算：关思考，2048 全留给技能正文
+        thinking="off",
     )
     if not full_text:
         return

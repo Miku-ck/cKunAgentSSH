@@ -1,8 +1,7 @@
 <template>
   <div class="panel">
     <header class="panel-header">
-      <h3>关于与更新</h3>
-      <p class="panel-desc">版本信息与更新通道。更新整目录替换：下载 → sha256 校验 → 退出后由助手换包并重启，失败自动回滚，用户数据（userData）不受影响</p>
+      <h3>关于与更新 <InfoTip text="更新整目录替换：下载 → sha256 校验 → 退出后由助手换包并重启，失败自动回滚，用户数据（userData）不受影响。" /></h3>
     </header>
 
     <div class="panel-body">
@@ -94,6 +93,7 @@
  * 开发运行不支持换包、通道没配、点了检查但没有新版本。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import InfoTip from '@/components/common/InfoTip.vue'
 import SettingRow from '@/components/settings/fields/SettingRow.vue'
 import type { UpdateState } from '../../../../shared/update-core'
 

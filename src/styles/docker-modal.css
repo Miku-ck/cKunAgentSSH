@@ -210,7 +210,8 @@
 .pull-spin { animation: dk-spin .8s linear infinite; }
 
 .dk-list { overflow-y: auto; padding: var(--spacing-8); }
-.dk-empty { padding: 28px 18px; text-align: center; color: var(--text-tertiary); font-size: 1rem; }
+.dk-empty { padding: 28px 18px; display: flex; flex-direction: column; align-items: center; gap: var(--spacing-12); text-align: center; color: var(--text-tertiary); font-size: 1rem; }
+.dk-empty p { margin: 0; }
 .dk-item { display: flex; align-items: center; gap: var(--spacing-10); padding: var(--spacing-10) var(--spacing-12); border-radius: var(--radius-md); cursor: pointer; transition: background var(--transition-fast); }
 .dk-item:hover { background: var(--bg-hover); }
 .dk-item.disabled { opacity: .5; pointer-events: none; }

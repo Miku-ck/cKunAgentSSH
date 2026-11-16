@@ -87,6 +87,21 @@ class Driver:
         """
         telemetry = harness.telemetry
         tools_schema = harness.saddle.schemas() if ctx.config.enable_tools else []
+        # 能力门（M9-2）：模型行显式标记不支持工具调用 → 预判去 tools 直接纯文本跑，
+        # 而不是带 tools 上去撞 BadRequest 再靠 llm_adapter 降级兜底（那要白烧一轮重试）。
+        # 三态语义见 AgentConfig.supports_tool_calling；None/True 维持现状。
+        if tools_schema and ctx.config.supports_tool_calling is False:
+            tools_schema = []
+            yield TraceEvent(
+                kind="warning",
+                source="driver",
+                run_id=ctx.run_id,
+                iteration=0,
+                payload={
+                    "message": "当前模型标记不支持工具调用，本轮将以纯文本模式运行（不会执行命令）",
+                    "code": "tool_calling_disabled",
+                },
+            )
 
         # C-review M8 修复：once 授权在消费时移除（check_permission 计数递减），
         # run 终态由 ReflectionRein.cleanup_run_once 回收。此处只防御性清理
@@ -320,11 +335,13 @@ class Driver:
             # ── post_llm_call ──
             await harness.reins.check(ReinPoint.POST_LLM_CALL, ctx)
 
-            if forced_convergence and llm_out.tool_calls:
-                # 收敛轮幻觉防御：tools=[] 下模型仍可能凭惯性输出 tool_calls，
-                # 物理丢弃按纯文本收尾（空输出由下方 _build_run_summary 兜底）
+            if (forced_convergence or ctx.config.supports_tool_calling is False) and llm_out.tool_calls:
+                # 幻觉防御：tools=[] 下模型仍可能凭惯性输出 tool_calls，物理丢弃
+                # 按纯文本收尾（空输出由下方 _build_run_summary 兜底）。
+                # 两条路汇聚于此：收敛轮（末轮禁工具）与能力门（模型行标记不支持
+                # 工具调用，全程 tools=[]）—— 防御语义一致，共用同一分支。
                 logger.warning(
-                    "收敛轮丢弃幻觉 tool_calls: %d 个 (run=%s, iteration=%d)",
+                    "丢弃幻觉 tool_calls: %d 个 (run=%s, iteration=%d)",
                     len(llm_out.tool_calls), ctx.run_id, iteration,
                 )
                 llm_out.tool_calls = []

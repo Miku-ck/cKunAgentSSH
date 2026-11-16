@@ -506,6 +506,7 @@ def init_db(db_path: str) -> None:
                 supports_tool_calling INTEGER DEFAULT 0,
                 is_default       INTEGER DEFAULT 0,
                 is_default_ssh   INTEGER DEFAULT 0,
+                fallback_model_id TEXT DEFAULT '',
                 temperature      REAL DEFAULT 0.7,
                 max_tokens       INTEGER DEFAULT 16384,
                 max_output_tokens INTEGER DEFAULT 4096,
@@ -882,6 +883,7 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
     if "images" not in bot_message_cols:
         conn.execute("ALTER TABLE bot_messages ADD COLUMN images TEXT")
     _migrate_bot_channels(conn)
+    _migrate_bot_ambient_lines(conn)
     # bot_conversations：QQ 会话本地显示覆盖两列（Phase 4 头像体系）。
     # 仅展示层，QQ 真实群名/群头像不采集不改写；NULL = 未设置，走默认回落。
     cursor = conn.execute("PRAGMA table_info(bot_conversations)")
@@ -1080,6 +1082,7 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
             "supports_tool_calling": "INTEGER DEFAULT 0",
             "is_default": "INTEGER DEFAULT 0",
             "is_default_ssh": "INTEGER DEFAULT 0",
+            "fallback_model_id": "TEXT DEFAULT ''",
             "temperature": "REAL DEFAULT 0.7",
             "max_tokens": "INTEGER DEFAULT 16384",
             "max_output_tokens": "INTEGER DEFAULT 4096",
@@ -1102,6 +1105,24 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
         # 旧库会在 init_db 里抛 OperationalError，而 init_db 只有 try/finally、
         # main.py 也不接 → 后端直接起不来（不是某个接口 500，是整个服务不启动）。
         _fix_model_name_and_id(conn)
+
+        # ── supports_tool_calling 存量基线迁移（一次性）──
+        # 三列此前「只写不读」（前端只渲染徽标），建表 DEFAULT 0 且种子硬编码 0。
+        # 能力门上线后 0 有了真实语义（预判去 tools）—— 若按字面执行，所有存量/种子
+        # 模型立即失能工具。用 app_settings 守卫做一次性升级：存量 0 → 1（=「维持
+        # 现状」），此后用户在 UI 显式设 0 才真正生效。种子插入处已同步改 1。
+        baseline_key = "migration.tool_capability_baseline"
+        # 判存在必须用同一 conn 直查 —— 不能走 get_app_setting()：它 finally 里
+        # conn.close()，而池化 close 是 rollback-and-keep-alive（见 _PooledConnection），
+        # 会把上面 _fix_model_name_and_id 刚写入、尚未 commit 的闸门标记连同互换
+        # 修正一起回滚（init_db 的 commit 在整个 try 末尾，中间任何 close 都是回滚点）。
+        if not conn.execute(
+            "SELECT 1 FROM app_settings WHERE key = ?", (baseline_key,)
+        ).fetchone():
+            conn.execute(
+                "UPDATE models_config SET supports_tool_calling = 1 WHERE supports_tool_calling = 0"
+            )
+            set_app_setting(baseline_key, "done")
 
 
 def _migrate_bot_channels(conn: sqlite3.Connection) -> None:
@@ -1209,6 +1230,77 @@ def _migrate_bot_channels(conn: sqlite3.Connection) -> None:
             "UPDATE bot_conversations SET channel_id = ?, external_id = ? WHERE id = ?",
             (channel_id, external_id, row["id"]),
         )
+
+
+def _migrate_bot_ambient_lines(conn: sqlite3.Connection) -> None:
+    """群聊环境上下文落库表（ambient 持久化，M9-5）。
+
+    独立表而非给 bot_messages 加列：ambient 上下文的维度是 (channel_id,
+    group_openid)，跨人格共享；bot_messages 强绑 conversation_id（per-persona），
+    塞进去要么按人格复制、要么伪造会话行，还会污染幂等/answered_at 语义，
+    且 external_msg_id 唯一索引会与主路幂等冲突。CREATE IF NOT EXISTS 天然幂等，
+    每 boot 照常执行（与 answered_at 补列同区）。
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS bot_ambient_lines ("
+        " id TEXT PRIMARY KEY,"
+        " channel_id TEXT NOT NULL,"
+        " group_openid TEXT NOT NULL,"
+        " speaker TEXT NOT NULL DEFAULT '',"
+        " content TEXT NOT NULL,"
+        " created_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_bot_ambient_lines_key "
+        "ON bot_ambient_lines(channel_id, group_openid, created_at)"
+    )
+
+
+def add_bot_ambient_line(
+    channel_id: str, group_openid: str, speaker: str, content: str, created_at: str
+) -> None:
+    """写一条群环境上下文（write-through；失败由调用方降级为仅内存）。"""
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO bot_ambient_lines (id, channel_id, group_openid, speaker, content, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (_new_id(), channel_id or "", group_openid or "", speaker or "",
+             content or "", created_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_recent_ambient_lines(minutes: float = 10.0) -> "list[dict]":
+    """读 TTL 窗口内的全部环境上下文行（重启恢复用，跨 channel 一次灌回）。"""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT channel_id, group_openid, speaker, content, created_at "
+            "FROM bot_ambient_lines "
+            "WHERE created_at >= datetime('now', ?) "
+            "ORDER BY created_at ASC, rowid ASC",
+            (f"-{float(minutes)} minutes",),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def purge_ambient_lines(minutes: float = 15.0) -> int:
+    """清掉超过 TTL+缓冲 的环境上下文行，返回删除行数。"""
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "DELETE FROM bot_ambient_lines WHERE created_at < datetime('now', ?)",
+            (f"-{float(minutes)} minutes",),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
 
 
 def _init_memory_v2(conn: sqlite3.Connection) -> None:
@@ -1619,7 +1711,7 @@ def _insert_seed_model(
         "(id, name, model_id, provider, base_url, api_key, supports_thinking, supports_image, supports_tool_calling, "
         "is_default, is_default_ssh, "
         "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0.7, 16384, 4096, 8192, 0.9, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, 0.7, 16384, 4096, 8192, 0.9, ?, ?, ?)",
         (
             model_id, model_id, model_id, "vllm",
             base_url, api_key, int(supports_thinking), int(is_default), int(is_default),
@@ -2564,18 +2656,81 @@ def delete_plugin(plugin_id: str) -> bool:
 
 # ── 模型配置 CRUD ──
 
-# ── 凭据信封（Windows DPAPI，零第三方依赖）────────────────────────────────────
+# ── 凭据信封（Windows DPAPI / 非 Windows keyring）──────────────────────────────
 # LLM api_key（models_config.api_key）与网络工具密钥（app_settings: web.tavily_api_key）
 # 不再明文落库：Windows 上经 DPAPI（CryptProtectData，当前用户作用域）加密后以
 # `dpapi:v1:<base64>` 信封前缀存储 —— 库文件被拖走时拿到的是只有同一 Windows 用户
-# 才能解开的密文。读取侧（unprotect_secret）见到前缀就解密；无前缀按旧明文原样
-# 返回（历史行兼容，该值下次经写入侧保存时自动升级为信封）。
-# 非 Windows 平台暂保持明文落库（TODO: 接各平台系统凭据库，如 libsecret/Keychain）。
+# 才能解开的密文。非 Windows 上明文存系统凭据库（keyring，可选依赖），DB 行只存
+# `keyring:v1:<句柄>` 句柄 —— keyring 不可用时写入侧显式抛错（fail-closed），绝不
+# 静默降级成明文落库。
+# 读取侧（unprotect_secret）见到任一前缀就解密；无前缀按旧明文原样返回
+# （历史行兼容，该值下次经写入侧保存时自动升级为信封）。
 # 原子性口径：本信封只作用于 SQLite 行值，落库走单条 INSERT/UPDATE 事务 ——
 # 不引入任何设置文件写盘，CONTEXT.md「半写损坏」的 tmp+rename 由 DB 事务天然保证。
 _SECRET_ENVELOPE_PREFIX = "dpapi:v1:"
+_KEYRING_ENVELOPE_PREFIX = "keyring:v1:"
+# keyring 条目命名：service 固定常量；username 带自描述版本前缀 + 随机句柄。
+_KEYRING_SERVICE = "cKunAgentSSH.secrets"
+_KEYRING_USERNAME_PREFIX = "kr1:"
 # 加密平台开关（测试可改写以模拟非 Windows 路径）；仅 win32 启用 DPAPI。
 _SECRET_PROTECTION_PLATFORM = "win32"
+
+
+class SecretStorageError(OSError):
+    """系统凭据库不可用或写入失败。
+
+    继承 OSError：调用方（模型保存 / Tavily 保存）现有的 OSError 失败路径
+    无需改动即可接住。语义是 fail-closed —— 本次保存显式失败，绝不静默
+    降级成明文落库。
+    """
+
+
+# ── keyring 间接层（收进三个函数，测试 monkeypatch 这里即可模拟）──────────────
+
+def _keyring_import():
+    """惰性导入 keyring；缺失时抛 ImportError，由调用方转为 SecretStorageError。"""
+    import keyring  # noqa: F401 — 仅探测可用性
+    from keyring import errors as _keyring_errors
+    return keyring, _keyring_errors
+
+
+def _keyring_set(username: str, value: str) -> None:
+    """明文写入系统凭据库；不可用/失败一律转 SecretStorageError（fail-closed）。"""
+    try:
+        keyring, errors = _keyring_import()
+    except ImportError as e:
+        raise SecretStorageError(
+            "keyring 库未安装，已拒绝保存密钥；请安装 keyring 并配置系统凭据后端"
+            "（如 Linux 的 SecretService / macOS 钥匙串）") from e
+    try:
+        keyring.set_password(_KEYRING_SERVICE, username, value)
+    except errors.NoKeyringError as e:
+        raise SecretStorageError(
+            "系统凭据库不可用（未安装 keyring 后端），已拒绝保存密钥；"
+            "请安装并配置系统凭据后端（如 Linux 的 SecretService / macOS 钥匙串）") from e
+    except SecretStorageError:
+        raise
+    except Exception as e:
+        raise SecretStorageError(f"系统凭据库写入失败: {e}") from e
+
+
+def _keyring_get(username: str) -> str | None:
+    """读取系统凭据库条目；不可用/失败返回 None（读取侧按「未配置」处理）。"""
+    try:
+        keyring, _ = _keyring_import()
+        return keyring.get_password(_KEYRING_SERVICE, username)
+    except Exception as e:
+        logger.warning("keyring 凭据读取失败，按未配置处理: %s", e)
+        return None
+
+
+def _keyring_delete(username: str) -> None:
+    """尽力删除系统凭据库条目（清除语义的辅助，失败仅留痕不阻断）。"""
+    try:
+        keyring, _ = _keyring_import()
+        keyring.delete_password(_KEYRING_SERVICE, username)
+    except Exception as e:
+        logger.warning("keyring 条目删除失败（句柄 %s…，不影响清除语义）: %s", username[:8], e)
 
 
 def _dpapi_transform(data: bytes, protect: bool) -> bytes:
@@ -2629,28 +2784,45 @@ def _dpapi_transform(data: bytes, protect: bool) -> bytes:
 
 
 def protect_secret(value: str) -> str:
-    """机密写入侧：明文 → `dpapi:v1:<base64>` 信封（仅 win32）。
+    """机密写入侧：明文 → 信封（win32=DPAPI 密文信封；非 win32=keyring 句柄信封）。
 
-    空值原样返回（空串 = 用户清除密钥的语义，不包信封）；已是信封的值不二次
-    包裹（幂等）。DPAPI 调用失败向上抛 OSError：静默降级成明文落盘会把
-    「这次没加密」藏进库，调用方（模型保存/Tavily 保存）应当让这次保存显式失败。
+    空值原样返回（空串 = 用户清除密钥的语义，不包信封）；已是任一信封的值不
+    二次包裹（幂等）。加密路径失败向上抛 OSError（win32）或 SecretStorageError
+    （非 win32）：静默降级成明文落盘会把「这次没加密」藏进库，调用方（模型
+    保存/Tavily 保存）应当让这次保存显式失败。
     """
     value = value or ""
     if (not value or value.startswith(_SECRET_ENVELOPE_PREFIX)
-            or sys.platform != _SECRET_PROTECTION_PLATFORM):
+            or value.startswith(_KEYRING_ENVELOPE_PREFIX)):
         return value
-    blob = _dpapi_transform(value.encode("utf-8"), protect=True)
-    return _SECRET_ENVELOPE_PREFIX + base64.b64encode(blob).decode("ascii")
+    if sys.platform == _SECRET_PROTECTION_PLATFORM:
+        blob = _dpapi_transform(value.encode("utf-8"), protect=True)
+        return _SECRET_ENVELOPE_PREFIX + base64.b64encode(blob).decode("ascii")
+    # 非 Windows：DB 行只存随机句柄，明文进系统凭据库（keyring 不可用即抛）
+    handle = uuid.uuid4().hex
+    _keyring_set(_KEYRING_USERNAME_PREFIX + handle, value)
+    return _KEYRING_ENVELOPE_PREFIX + handle
 
 
 def unprotect_secret(value: str) -> str:
     """机密读取侧：见信封前缀就解密还原明文；无前缀按旧明文原样返回。
 
-    解密失败（典型：库文件被拷到别的 Windows 用户/机器）不抛也不回密文，
-    返回空串并留 warning —— 把密文当 key 发给上游只会得到费解的 401，
-    报「未配置」则引导用户重填一次密钥（下次保存即按当前环境重新加封）。
+    解密/读取失败（典型：库文件被拷到别的 Windows 用户/机器、或 keyring
+    不可用/条目缺失）不抛也不回密文，返回空串并留 warning —— 把密文当 key
+    发给上游只会得到费解的 401，报「未配置」则引导用户重填一次密钥（下次
+    保存即按当前环境重新加封）。
     """
-    if not value or not value.startswith(_SECRET_ENVELOPE_PREFIX):
+    if not value:
+        return value
+    if value.startswith(_KEYRING_ENVELOPE_PREFIX):
+        username = _KEYRING_USERNAME_PREFIX + value[len(_KEYRING_ENVELOPE_PREFIX):]
+        got = _keyring_get(username)
+        if got is None:
+            logger.warning(
+                "keyring 凭据句柄读不出明文，按未配置处理（keyring 不可用或条目缺失）")
+            return ""
+        return got
+    if not value.startswith(_SECRET_ENVELOPE_PREFIX):
         return value
     try:
         blob = base64.b64decode(value[len(_SECRET_ENVELOPE_PREFIX):], validate=True)
@@ -2677,9 +2849,59 @@ def _mask_api_key(key: str | None) -> str:
 _MC_COLS = (
     "id, name, model_id, provider, base_url, api_key, "
     "supports_thinking, supports_image, supports_tool_calling, "
-    "is_default, is_default_ssh, "
+    "is_default, is_default_ssh, fallback_model_id, "
     "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at"
 )
+
+# 备用链写侧校验的深度上限（运行时只取一跳，这里防的是保存时的环与失控链）
+_FALLBACK_CHAIN_MAX_DEPTH = 8
+
+
+def _assert_fallback_chain_ok(pk: str, fallback_pk: str) -> None:
+    """备用链写侧校验：自指与环（A→B→A）直接拒绝，链深上限 8。
+
+    存量链也可能已经环了（历史脏数据）——从目标出发沿链走，撞到 `pk` 或
+    任何已见节点即环。链上悬空引用（指向已删除行）不构成环，放行。
+    """
+    if not fallback_pk:
+        return
+    if fallback_pk == pk:
+        raise ValueError("备用模型不能指向自身")
+    seen = {pk}
+    cur: Optional[str] = fallback_pk
+    conn = _get_conn()
+    try:
+        for _ in range(_FALLBACK_CHAIN_MAX_DEPTH):
+            if cur is None or cur in seen:
+                raise ValueError("备用模型链存在环（如 A→B→A），已拒绝保存")
+            seen.add(cur)
+            row = conn.execute(
+                "SELECT fallback_model_id FROM models_config WHERE id = ?", (cur,)
+            ).fetchone()
+            nxt = (row["fallback_model_id"] or "").strip() if row else ""
+            if not nxt:
+                return
+            cur = _resolve_model_pk(nxt)
+            if cur is None:
+                return
+    finally:
+        conn.close()
+    raise ValueError(f"备用模型链超过 {_FALLBACK_CHAIN_MAX_DEPTH} 层，已拒绝保存")
+
+
+def _normalize_fallback_ref(self_pk: str, ref: str) -> str:
+    """把用户传入的备用引用（行主键或模型名）归一为行主键；空串=清除。
+
+    引用不存在抛 ValueError（fail-fast 拼写错误），自指/环抛 ValueError。
+    """
+    ref = (ref or "").strip()
+    if not ref:
+        return ""
+    fb_pk = _resolve_model_pk(ref)
+    if fb_pk is None:
+        raise ValueError(f"备用模型不存在: {ref}")
+    _assert_fallback_chain_ok(self_pk, fb_pk)
+    return fb_pk
 
 
 def _resolve_model_pk(ref: str) -> Optional[str]:
@@ -2770,7 +2992,9 @@ def create_model_config(
     provider: str = "custom",
     supports_thinking: bool = False,
     supports_image: bool = False,
-    supports_tool_calling: bool = False,
+    # 能力门上线后该列有真实语义（False=预判去 tools）；UI 写侧勾选已撤，
+    # 默认必须与存量基线迁移同口径取 True，显式传 False 仍生效。
+    supports_tool_calling: bool = True,
     temperature: float = 0.7,
     # max_tokens 是「上下文窗口」列（与 models_config 建表 DEFAULT 16384 一致），
     # 不是输出预算 —— 输出预算由 max_output_tokens 管。窗口若默认 4096，
@@ -2780,6 +3004,7 @@ def create_model_config(
     top_p: float = 0.9,
     is_default_ssh: bool = False,
     reasoning_tokens: int = 8192,
+    fallback_model_id: str = "",
 ) -> dict:
     """创建模型配置，返回完整记录"""
     # 去除首尾空格：粘贴时可能带入换行/空白，导致上游 API 校验失败（401）
@@ -2788,6 +3013,8 @@ def create_model_config(
     api_key = protect_secret((api_key or "").strip())
     model_id = (model_id or "").strip()
     mid = _new_id()
+    # 备用引用归一为行主键并校验（不存在/环 fail-fast）；新行不可能被存量链引用
+    fallback_pk = _normalize_fallback_ref(mid, fallback_model_id)
     now = _now()
     conn = _get_conn()
     try:
@@ -2797,15 +3024,16 @@ def create_model_config(
         conn.execute(
             "INSERT INTO models_config "
             "(id, name, model_id, provider, base_url, api_key, supports_thinking, supports_image, supports_tool_calling, "
-            "is_default, is_default_ssh, "
+            "is_default, is_default_ssh, fallback_model_id, "
             "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 mid, name, model_id, provider, base_url, api_key,
                 1 if supports_thinking else 0,
                 1 if supports_image else 0,
                 1 if supports_tool_calling else 0,
                 1 if is_default_ssh else 0,
+                fallback_pk,
                 temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, next_order, now, now,
             ),
         )
@@ -2831,8 +3059,11 @@ def update_model_config(config_id: str, **kwargs) -> Optional[dict]:
         "name", "model_id", "provider", "base_url", "api_key",
         "supports_thinking", "supports_image", "supports_tool_calling",
         "temperature", "max_tokens", "max_output_tokens", "reasoning_tokens", "top_p", "sort_order",
-        "is_default", "is_default_ssh",
+        "is_default", "is_default_ssh", "fallback_model_id",
     }
+    # 备用引用先归一校验（环/自指/不存在 fail-fast），再进通用 sets
+    if kwargs.get("fallback_model_id") is not None:
+        kwargs["fallback_model_id"] = _normalize_fallback_ref(pk, kwargs["fallback_model_id"])
     sets = []
     params = []
     for k, v in kwargs.items():
@@ -2893,6 +3124,10 @@ def delete_model_config(model_id: str) -> bool:
         ).fetchone()
         if row and (row["is_default"] or row["is_default_ssh"]):
             raise ValueError("Cannot delete a model that is set as default")
+        # 清掉其它行对被删模型的备用引用（悬空引用运行时被忽略，但留着会误导
+        # 排障；默认模型已禁删，普通模型删后引用必须显式置空）
+        conn.execute(
+            "UPDATE models_config SET fallback_model_id = '' WHERE fallback_model_id = ?", (pk,))
         cur = conn.execute("DELETE FROM models_config WHERE id = ?", (pk,))
         conn.commit()
         return cur.rowcount > 0
@@ -2964,6 +3199,27 @@ def get_default_model(mode: Optional[str] = None, mask_key: bool = True) -> Opti
         return result
     finally:
         conn.close()
+
+
+def resolve_fallback_model_cfg(model_cfg: dict) -> Optional[dict]:
+    """解析主模型配置的备用模型完整配置（mask_key=False，供 StreamLLMClient 直用）。
+
+    运行时只取一跳（A 的备用是 B；B 自己的备用在运行中不追）——每 run 只切换一次，
+    更深的链路写侧校验允许保存但运行时用不到。以下任一情况返回 None（不启用回退）：
+    主模型未配置备用 / 备用引用已悬空 / 自指 / 备用缺 base_url 或 api_key
+    （密钥信封解密失败按空串处理，见 unprotect_secret —— 切过去也是 401）。
+    """
+    ref = (model_cfg.get("fallback_model_id") or "").strip()
+    if not ref:
+        return None
+    fb = get_model_config(ref, mask_key=False)
+    if not fb:
+        return None
+    if fb.get("id") == model_cfg.get("id"):
+        return None  # 自指（写侧已挡，运行时兜底）
+    if not (fb.get("base_url") or "").strip() or not (fb.get("api_key") or ""):
+        return None  # 密钥不可用（含信封解密失败）—— 切过去只会 401
+    return fb
 
 
 # ── cKunBot 人格与会话 ──
@@ -4222,7 +4478,10 @@ def get_recent_bot_messages(conversation_id: str, limit: int = 40) -> list[dict]
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT role, content, images FROM bot_messages WHERE conversation_id = ? "
+            # created_at 必须带出来：chat_service 用它给状态层喂 user_created_at
+            # （burst 判定要真时间戳）。漏掉这一列会让 burst 永远静默失效 ——
+            # history 里每项都缺该键，turn_events 数不到任何一条 60s 内的消息。
+            "SELECT role, content, images, created_at FROM bot_messages WHERE conversation_id = ? "
             "ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (conversation_id, limit),
         ).fetchall()

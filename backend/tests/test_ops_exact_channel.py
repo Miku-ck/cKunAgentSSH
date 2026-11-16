@@ -43,7 +43,8 @@ class _VirtualRemote:
         self.fails: dict[str, str] = {}       # path -> 读取失败原因（模拟权限等）
         self.calls: list[tuple[str, str]] = []
 
-    async def exec(self, ssh_session_id: str, command: str, timeout: float):
+    async def exec(self, ssh_session_id: str, command: str, timeout: float, exec_id: str = ""):
+        # exec_id：M9 取消句柄，exec_remote 必带（虚拟远端只按命令模板分派，忽略它）
         self.calls.append((ssh_session_id, command))
         cmd = command.strip()
 

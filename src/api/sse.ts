@@ -179,6 +179,13 @@ export interface StreamAgentOptions {
   /** token 熔断上限。不传 = 后端默认；显式 0 = 不设上限 */
   maxTotalTokens?: number
   skillIds?: string[]
+  /**
+   * 逐 run 插件收紧（用户 2026-11-16）：本次只装这些插件。
+   * undefined = 未表态，字段省略、后端继承全部已授权插件（引入前行为）；
+   * 空数组 = 「本次一个插件都不带」的合法表态，必须原样发出。
+   * 授权本身仍在设置同意流，这里只做收紧。
+   */
+  selectedPluginIds?: string[]
   /** 本次 run 使用的专家 id。不传 = 完全沿用现有默认行为（无专家）。 */
   expertId?: string
   /** 是否启用触发词自动技能匹配（设置"自动技能匹配"，默认开启） */
@@ -208,6 +215,10 @@ export interface StreamAgentOptions {
   sourceRawText?: string
   /** 结构稿含"新增写步骤"：后端据此把 auto 审批 fail-closed 回落 normal。 */
   enhancedHasAddedWriteSteps?: boolean
+  /** 随消息下发的图片附件（本体已由 /chat/upload 落盘，只传引用）。不传 = 纯文本。 */
+  images?: { file_id: string; filename: string }[]
+  /** 视频附件引用：模型无法直接观看，后端把存储路径与 ffprobe 提示注入任务。 */
+  videos?: { file_id: string; filename: string }[]
   onEvent: (event: AgentSSEEvent) => void
   onError: (error: string) => void
   onDone: () => void
@@ -265,6 +276,11 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           ...(options.maxCostUsd !== undefined ? { max_cost_usd: options.maxCostUsd } : {}),
           ...(options.maxTotalTokens !== undefined ? { max_total_tokens: options.maxTotalTokens } : {}),
           skill_ids: options.skillIds || [],
+          // 逐 run 插件收紧：字段只在显式选择时发送；空数组原样发出
+          // （`? … : {}` 会把空数组当 falsy 抹掉，这里必须显式判 null/undefined）
+          ...(options.selectedPluginIds != null
+            ? { selected_plugin_ids: options.selectedPluginIds }
+            : {}),
           auto_skill_match: options.autoSkillMatch ?? true,
           context_window: options.contextWindow ?? 20,
           visible_terminal: options.visibleTerminal ?? false,
@@ -281,6 +297,9 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
             ? { source_raw_text: options.sourceRawText } : {}),
           ...(options.enhancedHasAddedWriteSteps
             ? { enhanced_has_added_write_steps: true } : {}),
+          // 图片/视频附件：只在有时发字段（后端 None = 纯文本 run，零变化）
+          ...(options.images?.length ? { images: options.images } : {}),
+          ...(options.videos?.length ? { videos: options.videos } : {}),
         }),
         signal: abortController.signal,
       })

@@ -8,7 +8,7 @@ complete_reply 一次性全文、ambient_reply 群聊顺带一句 —— 共用�
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 
 import database as db
@@ -17,6 +17,7 @@ from bot import memory as memory_mod
 from bot import relation as relation_mod
 from bot import state as state_mod
 from bot import stickers as stickers_mod
+from bot.timeutil import parse_ts
 from bot.character import (
     REFUSAL_STYLES,
     SAFETY_CHARTER,
@@ -179,18 +180,35 @@ class BotChatService:
         sections.append(SAFETY_CHARTER)
         return "\n\n".join(sections)
 
+    # 历史时间锚点阈值：距上一条超过这段时间才给 user 消息加时间前缀。
+    # 借鉴 dsh-pet 的踩坑经验——只标 user、不标 assistant（标了模型会照抄成
+    # "[11:54]" 开头），且不能每条都标（浪费 token 又干扰语气）。
+    HISTORY_TIME_GAP_MINUTES = 30
+
     @staticmethod
-    def _to_llm_message(item: dict) -> dict:
+    def _to_llm_message(item: dict, prev_ts: datetime | None = None) -> dict:
         """历史条目转 OpenAI message：仅带图的用户消息构造成多模态数组；其余
-        （含助手、无图用户消息）维持纯文本——助手图不回喂（控 token）。"""
+        （含助手、无图用户消息）维持纯文本——助手图不回喂（控 token）。
+
+        prev_ts 是上一条历史的时间戳：仅当本条是 user、且与上一条间隔
+        ≥ HISTORY_TIME_GAP_MINUTES 时，才在正文前加本地时间前缀，让模型感知
+        「这段对话中间隔了很久」。assistant 消息永不标，避免模型照抄时间戳。
+        """
+        text = item["content"]
+        ts = parse_ts(item.get("created_at"))
+        if (item["role"] == "user" and ts and prev_ts
+                and (ts - prev_ts).total_seconds()
+                >= BotChatService.HISTORY_TIME_GAP_MINUTES * 60):
+            text = f"[{ts.astimezone().strftime('%m-%d %H:%M')}] {text}"
+
         images = item.get("images") or []
         if item["role"] == "user" and images:
             return {
                 "role": "user",
-                "content": [{"type": "text", "text": item["content"]}]
+                "content": [{"type": "text", "text": text}]
                 + [{"type": "image_url", "image_url": {"url": u}} for u in images],
             }
-        return {"role": item["role"], "content": item["content"]}
+        return {"role": item["role"], "content": text}
 
     async def stream_reply(
         self,
@@ -308,7 +326,14 @@ class BotChatService:
         )
         if memory_note:
             messages.append({"role": "system", "content": memory_note})
-        messages.extend(self._to_llm_message(item) for item in history)
+        # 历史时间戳只标 user、且间隔 ≥30min 才标：逐条推进 prev_ts，
+        # 让模型知道哪几段对话之间隔了很久（assistant 不会带前缀）。
+        prev_ts: datetime | None = None
+        for item in history:
+            messages.append(self._to_llm_message(item, prev_ts))
+            ts = parse_ts(item.get("created_at"))
+            if ts:
+                prev_ts = ts
 
         from llm_adapter import chat_stream
 
@@ -426,14 +451,22 @@ class BotChatService:
         if not persona_id:
             return ""
         try:
-            contents = await memory_mod.recall(
-                persona_id, query,
-                embed_client=embed_client,
-                situation=situation,
-                novelty=novelty if novelty is not None else 40.0,
-                conversation_id=conversation_id,
-                group=group,
+            # 记忆召回卡在首字生成之前：慢（而非抛错）会让用户干等，
+            # 所以除异常兜底外再加一道 1.5s 硬超时，慢了就当没有记忆。
+            contents = await asyncio.wait_for(
+                memory_mod.recall(
+                    persona_id, query,
+                    embed_client=embed_client,
+                    situation=situation,
+                    novelty=novelty if novelty is not None else 40.0,
+                    conversation_id=conversation_id,
+                    group=group,
+                ),
+                timeout=1.5,
             )
+        except asyncio.TimeoutError:
+            logger.warning("陪聊记忆召回超时(1.5s)，本轮跳过记忆注入")
+            return ""
         except Exception as exc:  # noqa: BLE001 —— 记忆层任何异常都不该影响回复
             logger.warning("陪聊记忆召回失败: %s", exc)
             return ""

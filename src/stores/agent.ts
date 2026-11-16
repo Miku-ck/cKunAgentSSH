@@ -315,6 +315,10 @@ export const useAgentStore = defineStore('agent', () => {
     enhanced?: boolean
     sourceRawText?: string
     enhancedHasAddedWriteSteps?: boolean
+    /** 随消息下发的图片附件引用（见 StreamAgentOptions.images） */
+    images?: { file_id: string; filename: string }[]
+    /** 随消息下发的视频附件引用（见 StreamAgentOptions.videos） */
+    videos?: { file_id: string; filename: string }[]
   }) {
     // C10 修复：并发保护 — 如果有正在运行的流，先中止它，避免多个流并行导致状态混乱
     if (abortFn) {
@@ -353,6 +357,12 @@ export const useAgentStore = defineStore('agent', () => {
           : 'AI 运行失败，后端未返回具体错误，请查看后端日志'
         status.value = 'failed'
         currentState.value = 'failed'
+        // 视觉拒绝的最后兜底：粘贴图片 + 模型不支持时 run 会以这条错误终局，
+        // 失败信息容易淹没在运行面板里 —— 错误带多模态标记时同步 toast 一次，
+        // 让「为什么失败、该换什么」直接跳到用户眼前
+        if (/视觉多模态|图片输入|image_url/i.test(err)) {
+          useToastStore().error('当前模型可能不支持图片输入：请切换多模态模型，或去掉图片附件后重试')
+        }
         // Q-F2：非正常终态同样 flush 擦洗器（残留 buf 不留到下一轮）
         flushScrubbers()
         // B11 修复：run 结束清理权限请求状态，防止面板里残留过期授权按钮

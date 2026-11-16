@@ -208,6 +208,7 @@
         :pending-id="pendingConnId"
         @close="showConnPicker = false"
         @pick="handleConnect"
+        @remote-mgr="showConnPicker = false; emit('remote-mgr')"
       />
     </Teleport>
 
@@ -325,7 +326,7 @@ const {
 } = host
 
 // exec 进入终端：命令写进目标会话的交互 shell 后，请求父级（SshView）切到该会话终端
-const emit = defineEmits<{ 'exec-terminal': [sessionId: string] }>()
+const emit = defineEmits<{ 'exec-terminal': [sessionId: string], 'remote-mgr': [] }>()
 
 const query = ref('')
 const q = () => query.value.toLowerCase()

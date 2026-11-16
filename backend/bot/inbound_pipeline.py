@@ -85,7 +85,7 @@ class InboundPipeline:
         # 自己的发言也进上下文：下一句接话才知道刚才说过什么，避免复读。
         if spoken:
             persona = (conversation.get("persona") or {}).get("name") or "我"
-            group_ambient.note_line(inbound.channel_id, group_openid, persona, reply)
+            group_ambient.note_line_persisted(inbound.channel_id, group_openid, persona, reply)
 
     async def _handle_locked(self, inbound, provider, persona_id: str) -> None:
         conversation = await asyncio.to_thread(

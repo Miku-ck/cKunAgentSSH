@@ -240,7 +240,8 @@
           </div>
           <div class="dc-list">
             <div v-if="sshStore.connections.length === 0" class="dc-empty">
-              暂无 SSH 连接配置，请先在「远程管理」中新增连接
+              <p>暂无 SSH 连接配置</p>
+              <button class="btn btn-primary" type="button" @click="showConnPicker = false; emit('remote-mgr')">新增连接</button>
             </div>
             <div
               v-for="conn in sshStore.connections"
@@ -310,6 +311,7 @@ import { PORT_SERVICE_NAMES } from '@/stores/server-monitor-core'
 
 const monitor = useServerMonitorStore()
 const sshStore = useSSHStore()
+const emit = defineEmits<{ 'remote-mgr': [] }>()
 
 const showConnPicker = ref(false)
 const connecting = ref(false)

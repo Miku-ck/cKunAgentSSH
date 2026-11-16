@@ -5,6 +5,7 @@
 import type { Client, ClientChannel, SFTPWrapper } from 'ssh2'
 import { safeSend as sendToWindow } from '../utils/safe-send'
 import { LS_COLORS_NO_BACKGROUND } from '../utils/ls-colors'
+import { ExecRegistry } from './exec-registry'
 
 // ssh2 的 require 实测 ~1.3s（纯 JS+crypto 依赖链），静态导入会串在主进程模块
 // 评估期、窗口 show 之前。挪为懒加载：setupSSHIPC 后台预热（用户点连接前已就位，
@@ -551,6 +552,8 @@ export class SSHManager {
   private transfers = new Map<string, () => void>()
   /** 上传进度回调（主进程 UploadTaskStore 消费）。下载不接：记录只服务上传历史。 */
   private uploadProgressSink: ((id: string, transferred: number, total: number) => void) | null = null
+  /** 远程 exec 通道登记表（bridge ssh_kill op 的查杀依据，C-review M9 落地） */
+  private execRegistry = new ExecRegistry()
 
   setUploadProgressSink(fn: ((id: string, transferred: number, total: number) => void) | null): void {
     this.uploadProgressSink = fn
@@ -1261,22 +1264,38 @@ export class SSHManager {
     return null
   }
 
-  /** 在已建立的 SSH 连接上执行一次性命令，返回 stdout / stderr / exitCode */
+  /** 在已建立的 SSH 连接上执行一次性命令，返回 stdout / stderr / exitCode
+
+   * execId（可选）：bridge ssh_exec 携带的取消句柄。携带时本执行被登记进
+   * execRegistry，killExec(execId) 可中途终止远端命令；不携带时行为与旧版
+   * 完全一致（本地终端复用等调用方零改动）。
+   */
   async execCommandWithExitCode(
     sshSessionId: string,
     command: string,
     timeout = 30,
+    execId?: string,
   ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
     const session = await this.resolveSessionForExec(sshSessionId)
     if (!session) throw new SSHError('SESSION_NOT_FOUND')
+
+    // M9：发起 exec 即登记（此刻通道尚未建立）—— kill 早于回调到达的窗口
+    // 由 pendingKill 补杀，而不是「杀不到」。
+    if (execId) this.execRegistry.register(execId)
 
     return new Promise((resolve, reject) => {
       let settled = false
       let streamRef: ClientChannel | null = null
 
+      const settle = () => {
+        // 执行终结（成功/失败/超时）后摘除登记，防 execRegistry 泄漏
+        if (execId) this.execRegistry.settle(execId)
+      }
+
       const timer = setTimeout(() => {
         if (!settled) {
           settled = true
+          settle()
           // ssh2 API 限制（Q-E2）：client.exec 不返回 channel 句柄，句柄只在回调参数里。
           // 超时时刻若回调尚未到达，streamRef 为 null，这里 close 是空操作 —— 该残余
           // 窗口在本 API 下无法收紧，由连接级保活兜底（doConnect 的 keepalive 探测到
@@ -1292,6 +1311,7 @@ export class SSHManager {
       session.client.exec(command, (err, stream) => {
         if (err) {
           clearTimeout(timer)
+          if (execId) this.execRegistry.settle(execId)
           if (!settled) {
             settled = true
             // 分类原始错误（连接断开/重置等），不再手抛通用英文提示
@@ -1299,6 +1319,10 @@ export class SSHManager {
           }
           return
         }
+
+        // 先挂登记表再判 settled：kill 早于回调到达（pendingKill）时，attach
+        // 即补杀；迟到回调（超时已判定）再立即关流，封住泄漏主路径。
+        if (execId) this.execRegistry.attachStream(execId, stream)
 
         // 超时已判定后才到达的迟到回调：立即关流、不挂 data/close 监听直接返回。
         // 原实现无此守卫 —— 超时先触发（此刻 streamRef 还是 null，close 空操作），
@@ -1345,6 +1369,7 @@ export class SSHManager {
         })
         stream.on('close', () => {
           clearTimeout(timer)
+          settle()
           if (!settled) {
             settled = true
             // 文案与渲染层的截断判据同源（shared/exec-outcome-core），不再各持一份字面量
@@ -1361,6 +1386,7 @@ export class SSHManager {
         })
         stream.on('error', (err: Error) => {
           clearTimeout(timer)
+          settle()
           if (!settled) {
             settled = true
             // 通道级错误（连接断开/重置）→ 结构化分类，前端友好呈现
@@ -1369,6 +1395,15 @@ export class SSHManager {
         })
       })
     })
+  }
+
+  /** 按 execId 查杀一条在途/在跑的远程 exec（bridge ssh_kill op 的实现体）。
+   *
+   * 三态：通道已建立 → signal('KILL')（失败降级 close）；通道未建立 → 登记
+   * pendingKill 待回调补杀；无登记 → found:false（已结束或从未存在，诚实上报）。
+   */
+  killExec(execId: string): { found: boolean; signaled: boolean; pending: boolean } {
+    return this.execRegistry.kill(execId)
   }
 
   /** 在已建立的 SSH 连接上执行一次性命令（独立 exec 通道，不干扰交互 shell） */

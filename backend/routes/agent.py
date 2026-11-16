@@ -21,9 +21,12 @@ Agent 路由 — SSE 流式运行 + 治理管理端点
   GET   /agent/strategies · PATCH .../{id}/enabled · DELETE .../{id}
 """
 import asyncio
+import base64
 import json
 import logging
+import re
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -362,6 +365,131 @@ def _resolve_evolution_config(
 # ── Request Models ──
 
 
+class ImageRef(BaseModel):
+    """随 run 下发的图片附件引用。图片本体已由 /chat/upload 落盘在
+    uploads/<conversation_id>/ 下，这里只传身份（file_id + filename），
+    不把 base64 塞进任务文本。"""
+    file_id: str
+    filename: str
+
+
+# run 请求的图片上限：多模态请求体按 base64 膨胀 4/3，张数放开会直接顶爆上游
+# 请求体上限与首 token 延迟；个人运维场景 4 张截图足以覆盖一次排障
+_RUN_IMAGE_LIMIT = 4
+_RUN_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024  # 解码后总字节上限（base64 前口径）
+_FILE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _resolve_upload_copy(root: Path, conv: str, file_id: str, name: str) -> Optional[Path]:
+    """按 file_id 定位上传副本：先查 run 所属会话目录，miss 则跨会话扫描。
+
+    上传落点与 run 会话可能不一致 —— 附件通常在会话存在之前就挂上：当时
+    后端会话还没建（或建失败），上传退回共享的 general 目录；run 却带着
+    正式会话 id 来找。文本附件历来不受影响（内容直接注入），而图片/视频
+    按物理路径定位，必须按 id 找而不是按会话键找。file_id 是 uuid4().hex，
+    全局唯一且文件名安全，`<file_id>_*` 前缀匹配至多命中上传时的那一个副本。
+    """
+    direct = root / conv / f"{file_id}_{name}"
+    if direct.is_file():
+        return direct
+    matches = sorted(root.glob(f"*/{file_id}_*"))
+    return matches[0] if matches else None
+
+
+async def _load_run_image_blocks(
+    images: Optional[list[ImageRef]], conversation_id: str,
+) -> Optional[list[dict]]:
+    """把 run 请求的图片引用读成 OpenAI image_url 内容块（base64 data URL）。
+
+    校验 fail-closed：file_id 必须 32 位 hex（上传侧 uuid4().hex 的形态）、
+    文件名消毒与 /chat/upload 同一规则、后缀必须是图片类型、路径必须落在
+    uploads 根下、副本必须仍存在 —— 任何一条不过直接 400，绝不静默降级
+    （用户以为模型看得到图，实际丢了，这比报错更骗人）。
+    """
+    if not images:
+        return None
+    if len(images) > _RUN_IMAGE_LIMIT:
+        raise HTTPException(
+            status_code=400, detail=f"图片附件最多 {_RUN_IMAGE_LIMIT} 张")
+    from routes.chat import _IMAGE_MIME, _sanitize_conv, _uploads_root
+
+    safe_conv = _sanitize_conv(conversation_id) or "general"
+    root = _uploads_root().resolve()
+    blocks: list[dict] = []
+    total_bytes = 0
+    for ref in images:
+        if not _FILE_ID_RE.fullmatch(ref.file_id or ""):
+            raise HTTPException(
+                status_code=400, detail=f"图片 file_id 形态非法: {(ref.file_id or '')[:16]}")
+        name = (ref.filename or "").replace("\\", "/").split("/")[-1][:120].strip() or "unnamed"
+        suffix = Path(name).suffix.lower()
+        mime = _IMAGE_MIME.get(suffix)
+        if mime is None:
+            raise HTTPException(
+                status_code=400, detail=f"附件 {name} 不是支持的图片类型")
+        path = _resolve_upload_copy(root, safe_conv, ref.file_id, name)
+        if path is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"图片附件已失效（上传副本不存在，会话可能已被清理）: {name}")
+        data = await asyncio.to_thread(path.read_bytes)
+        total_bytes += len(data)
+        if total_bytes > _RUN_IMAGE_TOTAL_BYTES:
+            raise HTTPException(
+                status_code=413, detail="图片附件总量超过 20MB 上限")
+        b64 = await asyncio.to_thread(
+            lambda d=data: base64.b64encode(d).decode("ascii"))
+        blocks.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{b64}"},
+        })
+    return blocks
+
+
+async def _load_run_video_note(
+    videos: Optional[list[ImageRef]], conversation_id: str,
+) -> str:
+    """把 run 请求的视频附件解析成任务文本后缀（模型无法直接观看视频）。
+
+    与图片不同，视频没有 image_url 通道 —— 诚实注入的是「身份 + 存储路径 +
+    分析手段」：Agent 有 shell 工具，可用 ffprobe/ffmpeg 检查时长/编码/分辨率
+    等元数据。校验与图片同一套 fail-closed 口径（hex file_id / 消毒文件名 /
+    路径落盘校验），任一不过直接 400。
+    """
+    if not videos:
+        return ""
+    if len(videos) > _RUN_IMAGE_LIMIT:
+        raise HTTPException(
+            status_code=400, detail=f"视频附件最多 {_RUN_IMAGE_LIMIT} 个")
+    from routes.chat import ALLOWED_VIDEO_EXTS, _sanitize_conv, _uploads_root
+
+    safe_conv = _sanitize_conv(conversation_id) or "general"
+    root = _uploads_root().resolve()
+    lines: list[str] = []
+    for ref in videos:
+        if not _FILE_ID_RE.fullmatch(ref.file_id or ""):
+            raise HTTPException(
+                status_code=400, detail=f"视频 file_id 形态非法: {(ref.file_id or '')[:16]}")
+        name = (ref.filename or "").replace("\\", "/").split("/")[-1][:120].strip() or "unnamed"
+        if Path(name).suffix.lower() not in ALLOWED_VIDEO_EXTS:
+            raise HTTPException(
+                status_code=400, detail=f"附件 {name} 不是支持的视频类型")
+        path = _resolve_upload_copy(root, safe_conv, ref.file_id, name)
+        if path is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"视频附件已失效（上传副本不存在，会话可能已被清理）: {name}")
+        size_mb = path.stat().st_size / (1024 * 1024)
+        lines.append(f"- {name}（{size_mb:.1f}MB）\n  路径: {path}")
+    return (
+        "\n\n[视频附件] 用户随消息附带了视频文件。当前模型无法直接观看视频内容，"
+        "如需了解可使用 shell 工具运行 ffprobe/ffmpeg 检查元数据"
+        "（时长/编码/分辨率/音轨等），例如：ffprobe -v error -show_format -show_streams <路径>\n"
+        + "\n".join(lines)
+        + "\n若视频与本次任务无关请忽略本节。"
+    )
+
+
 class AgentRunRequest(BaseModel):
     """Agent 运行请求"""
     task: str = Field(..., min_length=1, max_length=50000)
@@ -381,6 +509,11 @@ class AgentRunRequest(BaseModel):
     # E 修复：max_iterations 边界校验（1-500），防 LLM/恶意请求传 0 或天文数字
     max_iterations: int = Field(100, ge=1, le=500)
     skill_ids: list[str] = Field(default_factory=list)
+    # 逐 run 插件收紧（用户 2026-11-16）：None = 客户端未表态（继承全部已授权
+    # 插件，与引入前行为逐字节等价）；list（可空）= 本次只装这些，与专家允许集
+    # 再求交。授权本身仍在设置同意流（enabled+consented 硬门槛不动），这里只是
+    # 逐 run 收紧 —— 空数组是「本次一个插件都不带」的合法表态，不能用 falsy 判断。
+    selected_plugin_ids: Optional[list[str]] = None
     # 是否启用触发词自动技能匹配（前端"自动技能匹配"开关，默认开启）
     auto_skill_match: bool = True
     # 历史上下文条数（前端"上下文窗口"设置，1-100）
@@ -411,6 +544,12 @@ class AgentRunRequest(BaseModel):
     enhanced: bool = False
     source_raw_text: Optional[str] = Field(default=None, max_length=50000)
     enhanced_has_added_write_steps: bool = False
+    # 视觉多模态：随消息下发的图片附件（本体在 uploads/，见 ImageRef）。
+    # 不传 = 纯文本 run，与引入前完全一致。
+    images: Optional[list[ImageRef]] = None
+    # 视频附件（ImageRef 复用同形态：file_id + filename）。模型无法直接观看，
+    # 后端把存储路径与 ffprobe 分析提示注入任务文本（见 _load_run_video_note）。
+    videos: Optional[list[ImageRef]] = None
     # 对话姿态（goal/plan 单选，来自前端模式选择器）。驱动 _build_agent_system_prompt
     # 注入对应的姿态前缀。
     # 可空是「目标」chip 的 × 能真正关掉的前提：前端 activeMode 允许 null 后，若这里
@@ -951,7 +1090,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
     from agent.run_assembly import (
         PLUGIN_PROMPT_SECTION, build_plugin_tools, register_plugin_tools,
     )
-    plugin_tools, plugin_warnings = await build_plugin_tools(policy)
+    plugin_tools, plugin_warnings = await build_plugin_tools(
+        policy, selected_plugin_ids=req.selected_plugin_ids)
     for _warning in plugin_warnings:
         logger.warning("插件装配: %s", _warning)
     if plugin_tools:
@@ -1051,6 +1191,20 @@ async def agent_run(req: AgentRunRequest, request: Request):
     env_resolution = await resolve_run_environment(
         req.environment, req.ssh_session_id or "")
     _remember_run_environment(run_id, env_resolution)
+    # 图片附件：在落 run 记录之前解析（400 早退，不留孤儿 run 记录）。
+    # 解析在 try: 之外、占位获取之后 —— 400/413 直抛会绕过 finally 清理，
+    # 而 DB run 行尚不存在、自愈逻辑永不触发，占位泄漏 = 该会话永久 409。
+    # 故此处失败必须显式释放占位与环境登记后再抛。
+    try:
+        image_blocks = await _load_run_image_blocks(req.images, req.conversation_id)
+        # 视频附件：解析成任务文本后缀（只改三处"模型/审计看到的内容"，意图识别、
+        # 记忆检索等仍用原始 task，避免注解污染意图判定）
+        video_note = await _load_run_video_note(req.videos, req.conversation_id)
+    except BaseException:
+        _release_run_slot_sync(req.conversation_id, run_id)
+        _forget_run_environment(run_id)
+        raise
+    effective_task = req.task + video_note
     try:
         # 持久化 agent_run 记录（审查 M-13：放线程池）
         # 专家快照：只记最终生效值与策略元数据，绝不记 api_key / 插件 env
@@ -1068,7 +1222,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
             db.create_agent_run,
             run_id=run_id,
             conversation_id=req.conversation_id,
-            task=req.task,
+            # 审计口径：带视频时实际下发的是 task + 视频提示，原样落库
+            task=effective_task,
             # legacy 时保持原值，专家生效时记实际钳制后的迭代数
             max_iterations=req.max_iterations if policy.is_legacy else effective_max_iter,
             mode=SSH_MODE,
@@ -1098,7 +1253,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
             db.add_message,
             req.conversation_id,
             "user",
-            req.task,
+            effective_task,
             model_used=model_cfg.get("model_id") or model_cfg["id"],
             agent_trace=_user_msg_trace,
         )
@@ -1145,6 +1300,13 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     max_reasoning_tokens=model_cfg.get("reasoning_tokens"),
                     enable_thinking=effective_thinking,
                     enable_tools=effective_enable_tools,
+                    # 模型能力门：标记不支持工具调用的模型预判去 tools（三态语义见 AgentConfig）
+                    supports_tool_calling=(
+                        bool(model_cfg["supports_tool_calling"])
+                        if model_cfg.get("supports_tool_calling") is not None else None
+                    ),
+                    # 备用模型回退：解析主模型的备用端点完整配置（None=不启用）
+                    fallback_model_cfg=db.resolve_fallback_model_cfg(model_cfg),
                     enable_intention_guide=req.enable_intention_guide,
                     enable_dynamic_budget=req.enable_dynamic_budget,
                     # C-review M10：成本/token 硬熔断
@@ -1152,7 +1314,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     max_total_tokens=req.max_total_tokens,
                 )
                 async for trace_event in harness.run(
-                    task=req.task,
+                    # 视频提示注入在此处生效（模型首条消息 = effective_task）；
+                    # 意图识别/记忆检索等上游环节仍用原始 req.task
+                    task=effective_task,
                     conversation_id=req.conversation_id,
                     ssh_session_id=req.ssh_session_id,
                     environment=env_resolution.effective,
@@ -1175,6 +1339,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     memory_scopes=(
                         final_memory_scopes if policy.memory_scope != "inherit" else None
                     ),
+                    # 视觉多模态：随消息下发的图片（image_url 内容块，None=纯文本）
+                    images=image_blocks,
                     # 交互式 run：审批卡弹出后 Driver 真的停住等用户点击。
                     # 不传的入口（定时任务）没人可点卡片，保持「拦截即返回」。
                     await_approval=True,
@@ -1256,7 +1422,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     "type": "expert_suggestion",
                     "slug": _ops["slug"],
                     "name": _ops["name"],
-                    "reason": "检测到运维任务，建议切到运维专家",
+                    "reason": "检测到运维任务，建议切到运维",
                     "task": req.task or "",
                     "run_id": run_id,
                 })
@@ -1587,14 +1753,26 @@ async def agent_run(req: AgentRunRequest, request: Request):
             yield sse_event({"type": "error", "message": str(e)})
             yield "data: [DONE]\n\n"
         finally:
-            # ── 抗取消清理 ─────────────────────────────────────────────
-            # 故障根因：客户端断连 → 响应任务被 cancel → finally 里第一个
-            # await 抛 CancelledError（BaseException，except Exception 接不住）
-            # → 其后的占位释放/会话复位全部跳过 → run 在 DB 里已 completed，
-            # 但内存占位残留，新请求永远报"已有运行中的 Agent 任务"。
-            # 对策：1) 占位用无 await 的同步操作最先释放（取消也丢不掉）；
-            #      2) 其余清理全部 except BaseException；
-            #      3) 关键异步清理用 shield（外层被取消时内层任务继续跑完）。
+            # ── 抗取消清理 v2：清理体移出被取消的 task ──────────────────
+            # 故障根因：客户端断连 → Starlette/anyio cancel scope 取消宿主
+            # task。anyio 的取消是"持续投递"：scope 退出前，finally 里每个
+            # await 检查点都会再次抛 CancelledError（"Cancelled by cancel
+            # scope xxx"）。asyncio.shield 只保护内层协程、外层 await 照样
+            # 立刻失败 —— v1 里所有 shield 清理实际都退化为 fire-and-forget，
+            # 且每步都误报"清理失败"（清理其实还在后台跑，但异常无人观察、
+            # 顺序无保证）。
+            # 对策（两段式）：
+            #   1) 同步段：无 await 点的操作直接在 finally 执行 —— 取消只能
+            #      在 await 检查点投递，同步段免疫，绝不丢失；
+            #   2) 异步段：全部 await 清理收进独立 task _final_cleanup()，
+            #      它不属于任何 anyio scope，不被反复取消，可真正按序跑完。
+            #      finally 里仅一次 shield await 等它：正常路径等清理落库完成
+            #      再返回；断连路径外层 await 立即被再取消（静默接住，不必
+            #      re-raise —— 原始 CancelledError 仍会从 finally 正常传播），
+            #      内层 task 继续在后台跑完，异常由 done_callback 留痕。
+            # ── 同步段（零 await，取消免疫）────────────────────────────
+            # 占位最先释放（取消也丢不掉）：否则 run 在 DB 里已 completed，
+            # 内存占位残留会让新请求永远报"已有运行中的 Agent 任务"。
             _release_run_slot_sync(req.conversation_id, run_id)
             # 环境判定登记与 once 授权池同生命周期：run 结束后不再被授权端点读到，
             # 不清理就会随每次 run 无界增长（与环境无关的旧 run 永远查不到）
@@ -1604,16 +1782,12 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 engine_task.cancel()
             except BaseException:
                 pass
-            # Q-B4③：收尾后台写者 —— 先投 sentinel（排在剩余任务之后，顺序保住），
-            # 尽量让断连路径的轨迹也落完库；10s 兜底后放弃（与旧行为"写一半"同向）。
+            # Q-B4③：投 sentinel（排在剩余任务之后，顺序保住）；写者收尾的
+            # 等待移入 _final_cleanup（10s 兜底），本 task 内不再 await
             try:
                 tc_write_q.put_nowait(None)
-                await asyncio.shield(asyncio.wait_for(tc_writer_task, timeout=10))
             except BaseException:
-                try:
-                    tc_writer_task.cancel()
-                except BaseException:
-                    pass
+                pass
             # 清理 TelemetryBus 事件缓存（防止内存泄漏）
             try:
                 harness.telemetry.clear()
@@ -1638,23 +1812,32 @@ async def agent_run(req: AgentRunRequest, request: Request):
                 _release_run_interaction_state(run_id)
             except BaseException:
                 logger.warning("run 交互状态回收失败 (run_id=%s)", run_id, exc_info=True)
-            # P2 修复：run 取消/断连时清理该 run 名下的远程后台任务
-            # （job_run target=remote 的进程脱离会话运行，不杀会永久残留；
-            #  shield 保证断连 cancel 时清理任务仍会在后台跑完）
-            try:
-                from agent.tools.builtin.ops_job import kill_remote_jobs_for_run
-                await asyncio.shield(kill_remote_jobs_for_run(run_id))
-            except BaseException:
-                logger.warning("取消联动清理远程任务失败 (run_id=%s)", run_id, exc_info=True)
-            # S1-01：done 分支没跑到时补落 assistant 痕迹（闸门 assistant_persisted）。
-            # 收尾点选 finally 而非循环尾：渲染层 abort() 会让消费循环卡在下一次 yield
-            # 上并收到 GeneratorExit，那条路既到不了循环尾、也不被 except Exception 接住，
-            # 只有这里是正常 break / event_stream 异常 / GeneratorExit 三条路的共同收口。
-            # 每一步单独包 BaseException + shield，遵循本块开头成文的抗取消姿势。
-            if not assistant_persisted:
+
+            # ── 异步段（独立 task，真正按序跑完）───────────────────────
+            async def _final_cleanup():
+                # Q-B4③：收尾后台写者 —— 尽量让断连路径的轨迹也落完库；
+                # 10s 兜底后放弃（与旧行为"写一半"同向）。
                 try:
-                    await asyncio.shield(
-                        persist_interrupted_run(
+                    await asyncio.wait_for(tc_writer_task, timeout=10)
+                except BaseException:
+                    try:
+                        tc_writer_task.cancel()
+                    except BaseException:
+                        pass
+                # P2 修复：run 取消/断连时清理该 run 名下的远程后台任务
+                # （job_run target=remote 的进程脱离会话运行，不杀会永久残留）
+                try:
+                    from agent.tools.builtin.ops_job import kill_remote_jobs_for_run
+                    await kill_remote_jobs_for_run(run_id)
+                except BaseException:
+                    logger.warning("取消联动清理远程任务失败 (run_id=%s)", run_id, exc_info=True)
+                # S1-01：done 分支没跑到时补落 assistant 痕迹（闸门 assistant_persisted）。
+                # 收尾点选 finally 而非循环尾：渲染层 abort() 会让消费循环卡在下一次 yield
+                # 上并收到 GeneratorExit，那条路既到不了循环尾、也不被 except Exception 接住，
+                # 只有这里是正常 break / event_stream 异常 / GeneratorExit 三条路的共同收口。
+                if not assistant_persisted:
+                    try:
+                        await persist_interrupted_run(
                             conversation_id=req.conversation_id,
                             run_id=run_id,
                             total_content=total_content,
@@ -1663,40 +1846,46 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             iterations=last_iteration,
                             model_used=model_cfg.get("model_id") or model_cfg["id"],
                         )
-                    )
+                    except BaseException:
+                        logger.warning(
+                            "断连 run 的 assistant 痕迹落库失败 (run_id=%s)", run_id, exc_info=True
+                        )
+                # 客户端断开时将 agent_run 标记为 failed（若仍为 running/init）
+                try:
+                    run = await asyncio.to_thread(db.get_agent_run, run_id)
+                    if run and run.get("status") in ("running", "init"):
+                        await asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
                 except BaseException:
-                    logger.warning(
-                        "断连 run 的 assistant 痕迹落库失败 (run_id=%s)", run_id, exc_info=True
-                    )
-            # 客户端断开时将 agent_run 标记为 failed（若仍为 running/init）
-            try:
-                run = await asyncio.shield(asyncio.to_thread(db.get_agent_run, run_id))
-                if run and run.get("status") in ("running", "init"):
-                    await asyncio.shield(
-                        asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
-                    )
-            except BaseException:
-                pass
-            # 修复：Agent 启动时将会话状态设为 in_progress，结束时须重置回
-            # completed — 若不复位，会话永久滞留 in_progress。
-            # （占位释放已提到最前的同步操作；此步为对称的 DB 侧复位）
-            try:
-                cur_status = await asyncio.shield(
-                    asyncio.to_thread(db.get_conversation, req.conversation_id)
-                )
-                if cur_status and cur_status.get("status") == "in_progress":
-                    await asyncio.shield(
-                        asyncio.to_thread(
+                    pass
+                # 修复：Agent 启动时将会话状态设为 in_progress，结束时须重置回
+                # completed — 若不复位，会话永久滞留 in_progress。
+                # （占位释放已提到最前的同步操作；此步为对称的 DB 侧复位）
+                try:
+                    cur_status = await asyncio.to_thread(db.get_conversation, req.conversation_id)
+                    if cur_status and cur_status.get("status") == "in_progress":
+                        await asyncio.to_thread(
                             db.update_conversation_status, req.conversation_id, "completed"
                         )
-                    )
-            except BaseException:
-                pass
-            # 低频清理 agent_runs/tool_calls（每 6h 节流，best-effort）
+                except BaseException:
+                    pass
+                # 低频清理 agent_runs/tool_calls（每 6h 节流，best-effort）
+                try:
+                    await _maybe_prune_agent_runs()
+                except BaseException:
+                    pass
+
+            _cleanup_task = asyncio.create_task(_final_cleanup())
+            _cleanup_task.add_done_callback(_task_exception_logger("agent_final_cleanup"))
             try:
-                await _maybe_prune_agent_runs()
-            except BaseException:
+                # 正常路径：等清理真正跑完再返回（保持 v1 的落库时序）。
+                # 断连路径：此 await 立即被 cancel scope 再取消 —— 静默接住，
+                # _cleanup_task 继续在后台完成（shield 恰好保证内层不被取消；
+                # 与 v1 的区别：这里只有这一个 await 检查点，且不再误报失败）。
+                await asyncio.shield(_cleanup_task)
+            except asyncio.CancelledError:
                 pass
+            except BaseException:
+                logger.warning("最终清理任务异常 (run_id=%s)", run_id, exc_info=True)
 
     # H8 修复：fire-and-forget 任务的异常日志回调
     def _task_exception_logger(name: str):

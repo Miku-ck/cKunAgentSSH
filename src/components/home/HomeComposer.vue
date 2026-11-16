@@ -47,7 +47,6 @@ import { usePluginsStore } from '@/stores/plugins'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
 import type { Plugin } from '@/api/core'
-import HomeRemoteFilePicker from './HomeRemoteFilePicker.vue'
 import RemoteDirPicker from '@/components/ssh/RemoteDirPicker.vue'
 import QuickSshDialog from '@/components/ssh/QuickSshDialog.vue'
 import TaskStructureDialog from './TaskStructureDialog.vue'
@@ -69,7 +68,7 @@ const toast = useToastStore()
 const settings = useSettingsStore()
 const { openSettings } = useSettings()
 const { draft, canSend, submit, attachFiles, removeAttachment, uploading } = useHomeCommand()
-const { targetChip, targetHint, options: targetOptions, pick: pickTarget, remoteCount, canBulkDispatch } = useHomeTarget()
+const { targetChip, targetHint, remoteCount, canBulkDispatch } = useHomeTarget()
 
 // ── 长任务结构化（spec 2026-10-24-task-structuring）──
 // 解构进 setup 作用域，模板才能拿到自动 unwrap 的 ref（structure 对象里的 ref
@@ -126,24 +125,77 @@ async function onFilesPicked(e: Event) {
   await attachFiles(files)
 }
 
+/** 粘贴图片：截图/复制的图片直接进附件队列（与文件选择器同一条上传链路）。
+ *  Windows 剪贴板给的是无名 File（恒叫 "image.png"），按时间戳重命名，
+ *  连贴多张才分得清先后。文本粘贴不受影响：没有图片项时不 preventDefault，照常粘贴。
+ *  ⚠️ 映射清单与后端 routes/chat.py 的 ALLOWED_IMAGE_EXTS/_IMAGE_MIME 保持同口径
+ *  （跨语言无法共享单一源）；表外类型按 MIME 子类型推导扩展名，不猜测。 */
+const IMAGE_EXT_BY_MIME: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpg': 'jpg',           // 非标准别名，部分剪贴板实现会这么发
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+  'image/svg+xml': 'svg',
+  'image/x-icon': 'ico',
+  'image/vnd.microsoft.icon': 'ico',
+  'image/tiff': 'tiff',
+  'image/avif': 'avif',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+}
+
+/** 表外 image/* 类型的扩展名兜底：取 MIME 子类型清洗（avifs / x-foo 之类）。
+ *  推导不出可读子类型时回退 bin，交给后端按 content_type 分流裁决。 */
+function extFromImageMime(mime: string): string {
+  const sub = mime.split('/')[1] || ''
+  const cleaned = sub.replace(/\+.+$/, '').replace(/^x-/, '').replace(/[^a-z0-9]/gi, '')
+  return cleaned || 'bin'
+}
+
+function onPaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+  const images: File[] = []
+  for (const item of Array.from(items)) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      const f = item.getAsFile()
+      if (f) images.push(f)
+    }
+  }
+  if (!images.length) return
+  e.preventDefault()
+  if (running.value) {
+    toast.info('AI 正在运行中，请等待完成后再粘贴图片')
+    return
+  }
+  const stamp = new Date()
+    .toISOString().slice(0, 19).replace(/-/g, '').replace('T', '-')
+  const named = images.map((f, i) => {
+    const ext = IMAGE_EXT_BY_MIME[f.type] || extFromImageMime(f.type)
+    const seq = images.length > 1 ? `-${i + 1}` : ''
+    return new File([f], `截图${stamp}${seq}.${ext}`, { type: f.type })
+  })
+  void attachFiles(named)
+}
+
 /** ＋ 菜单是双栏级联：左栏六项常驻（附件在目标上面），右栏是附件 / 技能 / 专家 /
  *  插件的二级面板。root = 只有左栏；每次重开都回 root，停在某个子面板里重开会
  *  让人以为点错了地方。 */
-type PlusPane = 'root' | 'attach' | 'skill' | 'expert' | 'plugin'
+type PlusPane = 'root' | 'skill' | 'expert' | 'plugin'
 const plusPane = ref<PlusPane>('root')
 const cascadeQuery = ref('')
 const cascadeSearchRef = ref<HTMLInputElement | null>(null)
 const cascadeLabel = computed(() =>
   plusPane.value === 'skill' ? '技能'
     : plusPane.value === 'expert' ? '专家'
-      : plusPane.value === 'plugin' ? '插件' : '附件',
+      : plusPane.value === 'plugin' ? '插件' : '条目',
 )
 function openCascade(which: Exclude<PlusPane, 'root'>) {
   plusPane.value = which
   cascadeQuery.value = ''
-  attachPane.value = 'root'
   // 打开右栏即聚焦搜索框：级联面板的用途就是「搜索并挑选」，少一次点击
-  // （附件面板没有搜索框，optional chaining 自然跳过）
   void nextTick(() => cascadeSearchRef.value?.focus())
 }
 /** 搜索框里的 Esc 分两级退：先清查询，再回左栏，第三次才关整个 ＋ 菜单。
@@ -164,15 +216,10 @@ type LandingPane = '' | 'kind' | 'dir' | 'repo' | 'branch'
 const landingMenu = ref<LandingPane>('')
 const landingRef = ref<HTMLElement | null>(null)
 
-/** 附件面板的内部二级状态：root = 本地 / 远端两个动作，remote = 远端目录选择器。
- *  附件现在是 ＋ 菜单左栏第一项（用户指定），不再有独立的底栏入口。 */
-const attachPane = ref<'root' | 'remote'>('root')
-
 function closePlusMenu() {
   showPlusMenu.value = false
   plusPane.value = 'root'
   cascadeQuery.value = ''
-  attachPane.value = 'root'
   landingMenu.value = ''
 }
 
@@ -357,19 +404,22 @@ async function submitWtForm() {
   }
 }
 
-function chooseRemoteChip(sessionId: string) {
-  pickTarget(sessionId)
-  landingMenu.value = ''
+/** 选中一条 SSH 连接配置：建 AI 专属会话（不切用户终端 tab），菜单收起。
+ *  建连失败的原因落 landing.error，菜单留在原地看得见。 */
+async function chooseSshConn(connectionId: string) {
+  await landing.chooseSshConnection(connectionId)
+  if (!landing.error) landingMenu.value = ''
 }
 
 /** 幽灵会话手动回拨：只在 chip 已判定「未连接」时出现。
  *  自动那一次由 exec-target 负责（每个会话只试一次），这里给的是失败之后的第二次机会 ——
  *  网络恢复、或密码需要重输时，用户不必再跑去终端页关标签重连。 */
 async function redialActiveRemote() {
-  const id = ssh.activeSessionId
+  const id = landing.aiSessionId
   if (!id) return
   try {
-    await ssh.redial(id)
+    const newId = await ssh.redial(id)
+    landing.aiSessionId = newId
     landingMenu.value = ''
   } catch (e) {
     // 菜单留在原地：失败原因写进同一个 error 槽，用户一眼能看到为什么连不上
@@ -385,7 +435,7 @@ const remoteDirPick = ref('')
  *  后端只认 ssh_session_id，命令最终写回同一个 pty，所以这里落成一句 cd，
  *  不给 run 请求新增任何 workdir 字段（见 exec-target 头部注释）。 */
 function applyRemoteDir() {
-  const id = ssh.activeSessionId
+  const id = landing.aiSessionId
   if (!id || !remoteDirPick.value) return
   ssh.cdRemote(id, remoteDirPick.value)
   landingMenu.value = ''
@@ -403,12 +453,6 @@ type WorktreeChoice = Parameters<typeof landing.chooseWorktree>[0]
 async function chooseWorktreeChip(w: WorktreeChoice) {
   await landing.chooseWorktree(w)
   if (!landing.error) landingMenu.value = ''
-}
-
-/** 取到一个远端文件：挂上 chip（底栏那枚就是反馈），菜单收起。
- *  不再补一条 toast —— 同一个动作弹两下反而更像没生效。 */
-function onRemotePicked() {
-  closePlusMenu()
 }
 
 const approvalMode = computed(() => sshAi.approvalMode)
@@ -434,7 +478,6 @@ function onKeydownEsc(e: KeyboardEvent) {
   showPlusMenu.value = false
   plusPane.value = 'root'
   cascadeQuery.value = ''
-  attachPane.value = 'root'
   landingMenu.value = ''
 }
 
@@ -499,19 +542,17 @@ const pickedSkills = computed(() =>
   }),
 )
 
-/** 远端文件取的是**当前 AI 目标那台机器**的文件 —— 与 shell_exec 落地同一口径
- *  （useHomeTarget 改的也是 activeSessionId）。本地 shell 会话没有远端文件系统，
- *  这时整项禁用并把理由写在副标题里，而不是点了弹一句"会话未连接"。 */
-const remoteSession = computed(() => {
-  const s = ssh.sessions.find(x => x.id === ssh.activeSessionId)
-  return s && s.type === 'remote' ? (s.shell || s.name) : ''
-})
-
-/** SSH 面只列远程会话；本地 / WSL 会话归 kind 面「本地」下面那一小组。 */
-const remoteTargetOptions = computed(() => targetOptions.value.filter(o => {
-  const s = ssh.sessions.find(x => x.id === o.sessionId)
-  return !!s && s.type === 'remote'
-}))
+/** SSH 面列的是**连接配置**，不是已开的远程会话：AI 的远程连接与用户终端隔离，
+ *  选中即建一条 AI 专属会话（landing.chooseSshConnection），不借用终端页的 tab。
+ *  当前 AI 落点那条连接打勾；本地 / WSL 会话归 kind 面「本地」下面那一小组。 */
+const sshConnectionOptions = computed(() =>
+  ssh.connections.map(c => ({
+    id: c.id,
+    label: c.name || `${c.username}@${c.host}`,
+    hint: `${c.username}@${c.host}:${c.port}`,
+    active: landing.aiConnectionId === c.id,
+  })),
+)
 
 /** 仓库 chip 只显示目录短名，完整路径走 title —— 底栏放不下整条绝对路径。 */
 function shortPath(p: string): string {
@@ -519,12 +560,23 @@ function shortPath(p: string): string {
   return parts[parts.length - 1] || p
 }
 
+/** 媒体附件（图片/视频）走输入框内预览条（用户 2026-11-15 指定，不在底部 chip 排）；
+ *  文本类附件仍走底部 chip —— 它们是文档，视觉上是「引用了什么资料」而非「带了什么媒体」。 */
+const inboxMediaAtts = computed(() =>
+  sshAi.pendingAttachments.filter(f => f.kind === 'image' || f.kind === 'video'),
+)
+const pendingTextAtts = computed(() =>
+  sshAi.pendingAttachments.filter(f => f.kind !== 'image' && f.kind !== 'video'),
+)
+
 /** chip 的提示要说清"内容从哪来、模型看到多少"。远端与本地附件挂的是同一份列表、
  *  同一枚 chip —— 不写来源就分不出这两类，同名文件尤其骗人。 */
 function attachmentTitle(f: ChatAttachment): string {
   const from = f.file_id.startsWith(REMOTE_ID_PREFIX)
     ? `远端 ${f.file_id.slice(REMOTE_ID_PREFIX.length)}`
     : `本地 ${f.filename}`
+  if (f.kind === 'image') return `${from} · 图片随消息发送，由模型直接「看」（需多模态模型）`
+  if (f.kind === 'video') return `${from} · 视频随消息发送，模型无法直接观看；AI 可用 ffprobe/shell 分析元数据`
   return f.truncated ? `${from} · 文件较大，只注入开头节选 —— 模型看到的是节选，不是全文` : from
 }
 
@@ -542,14 +594,35 @@ const pickedExpert = computed(() =>
 )
 
 function chooseExpert(id: string) {
-  sshAi.setSelectedExpert(id)
+  // 用户 2026-11-16：列表去掉「不指定专家」行 —— 再点一次已选中的专家即取消，
+  // 空串 = 不指定（后端走原装配链），选中态仍由 ✓ 标示
+  sshAi.setSelectedExpert(sshAi.selectedExpertId === id ? '' : id)
   closePlusMenu()
 }
 
-/** ＋ 菜单「插件」只反映本次生效范围，不新开权限：已启用且已同意的插件，再与
- *  当前专家的允许集求交。专家 plugin_ids_json 为 NULL 时继承全部、'[]' 时显式
- *  不授予；坏 JSON 一律 fail-closed，与后端 expert_policy 同姿态。逐项临时收紧
- *  需要 per-run 请求字段，本期不做 —— 这个面板是只读的。 */
+/** ── 插件逐 run 勾选（用户 2026-11-16）──
+ *  默认不预选（与技能同语义）：store 初始为 []，勾了才随消息带上；
+ *  选择常驻（与专家同语义），逐条消息可改。授权仍归设置同意流。 */
+function isPluginOn(id: string): boolean {
+  const sel = sshAi.selectedPluginIds
+  return sel !== null && sel.includes(id)
+}
+
+function togglePlugin(id: string) {
+  const current = sshAi.selectedPluginIds !== null
+    ? [...sshAi.selectedPluginIds]
+    : []
+  const idx = current.indexOf(id)
+  if (idx >= 0) current.splice(idx, 1)
+  else current.push(id)
+  sshAi.setSelectedPluginIds(current)
+}
+
+/** ＋ 菜单「插件」的候选集与生效范围：已启用且已同意的插件，再与当前专家的
+ *  允许集求交。专家 plugin_ids_json 为 NULL 时继承全部、'[]' 时显式不授予；
+ *  坏 JSON 一律 fail-closed，与后端 expert_policy 同姿态。
+ *  runPlugins 只回答「专家允许哪些」；「本次带哪些」由 selectedPluginIds
+ *  （逐 run 勾选，用户 2026-11-16）决定，后端再对两者求交。 */
 const pluginOptions = computed(() => pluginsStore.enabled)
 const runPlugins = computed(() => {
   const all = pluginOptions.value
@@ -572,6 +645,14 @@ function pluginSummary(p: Plugin): string {
   if (!runPlugins.value.some(x => x.id === p.id)) return `${tools} 个工具 · 当前专家未授予`
   return `${tools} 个工具 · 已授权 · 逐项只读确认`
 }
+
+/** 底栏插件 chip 的数据源：只印查得到行的（插件被删后悬空 id 不印空 chip）。 */
+const pickedPlugins = computed(() =>
+  (sshAi.selectedPluginIds ?? []).flatMap(id => {
+    const p = pluginsStore.enabled.find(x => x.id === id)
+    return p ? [p] : []
+  }),
+)
 
 /** 右栏三个面板共用一枚搜索框：按名称 + 描述过滤，空查询不过滤。 */
 const filteredSkills = computed(() =>
@@ -697,16 +778,44 @@ onMounted(() => {
       <button type="button" class="hcc-suggest-accept" @click="acceptExpertSuggestion">切换并重跑</button>
       <button type="button" class="hcc-suggest-ignore" @click="ignoreExpertSuggestion">忽略</button>
     </div>
+    <!-- 媒体附件预览条：在输入框内部（用户 2026-11-15 指定，不在底部 chip 排）。
+         图片显示缩略图，视频显示图标卡；文本类附件仍走底部 chip（它们是文档）。 -->
+    <div v-if="inboxMediaAtts.length" class="hcc-attachments">
+      <div
+        v-for="f in inboxMediaAtts"
+        :key="f.file_id"
+        class="hcc-att-card"
+        :class="{ 'is-video': f.kind === 'video' }"
+        :title="attachmentTitle(f)"
+      >
+        <img
+          v-if="f.kind === 'image' && sshAi.attachmentPreviews[f.file_id]"
+          class="hcc-att-thumb"
+          :src="sshAi.attachmentPreviews[f.file_id]"
+          alt=""
+        />
+        <span v-else-if="f.kind === 'video'" class="hcc-att-icon">🎬</span>
+        <span v-else class="hcc-att-icon">🖼</span>
+        <span v-if="f.kind === 'video'" class="hcc-att-name">{{ f.filename }}</span>
+        <button
+          type="button"
+          class="hcc-att-x"
+          :aria-label="`移除附件 ${f.filename}`"
+          @click="removeAttachment(f.file_id)"
+        >×</button>
+      </div>
+    </div>
     <textarea
       ref="ta"
       v-model="draft"
       class="hcc-input"
       rows="2"
-      placeholder="输入指令…"
+      placeholder=""
       aria-label="输入指令"
       spellcheck="false"
       @input="grow"
       @keydown="onKeydown"
+      @paste="onPaste"
     />
     <input
       ref="fileInputRef"
@@ -731,19 +840,18 @@ onMounted(() => {
              右栏带搜索框与图标 + 标题 + 描述的列表，切换层级不迷路。 -->
         <div v-if="showPlusMenu" class="hcc-menu cascade" @click.stop>
           <div class="hcc-cascade-left">
+            <!-- 附件 = 一步直达：点击直接弹系统文件选择对话框（用户指定）。
+                 远端文件入口已按用户要求移除（2026-11-15）。 -->
             <button
               type="button"
               class="hcc-opt casc-opt"
-              :class="{ current: plusPane === 'attach' }"
-              :aria-expanded="plusPane === 'attach'"
-              title="添加附件"
-              @click="openCascade('attach')"
+              title="从本机选择文件 / 图片 / 视频挂到本次发送"
+              @click="pickFiles"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
               <span class="ol">附件</span>
-              <span class="casc-arrow">›</span>
             </button>
             <button
               type="button"
@@ -795,7 +903,7 @@ onMounted(() => {
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
                 <circle cx="8" cy="5.5" r="2.5" /><path d="M3.5 13a4.5 4.5 0 0 1 9 0" />
               </svg>
-              <span class="ol">专家<span v-if="pickedExpert" class="ot">✓</span></span>
+              <span class="ol">专家</span>
               <span class="casc-arrow">›</span>
             </button>
             <button
@@ -803,7 +911,7 @@ onMounted(() => {
               class="hcc-opt casc-opt"
               :class="{ current: plusPane === 'plugin' }"
               :aria-expanded="plusPane === 'plugin'"
-              :title="`本次 ${runPlugins.length} 个可用 · 只读`"
+              :title="`${pluginOptions.filter(p => isPluginOn(p.id)).length} 个将生效 · 可勾选`"
               @click="openCascade('plugin')"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
@@ -817,7 +925,7 @@ onMounted(() => {
         <!-- 二级面板独立成层（用户 2026-11-11：卡片尺寸固定不动）：与卡片并列，
              贴在卡片右侧同一底边。放 .hcc-sel 内，外部点击判定仍算「点在菜单里」。 -->
         <div v-if="showPlusMenu && plusPane !== 'root'" class="hcc-cascade-right" :key="plusPane" @click.stop>
-            <div v-if="plusPane !== 'attach'" class="casc-search">
+            <div class="casc-search">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="14" height="14" aria-hidden="true">
                 <circle cx="7" cy="7" r="4" /><path d="M10 10l3.5 3.5" />
               </svg>
@@ -832,46 +940,7 @@ onMounted(() => {
               />
             </div>
             <div class="casc-list">
-              <template v-if="plusPane === 'attach'">
-                <HomeRemoteFilePicker
-                  v-if="attachPane === 'remote'"
-                  @back="attachPane = 'root'"
-                  @picked="() => onRemotePicked()"
-                />
-                <template v-else>
-                  <button
-                    type="button"
-                    class="casc-item"
-                    :disabled="uploading"
-                    title="从本机选择，挂到本次发送"
-                    @click="pickFiles"
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
-                      <path d="M8 3v10M3 8h10" />
-                    </svg>
-                    <span class="ci-body">
-                      <span class="ci-name">{{ uploading ? '上传中…' : '本地文件' }}</span>
-                      <span class="ci-desc">从本机选择，挂到本次发送</span>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    class="casc-item"
-                    :disabled="!remoteSession"
-                    :title="remoteSession ? `从 ${remoteSession} 的目录选取` : '需要先连接一台远程会话'"
-                    @click="attachPane = 'remote'"
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
-                      <path d="M8 3v10M3 8h10" />
-                    </svg>
-                    <span class="ci-body">
-                      <span class="ci-name">远端文件</span>
-                      <span class="ci-desc">{{ remoteSession ? `从 ${remoteSession} 的目录选取` : '需要先连接一台远程会话' }}</span>
-                    </span>
-                  </button>
-                </template>
-              </template>
-              <template v-else-if="plusPane === 'skill'">
+              <template v-if="plusPane === 'skill'">
                 <button
                   v-for="s in filteredSkills"
                   :key="s.id"
@@ -885,8 +954,7 @@ onMounted(() => {
                     <rect x="3" y="3" width="10" height="10" rx="1" /><path d="M8 3v10M5 6h1.4M5 9h1.4" />
                   </svg>
                   <span class="ci-body">
-                    <span class="ci-name">{{ s.name }}<span v-if="sshAi.selectedSkillIds.includes(s.id)" class="ot">✓</span></span>
-                    <span class="ci-desc">{{ s.description || '过程性知识 · 无描述' }}</span>
+                    <span class="ci-name">{{ s.name }}</span>
                   </span>
                 </button>
                 <div v-if="!filteredSkills.length" class="casc-empty">
@@ -904,26 +972,10 @@ onMounted(() => {
                   </svg>
                   <span class="ci-body">
                     <span class="ci-name">去启用技能…</span>
-                    <span class="ci-desc">打开设置 · 技能面板</span>
                   </span>
                 </button>
               </template>
               <template v-else-if="plusPane === 'expert'">
-                <button
-                  type="button"
-                  class="casc-item"
-                  :class="{ on: !pickedExpert }"
-                  title="沿用默认运维智能体与全局设置"
-                  @click="chooseExpert('')"
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
-                    <circle cx="8" cy="12" r="4" /><path d="M8 10v4M6 12h4" />
-                  </svg>
-                  <span class="ci-body">
-                    <span class="ci-name">不指定专家<span v-if="!pickedExpert" class="ot">✓</span></span>
-                    <span class="ci-desc">沿用默认运维智能体与全局设置</span>
-                  </span>
-                </button>
                 <button
                   v-for="e in filteredExperts"
                   :key="e.id"
@@ -937,8 +989,7 @@ onMounted(() => {
                     <circle cx="8" cy="5.5" r="2.5" /><path d="M3.5 13a4.5 4.5 0 0 1 9 0" />
                   </svg>
                   <span class="ci-body">
-                    <span class="ci-name">{{ e.name }}<span v-if="sshAi.selectedExpertId === e.id" class="ot">✓</span></span>
-                    <span class="ci-desc">{{ e.description || `r${e.revision} · 运行策略配置` }}</span>
+                    <span class="ci-name">{{ e.name }}</span>
                   </span>
                 </button>
                 <div v-if="!filteredExperts.length" class="casc-empty">
@@ -946,32 +997,30 @@ onMounted(() => {
                 </div>
               </template>
               <template v-else>
-                <div class="hcc-sep">本次运行可用（只读）</div>
                 <div
                   v-for="p in filteredPlugins"
                   :key="p.id"
-                  class="casc-item ro"
-                  :class="{ on: runPlugins.some(x => x.id === p.id) }"
+                  class="casc-item"
+                  :class="{ on: isPluginOn(p.id) }"
                   :title="pluginSummary(p)"
+                  @click="togglePlugin(p.id)"
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
                     <path d="M6 3v3M10 3v3M4 6h8v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM8 11v2" />
                   </svg>
                   <span class="ci-body">
-                    <span class="ci-name">{{ p.name }}<span v-if="runPlugins.some(x => x.id === p.id)" class="ot">✓</span></span>
-                    <span class="ci-desc">{{ pluginSummary(p) }}</span>
+                    <span class="ci-name">{{ p.name }}</span>
                   </span>
                 </div>
                 <div v-if="!filteredPlugins.length" class="casc-empty">
                   {{ pluginsStore.plugins.length ? '没有匹配的插件' : '还没有安装插件，可在设置里新增' }}
                 </div>
-                <button type="button" class="casc-item" title="打开设置 · 插件面板" @click="openPluginSettings">
+                <button type="button" class="casc-item" title="安装与授权在「设置 → 插件」" @click="openPluginSettings">
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
                     <path d="M8 3v10M3 8h10" />
                   </svg>
                   <span class="ci-body">
                     <span class="ci-name">管理插件</span>
-                    <span class="ci-desc">安装与授权在「设置 → 插件」，此处不新开权限</span>
                   </span>
                 </button>
               </template>
@@ -1137,18 +1186,17 @@ onMounted(() => {
               <span class="ol">工作树</span>
               <span v-if="landing.kind === 'worktree'" class="tick">✓</span>
             </button>
-            <!-- 已连接的远程主机：执行目标本来就是「本地 / 某台机器」这一个维度，
-                 主机列表属于这里。原先是塞在第二枚 chip（目录）的浮层里 —— 点「目录」
-                 弹出一串主机、外加一行 `user@host` 勾选，用户 2026-11-11 明确否掉：
-                 那枚 chip 只管目录，主机归第一枚。 -->
+            <!-- SSH 连接配置：执行目标本来就是「本地 / 某台机器」这一个维度，
+                 主机列表属于这里。选中即建一条 AI 专属会话（与用户终端隔离），
+                 不借用终端页已开的远程 tab。 -->
             <button
-              v-for="o in remoteTargetOptions"
-              :key="o.sessionId"
+              v-for="o in sshConnectionOptions"
+              :key="o.id"
               type="button"
               class="hcc-opt landing-opt"
               :class="{ current: o.active }"
               :title="o.hint"
-              @click="chooseRemoteChip(o.sessionId)"
+              @click="chooseSshConn(o.id)"
             >
               <span class="ol">{{ o.label }}</span>
               <span v-if="o.active" class="tick">✓</span>
@@ -1225,8 +1273,13 @@ onMounted(() => {
                 <span class="ol">不在项目中工作</span>
                 <span v-if="atHomeRoot" class="tick">✓</span>
               </button>
-              <button type="button" class="hcc-opt landing-opt" title="目录选择器，选中即以该目录落一个本地会话" @click="pickDirChip">
-                <span class="ol">打开文件夹…</span>
+              <!-- ＋ 新建工作区（用户 2026-11-15 指定）：语义从「打开」升为「创建」——
+                   选一个文件夹即落一个新工作区 -->
+              <button type="button" class="hcc-opt landing-opt" title="选择一个文件夹，作为新工作区的落点" @click="pickDirChip">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" width="13" height="13" aria-hidden="true">
+                  <path d="M8 3v10M3 8h10" />
+                </svg>
+                <span class="ol">新建工作区</span>
               </button>
             </template>
             <div v-if="landing.error" class="hcc-sep">{{ landing.error }}</div>
@@ -1250,7 +1303,7 @@ onMounted(() => {
             </template>
             <template v-else>
               <RemoteDirPicker
-                :session-id="ssh.activeSessionId"
+                :session-id="landing.aiSessionId"
                 mode="dir"
                 show-files
                 :initial="landing.activeDirPath || '/'"
@@ -1430,8 +1483,25 @@ onMounted(() => {
         >×</button>
       </span>
 
+      <!-- 插件 chip 与技能同款（用户 2026-11-16：选中直接在输入栏显示，不靠面板 ✓） -->
       <span
-        v-for="f in sshAi.pendingAttachments"
+        v-for="p in pickedPlugins"
+        :key="p.id"
+        class="hcc-chip"
+        :title="pluginSummary(p)"
+      >
+        {{ p.name }}
+        <button
+          type="button"
+          class="hcc-chip-x"
+          :aria-label="`移除插件 ${p.name}`"
+          @click="togglePlugin(p.id)"
+        >×</button>
+      </span>
+
+      <!-- 文本类附件留在底部 chip：图片/视频已上移到输入框内预览条 -->
+      <span
+        v-for="f in pendingTextAtts"
         :key="f.file_id"
         class="hcc-chip"
         :title="attachmentTitle(f)"
@@ -1703,6 +1773,64 @@ onMounted(() => {
   color: var(--text-secondary);
   font-size: 0.8462rem;
 }
+/* ── 输入框内媒体附件预览条（图片缩略图 / 视频图标卡）── */
+.hcc-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-8);
+  padding: var(--spacing-12) var(--spacing-16) 0;
+}
+.hcc-att-card {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-6);
+  padding: var(--spacing-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+.hcc-att-thumb {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  display: block;
+}
+.hcc-att-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+.hcc-att-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8462rem;
+  color: var(--text-secondary);
+}
+.hcc-att-x {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.hcc-att-x:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong, var(--border-subtle));
+}
 .hcc-chip-x {
   display: inline-flex;
   align-items: center;
@@ -1941,7 +2069,9 @@ onMounted(() => {
 .casc-list { flex: 1; min-height: 0; overflow-y: auto; padding-top: var(--spacing-4) }
 .casc-item {
   display: flex;
-  align-items: flex-start;
+  /* 用户 2026-11-16：二级列表只留名字单行，图标随行居中（原 flex-start+2px
+     是为「名字+描述」双行设计的，单行下会显得头重脚轻） */
+  align-items: center;
   gap: 8px;
   width: 100%;
   text-align: left;
@@ -1953,11 +2083,9 @@ onMounted(() => {
   cursor: pointer;
   transition: background var(--transition-fast);
 }
-.casc-item:hover:not(.ro) { background: var(--bg-hover) }
+.casc-item:hover { background: var(--bg-hover) }
 .casc-item.on { background: var(--bg-hover) }
-/* 插件清单是只读行，不给 hover 反馈，免得看起来像能点开授权 */
-.casc-item.ro, .casc-item.ro:hover { cursor: default; background: transparent }
-.casc-item svg { flex-shrink: 0; margin-top: 2px; color: var(--text-secondary) }
+.casc-item svg { flex-shrink: 0; color: var(--text-secondary) }
 .ci-body { min-width: 0; display: flex; flex-direction: column; gap: 1px }
 .ci-name {
   font-size: 0.9231rem;
@@ -1966,8 +2094,8 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 二级列表是浏览/搜索场景：描述是辨识信息，按手记截图保留一行；
-   一级菜单那五层仍然不铺小字，说明只走 title。 */
+/* ci-desc 已随「只显示列表」改造从二级列表移除；类保留给潜在复用，
+   说明只走 title 悬浮。 */
 .ci-desc {
   font-size: 0.7692rem;
   color: var(--text-tertiary);

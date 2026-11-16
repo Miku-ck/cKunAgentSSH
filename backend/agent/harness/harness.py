@@ -159,6 +159,67 @@ class Harness:
             raise RuntimeError("Harness 未 assemble，stirrups 不可用")
         return self._stirrups
 
+    def _make_fallback_switch(
+        self,
+        config: AgentConfig,
+        ctx: RunContext,
+        emit_event,
+    ):
+        """按本 run 的备用模型配置装配切换回调（M9-3）。
+
+        返回 None 表示本 run 不启用回退。切换动作：构建备用 StreamLLMClient →
+        迁移 token/chunk 回调（不迁移则成本静默归零、前端再也收不到任何字）→
+        换 Stirrups/Bridle 的客户端引用 → 更新 ctx.llm_model → 发 warning 事件
+        （payload 带 code=model_fallback 与 from/to，前端按 warning 渲染零协议改动）。
+        """
+        fb = config.fallback_model_cfg
+        if not fb or not (fb.get("base_url") or "").strip():
+            return None
+        fb_model = fb.get("model_id") or fb.get("id") or ""
+        primary_model = ctx.llm_model
+
+        async def switch(run_ctx: RunContext) -> None:
+            from .llm_client import StreamLLMClient
+
+            fb_key = fb.get("api_key") or ""
+            if not fb_key:
+                raise RuntimeError(
+                    f"备用模型 {fb_model} 的 api_key 不可用（未配置或信封解密失败）")
+            new_client = StreamLLMClient(base_url=fb["base_url"], api_key=fb_key)
+            if self.cost_tracker is not None:
+                new_client.set_token_callback(
+                    lambda p, c: self.cost_tracker.record_llm_call(p, c))
+            primary = self._llm_client
+            # 回调迁移走鸭子类型（主客户端是 StreamLLMClient，测试替身可能不是；
+            # 只要有 _on_chunk 就迁移，保证流式不断）
+            primary_chunk = getattr(primary, "_on_chunk", None)
+            if primary_chunk is not None:
+                new_client.set_chunk_callback(primary_chunk)
+            self._llm_client = new_client
+            self.stirrups.llm_client = new_client
+            # 上下文压缩的摘要器同换：主端点已死，摘要继续打主端点只会再挂
+            self.bridle.set_summarizer(new_client)
+            # 成本记账切到备用模型口径（按新模型计价）；字段缺失/异常不阻断切换
+            try:
+                if self.cost_tracker is not None and fb_model:
+                    self.cost_tracker.model_id = fb_model
+            except Exception as e:
+                logger.warning("成本追踪器切换模型口径失败（继续按主模型计价）: %s", e)
+            run_ctx.llm_model = fb_model
+            await emit_event(TraceEvent(
+                kind="warning",
+                source="harness",
+                run_id=run_ctx.run_id,
+                payload={
+                    "message": f"主模型连续失败，已切换备用模型 {fb_model}",
+                    "code": "model_fallback",
+                    "from": primary_model,
+                    "to": fb_model,
+                },
+            ))
+
+        return switch
+
     async def run(
         self,
         task: str,
@@ -179,6 +240,8 @@ class Harness:
         await_approval: bool = False,
         expert_skill_ids: Optional[list[str]] = None,
         memory_scopes: Optional[list[str]] = None,
+        # 视觉多模态：image_url 内容块（路由层从上传副本构造好）。None = 纯文本。
+        images: Optional[list] = None,
     ) -> AsyncIterator[TraceEvent]:
         """
         主入口 — yield TraceEvent
@@ -312,10 +375,18 @@ class Harness:
             if self._chunk_queue is not None:
                 await self._chunk_queue.put(event)
         ctx.metadata["emit_event"] = emit_event
+        # 备用模型回退（M9-3）：主模型 TRANSIENT 重试耗尽时切备用（每 run 一次）。
+        # 切换回调在此处按本 run 的配置装配；未配置备用时显式置 None，防上一 run
+        # 的闭包经 Stirrups 实例泄漏到本 run。
+        self.stirrups.set_fallback_switch(
+            self._make_fallback_switch(actual_config, ctx, emit_event))
         # C-review M10：注入 per-run 成本追踪器，CostBudgetRein 熔断读取实时累计
         # （ctx.metadata 是 per-run dict，不受并发 run 影响）
         if self.cost_tracker is not None:
             ctx.metadata["cost_tracker"] = self.cost_tracker
+        # 视觉多模态：per-run 注入 Stirrups（LLM 请求边界才并入消息，见 llm_client）。
+        # 显式覆盖而非追加 —— 同一 harness 实例被复用时上一 run 的图片不得泄漏。
+        self.stirrups.images = list(images) if images else None
 
         # 首条消息：用户任务
         ctx.messages.append({"role": "user", "content": task})

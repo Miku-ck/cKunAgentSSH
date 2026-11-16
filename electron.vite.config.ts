@@ -71,18 +71,16 @@ export default defineConfig({
       watch: {
         ignored: rendererWatchIgnored,
       },
-      // 启动性能优化：Electron 拉起 dev server 后立即预热入口与重依赖，
-      // transform 与窗口加载并行 —— 否则首屏每个未缓存模块都要现场编译，
-      // 白屏时间被 monaco/xterm 等大依赖的按需 transform 串起来。
-      warmup: {
-        clientFiles: [
-          './src/main.ts',
-          './src/monaco-setup.ts',
-          './src/App.vue',
-          './src/components/ssh/RemoteTerminal.vue',
-          './src/components/ssh/LocalTerminal.vue',
-        ],
-      },
+      // 启动性能优化（2026-11-14 复核）：只预热入口。Vite 的 transformRequest 会沿静态
+      // import 递归转换整棵首屏模块图，原先并列列出的 App.vue / 两个终端组件已被
+      // src/main.ts 递归覆盖，重复列出只是重复排队；monaco-setup.ts 已退化成零重量 shim
+      // （重运行时在 ./monaco-runtime 动态 import），预热它没有任何收益。
+      // CKUN_VITE_WARMUP=0 整体关闭，用于 A/B 判定预热是否与首个真实请求抢 transform 队列。
+      warmup: process.env.CKUN_VITE_WARMUP === '0'
+        ? undefined
+        : {
+          clientFiles: ['./src/main.ts'],
+        },
     },
     build: {
       outDir: 'out/renderer',
@@ -97,6 +95,27 @@ export default defineConfig({
         '@': resolve(__dirname, 'src')
       }
     },
-    plugins: [vue()]
+    plugins: [
+      vue(),
+      // dev 首请求排队修复（2026-11-14）：把入口 transform 提前到 dev server 开始监听的
+      // 那一刻。electron-vite 在 listen 之后才 spawn Electron，这里的预热有机会抢在渲染
+      // 进程首个 / 请求之前完成。冷态日志里 `dev server probe` 耗时 1604ms（≈ 单次 1500ms
+      // 探活超时 + 200ms 间隔）、首次导航到 [vite] connecting 空档 13.3s，都指向首请求
+      // 被排在 transform 队列后面。失败静默，绝不影响正常加载。
+      // CKUN_VITE_PREWARM=0 可关闭，配合 CKUN_VITE_WARMUP=0 做 A/B 对照。
+      {
+        name: 'ckun-prewarm-entry',
+        configureServer(server) {
+          if (process.env.CKUN_VITE_PREWARM === '0') return
+          const prewarm = () => {
+            void server.transformRequest('/index.html').catch(() => {})
+            void server.transformRequest('/src/main.ts').catch(() => {})
+          }
+          const httpServer = server.httpServer
+          if (httpServer) httpServer.once('listening', () => setImmediate(prewarm))
+          else setImmediate(prewarm)
+        },
+      },
+    ]
   }
 })

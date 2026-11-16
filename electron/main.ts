@@ -167,10 +167,24 @@ let pendingConsume = false
 //   3) 6s 兜底 show —— 极端挂起时宁可露出深色窗，也不让用户对「点了没反应」干等。
 // 生产走 loadFile 不涉网络，只吃到 3) 的兜底。
 const DEV_LOAD_MAX_RETRIES = 5
-/** 兜底亮窗时限：热态首启实测 3.6s 出窗（本机安全软件对新进程评估约 2.3s），
- *  6s 留足余量不误触；冷态/被拦情形（实测出现过 17.9s）则 6s 先亮窗，
- *  不让用户对着无窗状态干等 —— 原来的 15s 是同一问题下的过度保守值。 */
-const FALLBACK_SHOW_MS = 6000
+/** 兜底亮窗时限。
+ *
+ * 2026-11-14 A/B：曾假设 show:false 让 Chromium 节流首屏、6s 兜底是固定自设
+ * 成本，一度把默认值收紧到 300ms。实测证伪 —— 300ms 那轮 did-finish-load
+ * 22.9s，同条件 6000ms 对照 11.0s，更早两次稳定热态是 8.1s / 8.0s。
+ * 「show 后 0.1~0.2s 就 [vite] connecting」只是两次巧合：6000 对照那轮
+ * show→connecting 是 3.9s，300ms 那轮是 20.6s。真正的波动在 Vite dev server
+ * 侧首个模块请求的排队，与窗口 show 时机没有因果关系。
+ *
+ * 故保留原值 6000（不改 UX）。CKUN_FALLBACK_SHOW_MS 仅作为后续实验开关，
+ * 不再据此宣称提速。原设计理由：热态首启实测 3.6s 出窗，6s 留足余量不误触；
+ * 冷态/被拦情形（实测出现过 17.9s）则 6s 先亮窗，不让人对着无窗状态干等。
+ */
+const _fallbackShowOverride = Number(process.env.CKUN_FALLBACK_SHOW_MS)
+const FALLBACK_SHOW_MS =
+  Number.isFinite(_fallbackShowOverride) && _fallbackShowOverride >= 0
+    ? _fallbackShowOverride
+    : 6000
 
 /** 主进程侧探活 dev server：单次 1.5s 超时、200ms 间隔轮询，总预算 timeoutMs。 */
 async function waitForDevUrl(url: string, timeoutMs = 15000): Promise<boolean> {
@@ -370,7 +384,9 @@ function installCsp(): void {
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http://127.0.0.1:*; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*;"
+          // img-src 带 blob:：附件缩略图用 URL.createObjectURL 生成本地预览
+          // （2026-11-15），没有 blob: 时 <img> 被 CSP 拦成碎图占位符
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http://127.0.0.1:*; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*;"
         ]
       }
     })

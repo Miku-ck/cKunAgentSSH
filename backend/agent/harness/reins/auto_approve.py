@@ -133,10 +133,15 @@ async def _judge_once(ctx: RunContext, subject: str, reason: str) -> bool:
             model_cfg=model_cfg,
             model_id=ctx.llm_model,
             temperature=0.0,
+            # 16 tokens 只够输出 ALLOW/DENY：思考型模型在思考阶段就耗尽预算
+            # → 恒空 → 永远回退人工审批，自动审批对思考模型静默失效。
+            # 裁决依据已写在 prompt（风险理由 + 任务上下文），关思考不损失
+            # 输入侧信息；失败仍走"回退人工审批"的安全侧降级。
             max_tokens=_JUDGE_MAX_TOKENS,
             chunk_timeout=_JUDGE_CHUNK_TIMEOUT_S,
             total_timeout=_JUDGE_TOTAL_TIMEOUT_S,
             task_name="auto_approve_judge",
+            thinking="off",
         )
     except Exception as e:  # 超时/网络/解析——全部按 DENY 处理
         logger.warning("自动审批裁决调用失败，回退人工审批: %s", e)

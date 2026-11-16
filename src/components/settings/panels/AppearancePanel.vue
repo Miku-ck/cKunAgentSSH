@@ -2,10 +2,9 @@
   <div class="panel">
     <header class="panel-header">
       <h3>外观</h3>
-      <p class="panel-desc">自定义界面主题、强调色与字体</p>
     </header>
     <div class="panel-body">
-      <SettingRow label="主题" desc="切换整体界面主题">
+      <SettingRow label="主题">
         <select v-model="settings.appearance.theme" class="setting-select">
           <!-- 选项由 themeLabels（Record<Theme, string>）枚举：新增主题忘了配文案直接编译报错，
                而不是像原来那样靠手抄 <option> 与 useAppearance 的 Theme 对齐全靠人眼 -->
@@ -13,7 +12,7 @@
         </select>
       </SettingRow>
 
-      <SettingRow label="强调色" desc="主色调与高亮色">
+      <SettingRow label="强调色">
         <div class="color-swatches">
           <button
             v-for="c in accentOptions"
@@ -36,7 +35,7 @@
         </select>
       </SettingRow>
 
-      <SettingRow label="动效" desc="界面过渡与动画效果">
+      <SettingRow label="动效">
         <ToggleSwitch v-model="settings.appearance.animation" />
       </SettingRow>
 
@@ -57,7 +56,7 @@
           强度为 0：渐变实际未生效，可拖动滑块上调；若不需要渐变请关闭总开关。
         </p>
 
-        <SettingRow label="渐变形态" desc="渐变的整体样式">
+        <SettingRow label="渐变形态">
           <select v-model="settings.appearance.themeGradientMode" class="setting-select">
             <option v-for="(label, value) in gradientModeLabels" :key="value" :value="value">{{ label }}</option>
           </select>
@@ -101,11 +100,11 @@
       </template>
 
       <div class="bg-section">
-        <SettingRow label="自定义背景图" desc="启用全窗口底层背景">
+        <SettingRow label="自定义背景图">
           <ToggleSwitch v-model="settings.appearance.backgroundEnabled" />
         </SettingRow>
 
-        <SettingRow label="背景图片" desc="选择本地图片作为背景">
+        <SettingRow label="背景图片">
           <div class="bg-control">
             <button
               class="bg-btn"
@@ -155,14 +154,14 @@
           </select>
         </SettingRow>
 
-        <SettingRow label="终端背景" desc="本地/远程终端的背景色方案">
+        <SettingRow label="终端背景">
           <select v-model="settings.appearance.terminal.backgroundMode" class="setting-select">
             <option v-for="(label, value) in terminalBgModeLabels" :key="value" :value="value">{{ label }}</option>
           </select>
         </SettingRow>
 
         <template v-if="settings.appearance.terminal.backgroundMode === 'solid'">
-          <SettingRow label="背景颜色" desc="终端纯色背景">
+          <SettingRow label="背景颜色">
             <div class="gradient-color-row">
               <input type="color" v-model="settings.appearance.terminal.backgroundColor" />
               <span class="bg-color-text">{{ settings.appearance.terminal.backgroundColor }}</span>

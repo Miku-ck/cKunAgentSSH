@@ -2,7 +2,7 @@
   <div class="setting-row">
     <div class="setting-label">
       <span class="label-text">{{ label }}</span>
-      <span v-if="desc" class="label-desc">{{ desc }}</span>
+      <InfoTip v-if="desc" :text="desc" />
     </div>
     <div class="setting-control">
       <slot />
@@ -11,6 +11,8 @@
 </template>
 
 <script setup lang="ts">
+import InfoTip from '@/components/common/InfoTip.vue'
+
 defineProps<{
   label: string
   desc?: string
@@ -33,18 +35,13 @@ defineProps<{
   flex: 1;
   min-width: 0;
   margin-right: var(--spacing-16);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-6);
 }
 .label-text {
-  display: block;
   font-size: 1rem;
   color: var(--text-primary);
-  line-height: 1.4;
-}
-.label-desc {
-  display: block;
-  font-size: 0.8462rem;
-  color: var(--text-secondary);
-  margin-top: var(--spacing-2);
   line-height: 1.4;
 }
 .setting-control {

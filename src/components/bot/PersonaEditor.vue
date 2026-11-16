@@ -110,16 +110,16 @@
               <option value="long">长文（可展开）</option>
             </select>
           </label>
-          <label class="field field-inline"><span>思考</span>
-            <input type="checkbox" v-model="form.enable_thinking" />
-            <em class="field-hint">需模型支持；模型不回思考则不显示思考块</em>
-          </label>
-          <label class="field field-inline"><span>主动找你</span>
-            <input type="checkbox" v-model="form.proactive_enabled" />
-            <em class="field-hint">她会在想找你时主动开口（有静音时段、频率上限和冷场冷却守着分寸）</em>
-          </label>
+          <div class="field field-inline">
+            <label class="inline-toggle"><span>思考</span><input type="checkbox" v-model="form.enable_thinking" /></label>
+            <InfoTip text="需模型支持；模型不回思考则不显示思考块" />
+          </div>
+          <div class="field field-inline">
+            <label class="inline-toggle"><span>主动找你</span><input type="checkbox" v-model="form.proactive_enabled" /></label>
+            <InfoTip text="她会在想找你时主动开口（有静音时段、频率上限和冷场冷却守着分寸）" />
+          </div>
           <div class="field">
-            <span>{{ options?.group_mode.label || '群参与' }}</span>
+            <span class="field-label">{{ options?.group_mode.label || '群参与' }} <InfoTip text="接话需群主开「接收全量消息」，群里主动开口需「主动推送」，缺一项平台就拒" /></span>
             <div class="chips" role="group" aria-label="在群里说到什么程度">
               <button
                 v-for="item in options?.group_mode.options || []"
@@ -131,12 +131,11 @@
                 @click="form.group_mode = item.value as BotGroupMode"
               >{{ item.label }}</button>
             </div>
-            <em class="field-hint">接话需群主开「接收全量消息」，群里主动开口需「主动推送」，缺一项平台就拒</em>
           </div>
-          <label class="field field-inline"><span>回复 @ 提问者</span>
-            <input type="checkbox" v-model="form.mention_sender" />
-            <em class="field-hint">关掉后群里这句不再挂「回复某人」，改走主动消息（需群主开「主动推送」）；平台拒收就回落成带 @ 的回复</em>
-          </label>
+          <div class="field field-inline">
+            <label class="inline-toggle"><span>回复 @ 提问者</span><input type="checkbox" v-model="form.mention_sender" /></label>
+            <InfoTip text="关掉后群里这句不再挂「回复某人」，改走主动消息（需群主开「主动推送」）；平台拒收就回落成带 @ 的回复" />
+          </div>
         </section>
 
         <section v-for="item in textSections" :key="item.key" class="editor-section" :data-section="item.key">
@@ -176,6 +175,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import AvatarPicker from './AvatarPicker.vue'
+import InfoTip from '@/components/common/InfoTip.vue'
 import { isImageAvatar } from '@/utils/persona-avatar'
 import { stickerAssetUrl } from '@/utils/bot-stickers'
 import { toFriendlyMessage } from '@/api/base'
@@ -457,7 +457,9 @@ onMounted(() => {
 .field-inline span { flex: 0 0 auto; }
 /* 复选框不吃控件高度，只按自己的尺寸 */
 .field-inline input { width: auto; height: auto; padding: 0; }
-.field-hint { color: var(--text-tertiary); font-family: var(--font-spec); font-size: 0.8462rem; font-style: normal; }
+/* 提示图标放在 label 外：点它只读说明，不会误触复选框 */
+.inline-toggle { display: flex; align-items: center; gap: var(--spacing-10); cursor: pointer; }
+.field-label { display: inline-flex; align-items: center; gap: var(--spacing-6); }
 .chips { display: flex; flex-wrap: wrap; gap: var(--spacing-6); }
 .chip {
   padding: 5px var(--spacing-12);

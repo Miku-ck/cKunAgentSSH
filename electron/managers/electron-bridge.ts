@@ -58,7 +58,7 @@ interface BridgeEnv {
 }
 
 /** 桥接业务操作：与 WS req 帧（bridge-ws-client）共用同一实现（dispatch） */
-export type BridgeOp = 'ssh_exec' | 'ssh_connect' | 'ssh_disconnect' | 'ssh_list_connections' | 'ssh_session_info'
+export type BridgeOp = 'ssh_exec' | 'ssh_connect' | 'ssh_disconnect' | 'ssh_list_connections' | 'ssh_session_info' | 'ssh_kill'
 /** dispatch 结果：status 为 HTTP 风格状态码，body 与后端预期的响应体同构 */
 export interface DispatchResult {
   status: number
@@ -126,17 +126,43 @@ export class ElectronBridge {
           if (!data.command || typeof data.command !== 'string') {
             return { status: 400, body: { success: false, error: 'Missing command' } }
           }
+          // execId（可选）：后端生成的取消句柄，kill_exec 经 ssh_kill 按它查杀。
+          // 格式守卫：uuid4 hex（32 位十六进制）—— 防把任意串塞进登记表。
+          let execId: string | undefined
+          if (data.execId !== undefined) {
+            if (typeof data.execId !== 'string' || !/^[0-9a-f]{32}$/.test(data.execId)) {
+              return { status: 400, body: { success: false, error: 'Invalid execId' } }
+            }
+            execId = data.execId
+          }
           // 钳制 timeout 到安全范围
           const timeout = Math.max(MIN_TIMEOUT, Math.min(MAX_TIMEOUT, data.timeout ?? 30))
           const { stdout, stderr, exitCode } = await this.sshManager.execCommandWithExitCode(
             data.sshSessionId,
             data.command,
             timeout,
+            execId,
           )
           return {
             status: 200,
             body: { success: exitCode === 0, output: stdout, error: stderr, exit_code: exitCode },
           }
+        }
+
+        case 'ssh_kill': {
+          // M9 kill 通道：按 execId 查杀登记中的远程 exec 通道。
+          const execId = data.execId
+          if (typeof execId !== 'string' || !/^[0-9a-f]{32}$/.test(execId)) {
+            return { status: 400, body: { success: false, error: 'Invalid execId' } }
+          }
+          const outcome = this.sshManager.killExec(execId)
+          if (!outcome.found) {
+            // 诚实上报：已正常结束或从未存在，不是错误（kill 与完成竞态时属正常）。
+            // 用 200 而非 404：Python 侧 _send 对 >=400 一律抛 BridgeError，
+            // 三态契约（found=False 不是错误）只有走 200 才真正可达。
+            return { status: 200, body: { success: true, found: false } }
+          }
+          return { status: 200, body: { success: true, ...outcome } }
         }
 
         case 'ssh_connect': {

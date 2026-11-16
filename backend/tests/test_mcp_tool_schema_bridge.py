@@ -113,3 +113,67 @@ def test_call_maps_iserror_and_destroys_session_on_exception(base_db):
     ok, out, err = asyncio.run(manager.call("p1", "list_pods", {}))
     assert not ok
     assert "p1" not in manager._sessions  # 失效会话被销毁，不复用
+
+
+# ── 逐 run 插件收紧（用户 2026-11-16）：build_plugin_tools 的三层求交 ────────
+
+
+def _rows():
+    return [
+        {"id": "p1", "slug": "ops", "config_rev": 1, "timeout_s": 15,
+         "enabled": 1, "consented_at": "2026-11-16", "readonly_tools_json": "[]"},
+        {"id": "p2", "slug": "k8s", "config_rev": 1, "timeout_s": 15,
+         "enabled": 1, "consented_at": "2026-11-16", "readonly_tools_json": "[]"},
+    ]
+
+
+class _FakeMgr:
+    async def list_tools(self, row, timeout_s=10.0):
+        return [{
+            "name": f"{row['slug']}_tool", "description": "t",
+            "inputSchema": {"type": "object", "properties": {}},
+            "readOnlyHint": True,
+        }]
+
+
+def _run(monkeypatch, policy_plugin_ids, selected):
+    import database as db
+    from types import SimpleNamespace
+    from agent.run_assembly import build_plugin_tools
+    monkeypatch.setattr(db, "list_plugins", lambda include_env: _rows())
+    policy = SimpleNamespace(plugin_ids=policy_plugin_ids)
+
+    async def go():
+        tools, warnings = await build_plugin_tools(
+            policy, manager=_FakeMgr(), selected_plugin_ids=selected)
+        return sorted(t.name for t in tools), warnings
+
+    return asyncio.run(go())
+
+
+def test_run_selection_none_inherits_all_enabled(monkeypatch):
+    names, warnings = _run(monkeypatch, None, None)
+    assert names == ["mcp__k8s__k8s_tool", "mcp__ops__ops_tool"]
+    assert warnings == []
+
+
+def test_run_selection_empty_drops_all(monkeypatch):
+    """空数组是合法表态：本次一个插件都不带，不是「未表态」。"""
+    names, _ = _run(monkeypatch, None, [])
+    assert names == []
+
+
+def test_run_selection_filters_by_id(monkeypatch):
+    names, _ = _run(monkeypatch, None, ["p2"])
+    assert names == ["mcp__k8s__k8s_tool"]
+
+
+def test_run_selection_intersects_expert_allowlist(monkeypatch):
+    """专家显式允许 p1 + 本次只选 p2 → 交集为空（专家只能收紧不能放宽）。"""
+    names, _ = _run(monkeypatch, ("p1",), ["p2"])
+    assert names == []
+
+
+def test_expert_allowlist_still_applies_without_run_selection(monkeypatch):
+    names, _ = _run(monkeypatch, ("p1",), None)
+    assert names == ["mcp__ops__ops_tool"]

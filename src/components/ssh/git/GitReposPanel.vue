@@ -109,8 +109,7 @@
     <Teleport to="body">
       <div v-if="showAddRemote" class="arm-overlay" @click.self="showAddRemote = false">
         <div ref="addRemoteRef" class="arm-dialog" role="dialog" aria-modal="true" aria-label="登记远程仓库路径" tabindex="-1">
-          <div class="arm-title">登记远程仓库路径</div>
-          <div class="arm-sub">在 {{ scopeSession?.name || '当前主机' }} 上登记一个 git 工作区路径，登记前会先校验该路径。</div>
+          <div class="arm-title">登记远程仓库路径 <InfoTip :text="`在 ${scopeSession?.name || '当前主机'} 上登记一个 git 工作区路径，登记前会先校验该路径。`" /></div>
           <input
             v-model="addRemotePath"
             class="arm-input mono"
@@ -135,12 +134,11 @@
       <div v-if="showTokens" class="arm-overlay" @click.self="showTokens = false">
         <div ref="tokenDialogRef" class="arm-dialog wide" role="dialog" aria-modal="true" aria-label="私人令牌" tabindex="-1">
           <div class="arm-title-row">
-            <div class="arm-title">私人令牌（PAT）</div>
+            <div class="arm-title">私人令牌（PAT） <InfoTip text="按平台/域名保存，HTTPS 推拉私有仓库时自动注入鉴权；仅存本地 github-accel.json，切勿把 PAT 发给公共代理。" /></div>
             <span v-if="accelStore.privateTokens.length" class="token-count" title="已配置的令牌数">{{ accelStore.privateTokens.length }}</span>
             <span class="grow"></span>
             <button v-if="!showTokenForm" class="btn btn-primary btn-sm" type="button" @click="toggleTokenForm">添加令牌</button>
           </div>
-          <div class="arm-sub">按平台/域名保存，HTTPS 推拉私有仓库时自动注入鉴权；仅存本地 github-accel.json，切勿把 PAT 发给公共代理。</div>
 
           <!-- 现有令牌列表（空 token 显示「未配置」而非真实内容；label 默认取平台名，与平台重复时不重复展示） -->
           <div v-if="accelStore.privateTokens.length" class="token-list">
@@ -162,7 +160,6 @@
           <div v-else class="token-empty">
             <svg class="token-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
             <div class="token-empty-title">尚未配置任何令牌</div>
-            <div class="token-empty-sub">HTTPS 推拉私有仓库时会因 401 失败；点右上角「添加令牌」填入 PAT 即可自动鉴权。</div>
           </div>
 
           <!-- 添加/编辑表单（同一表单双向复用：tokenEditingId 非空为编辑，否则为新增） -->
@@ -195,7 +192,7 @@
               </div>
             </div>
             <div class="form-row">
-              <label class="form-label">令牌</label>
+              <label class="form-label">令牌 <InfoTip text="各平台私人令牌可在「设置 → 开发者 → Personal access tokens」生成；仅本地保存，不落 git。" /></label>
               <div class="form-field">
                 <div class="token-input-wrap">
                   <input
@@ -210,7 +207,6 @@
                 </div>
               </div>
             </div>
-            <div class="form-hint">各平台私人令牌可在「设置 → 开发者 → Personal access tokens」生成；仅本地保存，不落 git。</div>
             <div v-if="tokenError" class="token-error">{{ tokenError }}</div>
             <div class="form-actions">
               <button class="btn btn-primary btn-sm" type="button" :disabled="!canSubmitToken" @click="submitToken">{{ tokenEditingId ? '保存修改' : '添加令牌' }}</button>
@@ -247,6 +243,7 @@ import { unwrapIpcErrorEnvelope } from '@/api/client'
 import { sshSessionIo, writeAfterShellReady } from '@/utils/ssh-handshake'
 import { useGithubAccelStore } from '@/stores/github-accel'
 import GitRepoDetailPanel from './GitRepoDetailPanel.vue'
+import InfoTip from '@/components/common/InfoTip.vue'
 import {
   AUDIT_ACTION_GIT,
   auditEnvironmentFor,

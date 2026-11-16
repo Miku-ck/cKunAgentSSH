@@ -1,8 +1,7 @@
 <template>
   <div class="panel">
     <header class="panel-header">
-      <h3>专家管理</h3>
-      <p class="panel-desc">运行策略配置包 —— 收窄模型、工具、技能、权限、迭代与记忆；不新增可执行能力</p>
+      <h3>专家管理 <InfoTip text="运行策略配置包：收窄模型、工具、技能、权限、迭代与记忆，不新增可执行能力。技能 = 怎么做（过程知识）；专家 = 以什么策略跑（配置）；插件 = 能做什么（新工具，必须单独授权）。工具集与技能集留空表示继承现状，填 [] 表示显式全禁。" /></h3>
     </header>
 
     <div class="panel-body">
@@ -10,14 +9,14 @@
         <button class="grp-head" @click="openList = !openList">
           <span class="grp-caret" :class="{ open: openList }">▸</span>
           <span class="grp-title">专家库</span>
+          <InfoTip :focusable="false" text="内置「通用运维」全继承，选中它等同于不选专家。自定义专家只能收紧，不能放宽安全边界。" />
           <span class="grp-badge">{{ store.experts.length }} 个</span>
         </button>
         <div v-show="openList" class="grp-body">
-          <p class="hint">
-            内置「通用运维」全继承，选中它等同于不选专家。自定义专家只能收紧，不能放宽安全边界。
+          <div class="grp-tools">
             <button class="link-btn" :disabled="store.loading" @click="load">{{ store.loading ? '加载中…' : '刷新' }}</button>
             <button class="link-btn" @click="openEditor(null)">新建专家</button>
-          </p>
+          </div>
           <p v-if="store.error" class="hint err">{{ store.error }}</p>
           <div
             v-for="e in store.experts"
@@ -38,17 +37,7 @@
               <button class="btn btn-danger btn-sm" :disabled="!!e.is_builtin" @click="onDelete(e)">删除</button>
             </div>
           </div>
-          <p v-if="!store.experts.length" class="hint muted">还没有专家，点「新建专家」创建</p>
-        </div>
-      </section>
-
-      <section class="grp static">
-        <div class="grp-head"><span class="grp-title">三层边界</span></div>
-        <div class="grp-body">
-          <p class="hint">
-            技能 = 怎么做（过程知识）；专家 = 以什么策略跑（配置）；插件 = 能做什么（新工具，必须单独授权）。
-            工具集与技能集留空表示继承现状，填 <code>[]</code> 表示显式全禁；两者语义不同。
-          </p>
+          <p v-if="!store.experts.length" class="hint muted">还没有专家</p>
         </div>
       </section>
     </div>
@@ -144,6 +133,7 @@
  */
 import { onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import type { Expert, ExpertPayload } from '@/api/core'
+import InfoTip from '@/components/common/InfoTip.vue'
 import { useExpertsStore } from '@/stores/experts'
 import { useConfirm } from '@/composables/useConfirm'
 import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'

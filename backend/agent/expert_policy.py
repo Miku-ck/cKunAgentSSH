@@ -129,9 +129,13 @@ def builtin_general() -> dict:
 
 
 def builtin_general_ops() -> dict:
-    """内置运维专家：运维角色 + 方法论两变体 + 运维工具纪律全文进身份段；工具/权限全继承。"""
+    """内置运维专家：运维角色 + 方法论两变体 + 运维工具纪律全文进身份段；工具/权限全继承。
+
+    用户 2026-11-16：显示名从「运维专家」改为「运维」（列表里其余专家都是单词名，
+    「专家」二字与左侧入口标签重复）；slug 仍是 general_ops 不变。
+    """
     row = _builtin_base(
-        "general_ops", "运维专家",
+        "general_ops", "运维",
         "Linux 运维专家：运维角色 + 变更/只读方法论 + 运维工具纪律；工具与权限全继承。",
     )
     row["identity_prompt"] = OPS_IDENTITY_PROMPT

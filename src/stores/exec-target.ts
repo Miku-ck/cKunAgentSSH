@@ -81,32 +81,54 @@ export const useExecTargetStore = defineStore('execTarget', () => {
   const loading = ref(false)
   const error = ref('')
   /** 目录面列的就是这一份：用户打开过的目录，最近在前。空 = 还没打开过任何文件夹，
-   *  目录面只剩「不在项目中工作」与「打开文件夹…」两行（不预读会话 / 工作树 / 仓库）。 */
+   *  目录面只剩「不在项目中工作」与「＋ 新建工作区」两行（不预读会话 / 工作树 / 仓库）。 */
   const recentDirs = ref<string[]>(readRecentDirs())
+
+  /** AI 专属 SSH 会话 id（用户在 AI 输入框选中连接后由 connectAiRemote 建立）。
+   *  空 = 没选远程落点。它与用户终端的 activeSessionId 完全独立 —— AI 不借用用户终端。 */
+  const aiSessionId = ref('')
+  /** AI 专属会话对应的连接配置 id（chip 副标题 / 换连接判重用）。 */
+  const aiConnectionId = ref('')
 
   const hasRepos = computed(() => groups.value.length > 0)
   const worktreeCount = computed(() => groups.value.reduce((n, g) => n + g.items.length, 0))
 
-  /** 当前落点从真实会话反查；会话已关 / 无会话一律 null，不臆造选中态。 */
+  /** 当前落点：SSH 只认 AI 专属会话（用户终端页的远程 tab 不算 AI 落点）；
+   *  本地 / 工作树仍从用户活动会话反查。会话已关 / 无会话一律 null，不臆造选中态。 */
   const kind = computed<ExecTargetKind | null>(() => {
+    if (aiSessionId.value) {
+      return ssh.sessions.some(s => s.id === aiSessionId.value) ? 'ssh' : null
+    }
     const id = ssh.activeSessionId
     if (!id) return null
     const session = ssh.sessions.find(s => s.id === id)
     if (!session) return null
     if (worktreeBySession.value[id]) return 'worktree'
-    return session.type === 'remote' ? 'ssh' : 'local'
+    return session.type === 'local' ? 'local' : null
   })
 
-  const activeWorktree = computed(() =>
-    ssh.activeSessionId ? worktreeBySession.value[ssh.activeSessionId] ?? null : null,
-  )
+  /** 当前落点实际使用的会话 id：SSH 读 AI 专属会话，本地 / 工作树读用户活动会话。
+   *  chip 读数与探测 / 回拨都键控它，不再直接读 activeSessionId（那会借到用户终端）。
+   *  无落点（kind=null，含「用户终端页开着远程 tab 但 AI 没选连接」）返回空 ——
+   *  发送装配据此不把用户的远程会话借给 AI。 */
+  const targetSessionId = computed(() => {
+    const k = kind.value
+    if (k === 'ssh') return aiSessionId.value
+    if (k === 'local' || k === 'worktree') return ssh.activeSessionId
+    return ''
+  })
+
+  const activeWorktree = computed(() => {
+    const id = targetSessionId.value
+    return id ? worktreeBySession.value[id] ?? null : null
+  })
 
   /** 当前落点**绑定的**那个目录：工作树路径 / 本地会话建会话时给的 cwd。
    *  故意不读实时 cwd —— 「不在项目中工作」的会话也会同步上来主目录，那是终端自己
    *  在跑，不是用户选的文件夹；拿它当绑定目录，主目录就会被当成一个"项目"（用户
    *  2026-11-11 反馈：默认不在项目却读出了文件夹，还和「不在项目中」同时打勾）。 */
   const activeBoundDir = computed(() => {
-    const id = ssh.activeSessionId
+    const id = targetSessionId.value
     if (!id) return ''
     const wt = worktreeBySession.value[id]
     if (wt) return wt.path
@@ -141,7 +163,7 @@ export const useExecTargetStore = defineStore('execTarget', () => {
    *  无会话 / 远程会话返回空。**不上 chip** —— 本地落点就是「就在这个文件夹」，
    *  默认 shell 是 PowerShell 属实现细节，印在底栏只占宽不增信息（2026-11-10）。 */
   const activeShell = computed(() => {
-    const id = ssh.activeSessionId
+    const id = targetSessionId.value
     if (!id) return ''
     const s = ssh.sessions.find(x => x.id === id)
     return s && s.type === 'local' ? (s.shell || '') : ''
@@ -154,18 +176,18 @@ export const useExecTargetStore = defineStore('execTarget', () => {
    *
    *  本地**没有绑定目录**时返回空串，不编「主目录」（2026-11-11 用户口径）：
    *  主目录不是用户选的项目，写在 chip 上等于把所有「没选目录」的状态都谎报成
-   *  同一个位置。空值的文案由界面决定（现在那枚 chip 变成「打开文件夹」入口）。 */
+   *  同一个位置。空值的文案由界面决定（现在那枚 chip 变成「＋ 新建工作区」入口）。 */
   /** 当前远程落点的会话是否已经不在了（主进程移除 / 重连放弃 / 探测反证）。
    *  chip 与 title 都要据此改口，别再把它画成一个活着的 home 目录。 */
   const activeDirUnavailable = computed(() => {
     if (kind.value !== 'ssh') return false
-    const s = ssh.sessions.find(x => x.id === ssh.activeSessionId)
+    const s = ssh.sessions.find(x => x.id === targetSessionId.value)
     return !!s && (!!s.reconnectGaveUp || !!s.unavailable)
   })
 
   const activeDirLabel = computed(() => {
     const k = kind.value
-    const id = ssh.activeSessionId
+    const id = targetSessionId.value
     if (k === 'worktree') return activeRepoLabel.value
     // 目录一律走 sessionCwd：实时 cwd 优先（用户 cd 之后它才是真相），初始 cwd 兜底。
     // SSH 只取**末级目录名**：这枚 chip 和「本地」那枚一样宽，印 `/home/ckun/www/app`
@@ -191,7 +213,7 @@ export const useExecTargetStore = defineStore('execTarget', () => {
    *  SSH 读远程 cwd（OSC 7 / 一次性 pwd 兜底），本地与工作树读绑定目录。 */
   const activeDirPath = computed(() => {
     const k = kind.value
-    const id = ssh.activeSessionId
+    const id = targetSessionId.value
     if (k === 'ssh') return id ? ssh.sessionCwd(id) : ''
     if (k === 'worktree') return activeRepoPath.value
     return activeBoundDir.value
@@ -206,7 +228,7 @@ export const useExecTargetStore = defineStore('execTarget', () => {
    *  有效 id，这个 watch 于是再补一次。 */
   const cwdProbeTarget = computed(() => {
     if (kind.value !== 'ssh') return ''
-    const id = ssh.activeSessionId
+    const id = targetSessionId.value
     const s = ssh.sessions.find(x => x.id === id)
     if (!s || s.reconnectGaveUp || s.unavailable) return ''
     return id
@@ -224,10 +246,13 @@ export const useExecTargetStore = defineStore('execTarget', () => {
    *  失败不静默：写进 landing.error（目录面里看得见），并保留「未连接」读数 —— 网络真的
    *  断着时，反复自动重试只会把同一个失败刷屏，一次就够，之后由用户点「重新连接」。 */
   const redialTried = new Set<string>()
+  /** 回拨进行中：ssh.redial 会原位替换 sessions[idx]（旧 id 消失、新 id 出现），
+   *   presence watch 若在这瞬间清掉 aiSessionId，回拨成功后的 .then 就接不上了。 */
+  let redialInFlight = false
   watch(
     () => {
       if (kind.value !== 'ssh') return ''
-      const id = ssh.activeSessionId
+      const id = targetSessionId.value
       const s = id ? ssh.sessions.find(x => x.id === id) : undefined
       // 两种「chip 上说未连接」的成因都算：探测反证的幽灵会话、自动重连放弃的会话。
       // 它们在主进程里都没有可用连接，也都是首页这一枚 chip 自己没法自愈的状态。
@@ -236,11 +261,27 @@ export const useExecTargetStore = defineStore('execTarget', () => {
     (id) => {
       if (!id || redialTried.has(id)) return
       redialTried.add(id)
-      void ssh.redial(id).catch((e: unknown) => {
-        error.value = `重新连接失败：${messageOf(e)}`
-      })
+      redialInFlight = true
+      void ssh.redial(id)
+        .then((newId) => { aiSessionId.value = newId })
+        .catch((e: unknown) => { error.value = `重新连接失败：${messageOf(e)}` })
+        .finally(() => { redialInFlight = false })
     },
     { immediate: true },
+  )
+
+  /** AI 专属会话被关掉（用户在终端页关 tab / 主进程移除）后清空落点，不臆造 ssh。
+   *  flush:'sync'：测试与界面都在会话消失的同一帧读 kind / aiSessionId，不能等渲染前。
+   *  回拨替换 id 的瞬间由 redialInFlight 挡住，见上。 */
+  watch(
+    () => !!aiSessionId.value && !ssh.sessions.some(s => s.id === aiSessionId.value),
+    (gone) => {
+      if (gone && !redialInFlight) {
+        aiSessionId.value = ''
+        aiConnectionId.value = ''
+      }
+    },
+    { flush: 'sync' },
   )
 
   /** 只有工作树落点才有「分支」这第三枚 chip。本地是「就在这个文件夹」，
@@ -250,7 +291,7 @@ export const useExecTargetStore = defineStore('execTarget', () => {
   /** SSH 落点的主读数：连接名优先（用户自己起的名字认得出），退到会话的
    *  username@host。非远程落点返回空 —— 调用方据此走「选择落点」占位，不臆造。 */
   const activeRemoteLabel = computed(() => {
-    const id = ssh.activeSessionId
+    const id = targetSessionId.value
     if (!id) return ''
     const s = ssh.sessions.find(x => x.id === id)
     if (!s || s.type !== 'remote') return ''
@@ -338,6 +379,7 @@ export const useExecTargetStore = defineStore('execTarget', () => {
   /** 「本地」：优先复用已开的普通本地会话，没有就开一个默认 cwd 的。 */
   async function chooseLocal(): Promise<void> {
     error.value = ''
+    void clearSsh()
     try {
       const existing = ssh.sessions.find(s => s.type === 'local' && !worktreeBySession.value[s.id])
       if (existing) {
@@ -353,6 +395,7 @@ export const useExecTargetStore = defineStore('execTarget', () => {
   /** 「工作树」：选中即以该路径为 cwd 开本地 PTY；同路径已有会话就直接切过去。 */
   async function chooseWorktree(w: GitWorktree): Promise<void> {
     error.value = ''
+    void clearSsh()
     try {
       const hit = Object.entries(worktreeBySession.value).find(
         ([id, wt]) => wt.path === w.path && ssh.sessions.some(s => s.id === id),
@@ -394,6 +437,7 @@ export const useExecTargetStore = defineStore('execTarget', () => {
    *  在终端里 cd 到某个目录后，那个会话就是「这个目录的会话」。 */
   async function chooseLocalDir(path: string): Promise<void> {
     error.value = ''
+    void clearSsh()
     try {
       const hit = ssh.sessions.find(s => s.type === 'local' && !worktreeBySession.value[s.id] && dirKey(ssh.sessionCwd(s.id)) === dirKey(path))
       if (hit) {
@@ -415,6 +459,7 @@ export const useExecTargetStore = defineStore('execTarget', () => {
    *  实时 cwd 就是主目录，拿它判会每次都新开一个终端。 */
   async function chooseLocalHome(): Promise<void> {
     error.value = ''
+    void clearSsh()
     try {
       const hit = ssh.sessions.find(s => s.type === 'local' && !worktreeBySession.value[s.id] && !s.cwd)
       if (hit) {
@@ -447,6 +492,7 @@ export const useExecTargetStore = defineStore('execTarget', () => {
    *  由 createLocalTerminal 抛出后落到 error，菜单里直接看得见，不静默失败。 */
   async function chooseWsl(): Promise<void> {
     error.value = ''
+    void clearSsh()
     try {
       await ssh.createLocalTerminal('WSL')
     } catch (e) {
@@ -492,15 +538,41 @@ export const useExecTargetStore = defineStore('execTarget', () => {
     }
   }
 
-  function chooseSsh(sessionId: string): void {
-    ssh.switchSession(sessionId)
+  /** 在 AI 输入框选中一个 SSH 连接配置：建一条 AI 专属会话（不切用户活动 tab）。
+   *  换连接 / 重选先拆旧专属会话，不堆两条；建连失败把原因写进 error，不留半截落点。 */
+  async function chooseSshConnection(connectionId: string): Promise<void> {
+    error.value = ''
+    // 重选当前这条连接是空操作：不拆了重连，免得打断正在这条会话上跑的 AI。
+    if (aiConnectionId.value === connectionId && ssh.sessions.some(s => s.id === aiSessionId.value)) return
+    if (aiSessionId.value) {
+      const old = aiSessionId.value
+      aiSessionId.value = ''
+      aiConnectionId.value = ''
+      await ssh.closeSession(old)
+    }
+    try {
+      const id = await ssh.connectAiRemote(connectionId, 80, 24)
+      aiSessionId.value = id
+      aiConnectionId.value = connectionId
+    } catch (e) {
+      error.value = messageOf(e)
+    }
+  }
+
+  /** 取消远程落点（chip × / 选回本地）：断开 AI 专属会话并清空。 */
+  async function clearSsh(): Promise<void> {
+    const id = aiSessionId.value
+    aiSessionId.value = ''
+    aiConnectionId.value = ''
+    if (id) await ssh.closeSession(id)
   }
 
   return {
     kind, activeWorktree, activeShell, activeDirLabel, activeDirPath, activeDirUnavailable, showBranch, activeRemoteLabel, groups, hasRepos, worktreeCount, loading, error,
     activeRepoPath, activeRepoLabel, activeGroup, activeBranch, selectedRepo,
     recentDirs, activeBoundDir, rememberDir, removeRecentDir,
-    loadWorktrees, registerRepo, selectRepo, chooseLocal, chooseWorktree, chooseWorktreeDefault, chooseWsl, chooseSsh,
+    aiSessionId, aiConnectionId, targetSessionId,
+    loadWorktrees, registerRepo, selectRepo, chooseLocal, chooseWorktree, chooseWorktreeDefault, chooseWsl, chooseSshConnection, clearSsh,
     chooseLocalDir, chooseLocalHome, pickLocalDir,
     createWorktree, pruneWorktrees,
   }

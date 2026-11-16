@@ -2,10 +2,9 @@
   <div class="panel">
     <header class="panel-header">
       <h3>对话</h3>
-      <p class="panel-desc">配置对话行为的默认偏好</p>
     </header>
     <div class="panel-body">
-      <SettingRow label="发送快捷键" desc="选择发送消息的快捷键">
+      <SettingRow label="发送快捷键">
         <select v-model="settings.chat.sendShortcut" class="setting-select">
           <option value="enter">Enter 发送</option>
           <option value="shiftEnter">Shift + Enter 发送</option>
@@ -29,11 +28,11 @@
         </select>
       </SettingRow>
 
-      <SettingRow label="自动滚动" desc="新消息自动滚动到底部">
+      <SettingRow label="自动滚动">
         <ToggleSwitch v-model="settings.chat.autoScroll" />
       </SettingRow>
 
-      <SettingRow label="消息字号" desc="对话气泡中的文字大小">
+      <SettingRow label="消息字号">
         <select v-model.number="settings.chat.messageFontSize" class="setting-select">
           <option :value="12">12px</option>
           <option :value="13">13px</option>
@@ -42,7 +41,7 @@
         </select>
       </SettingRow>
 
-      <SettingRow label="Markdown 渲染" desc="启用 Markdown 格式渲染">
+      <SettingRow label="Markdown 渲染">
         <ToggleSwitch v-model="settings.chat.markdown" />
       </SettingRow>
 

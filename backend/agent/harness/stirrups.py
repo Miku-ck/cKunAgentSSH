@@ -140,6 +140,9 @@ class Stirrups:
 
     llm_client: Any  # LLMClient 协议实现
     classifier: ErrorClassifier = field(default_factory=ErrorClassifier)
+    # 视觉多模态内容块（image_url，由 Harness.assemble 注入，
+    # per-run）。None/空 = 本 run 无图片，LLM 请求零变化。
+    images: Optional[list] = None
     # 上下文压缩回调（由 Bridle 注入）
     _compress_callback: Optional[Callable[[RunContext, bool], Awaitable[None]]] = None
     # 消息重建回调（由 Harness 注入）：压缩后按 ctx 重新组装消息列表。
@@ -147,6 +150,16 @@ class Stirrups:
     # messages 入参是压缩前快照 — 不重建则重试请求体不缩水，必然再次 400
     # P1 起 Bridle.assemble 为 async（生成式摘要需 await），注解同步改为 Awaitable
     _messages_rebuilder: Optional[Callable[[RunContext], Awaitable[list[dict[str, str]]]]] = None
+    # 备用模型切换回调（由 Harness 注入，per-run）：TRANSIENT 重试耗尽后调用；
+    # None=本 run 未配置备用，行为与引入前完全一致。
+    _fallback_switch: Optional[Callable[[RunContext], Awaitable[None]]] = None
+
+    def set_fallback_switch(
+        self,
+        cb: Optional[Callable[[RunContext], Awaitable[None]]],
+    ) -> None:
+        """Harness 注入备用模型切换回调（每 run 重置，防上一 run 闭包泄漏）"""
+        self._fallback_switch = cb
 
     def set_compress_callback(
         self,
@@ -162,18 +175,51 @@ class Stirrups:
         """Harness 注入消息重建回调（压缩后重取；Bridle.assemble 为 async）"""
         self._messages_rebuilder = cb
 
+    # 备用切换的 per-run 标记键（ctx.metadata）：True=本 run 已尝试过切换
+    _FALLBACK_ATTEMPTED_KEY = "model_fallback_attempted"
+
     async def call_llm(
         self,
         ctx: RunContext,
         messages: list[dict[str, str]],
         tools: list[dict[str, Any]],
     ) -> LLMOutput:
-        """
-        带分类重试的 LLM 调用
+        """带分类重试与备用回退的 LLM 调用（M9-3）
 
-        - TRANSIENT: 指数退避重试
-        - INVALID_ARGS (上下文超限): 触发压缩后重试
-        - FATAL: 直接抛出
+        - TRANSIENT: 指数退避重试；耗尽后若配置了备用模型则切换重试一轮（每 run 一次）
+        - INVALID_ARGS (上下文超限): 触发压缩后重试（切端点解决不了，不触发回退）
+        - FATAL: 直接抛出（认证/配置错误换端点无用，不触发回退）
+        """
+        try:
+            return await self._call_llm_with_retries(ctx, messages, tools)
+        except Exception as e:
+            cb = self._fallback_switch
+            if cb is None:
+                raise
+            if self.classifier.classify_llm_error(str(e)) != ErrorType.TRANSIENT:
+                raise
+            # 每 run 只切一次：备用也半死时反复横跳只会拖长失败时间
+            if ctx.metadata.get(self._FALLBACK_ATTEMPTED_KEY):
+                raise
+            ctx.metadata[self._FALLBACK_ATTEMPTED_KEY] = True
+            try:
+                await cb(ctx)
+            except Exception as switch_err:
+                # 备用不可用（配置不全/密钥解密失败）：如实留痕并抛**原始**错误，
+                # 绝不把「切备用失败」伪装成别的失败原因。裸 raise 在嵌套 except
+                # 里会重抛 switch_err 而不是 e —— 必须显式 raise e。
+                logger.warning("备用模型切换失败，放弃回退: %s", switch_err)
+                raise e
+            return await self._call_llm_with_retries(ctx, messages, tools)
+
+    async def _call_llm_with_retries(
+        self,
+        ctx: RunContext,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]],
+    ) -> LLMOutput:
+        """
+        带分类重试的 LLM 调用（单端点内）
 
         思考预算：从 ctx.config.max_reasoning_tokens 读取（由意图识别器在 run 启动时
         写入），Driver 可在每轮调用前动态更新该字段实现"首轮宽、后续严"的策略。
@@ -195,6 +241,9 @@ class Stirrups:
 
         for attempt in range(max_retries + 1):
             try:
+                # 有图才传 images：无图连 kwarg 都不出 —— 测试替身与备用客户端
+                # 的 call() 不必感知这个参数（协议向后兼容）
+                image_kw = {"images": self.images} if self.images else {}
                 return await self.llm_client.call(
                     messages=messages,
                     tools=tools,
@@ -204,6 +253,7 @@ class Stirrups:
                     max_tokens=ctx.config.max_tokens,
                     enable_thinking=ctx.config.enable_thinking,
                     reasoning_max_tokens=reasoning_budget,
+                    **image_kw,
                 )
             except Exception as e:
                 last_error = e

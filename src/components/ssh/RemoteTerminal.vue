@@ -108,6 +108,9 @@ const {
   onOpened: () => startTerminalContext(),
   // 远程侧初始尺寸由主进程同步，不需要在这里补发一次 sshResize
   resizeOnInitialFit: false,
+  // AI 专属会话只读：用户不能键入 / 粘贴 / 补全，AI 的命令仍经 sshWrite 直达通道。
+  // 惰性取值（同 completion）：sessionSelf 在下面定义，事件回调求值时 setup 早已跑完。
+  readOnly: () => !!sessionSelf.value?.ai,
   onBeforeDispose: () => {
     if (flushTimer) {
       clearTimeout(flushTimer)

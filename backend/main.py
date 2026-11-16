@@ -151,6 +151,16 @@ async def _restore_channels_quietly() -> None:
         raise
     except Exception as exc:
         logger.warning("恢复 cKunBot 机器人渠道失败: %s", exc)
+    # 群环境上下文落库行的重启恢复（独立于渠道连接成败：行带 channel_id，
+    # 渠道没连上也不影响灌回内存，等连接就绪后即可使用）。
+    try:
+        from bot import group_ambient
+
+        await asyncio.to_thread(group_ambient.restore_from_db)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("恢复群环境上下文失败: %s", exc)
 
 
 # ── 启动初始化步骤 ───────────────────────────────────────────────────────────

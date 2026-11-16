@@ -38,6 +38,9 @@ export interface TerminalSession {
   /** 主进程侧已没有这条会话（探测回 SESSION_NOT_FOUND 时置位）。与 reconnectGaveUp
    *  的区别是来源：那个由主进程推送，这个由本端实际执行失败反证。重连成功后清除。 */
   unavailable?: boolean
+  /** AI 专属会话：由 AI 输入框选中连接建立（connectAiRemote），与用户终端 tab 隔离。
+   *  终端页据此画「AI」徽标并禁输入；发送装配只认它，不借用用户终端。 */
+  ai?: boolean
 }
 
 interface CommandHistoryEntry {
@@ -320,6 +323,21 @@ export const useSSHStore = defineStore('ssh', () => {
 
   // ─── 远程连接 ─────────────────────────────────
   async function connectRemote(connectionId: string, cols: number, rows: number): Promise<string> {
+    return openRemoteSession(connectionId, cols, rows, { ai: false, activate: true })
+  }
+
+  /** AI 专属 SSH 会话：与用户终端隔离 —— 不切 activeSessionId、带 ai 标记。
+   *  只有用户在 AI 输入框选中连接才走这里（exec-target.chooseSshConnection）。 */
+  async function connectAiRemote(connectionId: string, cols: number, rows: number): Promise<string> {
+    return openRemoteSession(connectionId, cols, rows, { ai: true, activate: false })
+  }
+
+  /** 用户终端与 AI 专属会话共用的建连出口，差异只有 ai 标记与是否切前台。
+   *  connecting UI 标志统一由 useSshNavigation 管理，store 只负责数据状态。 */
+  async function openRemoteSession(
+    connectionId: string, cols: number, rows: number,
+    opts: { ai: boolean; activate: boolean },
+  ): Promise<string> {
     // s4 修复：会话数量上限保护
     if (sessions.value.length >= MAX_SESSIONS) {
       throw new Error(`终端会话数量已达上限（${MAX_SESSIONS}），请先关闭部分会话`)
@@ -330,8 +348,6 @@ export const useSSHStore = defineStore('ssh', () => {
     const api = window.electronAPI
     if (!api) throw new Error('Electron API not available')
 
-    // v2 改进：connecting UI 标志统一由 useSshNavigation 管理（避免 store 层和 UI 层
-    // 双重重置导致竞态）；store.connectRemote 只负责数据状态（sessions / activeSessionId）
     // 剥离 Vue 响应式 Proxy,避免 IPC structuredClone 失败
     const plain = JSON.parse(JSON.stringify(conn))
     const { id, name } = await api.sshConnect({
@@ -347,9 +363,10 @@ export const useSSHStore = defineStore('ssh', () => {
       shell: `${conn.username}@${conn.host}`,
       connectionId: conn.id,
       createdAt: Date.now(),
+      ...(opts.ai ? { ai: true } : {}),
     })
 
-    activeSessionId.value = id
+    if (opts.activate) activeSessionId.value = id
 
     // 主进程已 touchLastConnected,前端同步更新本地副本
     const idx = connections.value.findIndex(c => c.id === connectionId)
@@ -874,6 +891,7 @@ export const useSSHStore = defineStore('ssh', () => {
     loadConnections,
     createLocalTerminal,
     connectRemote,
+    connectAiRemote,
     redial,
     closeSession,
     removeSession,

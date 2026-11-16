@@ -61,6 +61,9 @@ export interface UseXtermInstanceOptions {
   onBeforeDispose?: () => void
   /** 初始 fit 之后补发一次 onResized（本地 pty 需要通告初始尺寸；远程 ssh 由主进程侧同步，不需要） */
   resizeOnInitialFit?: boolean
+  /** 只读终端（AI 专属会话）：禁用户键入 / 粘贴 / 补全，输出与搜索照常。
+   *  AI 的命令经 sshWrite 直达通道、不走 onData，所以只读不影响 AI 操作终端。 */
+  readOnly?: () => boolean
 }
 
 export interface XtermInstance {
@@ -112,6 +115,8 @@ export function useXtermInstance(opts: UseXtermInstanceOptions): XtermInstance {
       scrollback: 5000,
       allowProposedApi: true,
       rightClickSelectsWord: true,
+      // 只读终端禁键盘输入：xterm 原生 disableStdin 让 onData 不再为用户键入触发。
+      disableStdin: !!opts.readOnly?.(),
     }))
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
@@ -169,6 +174,10 @@ export function useXtermInstance(opts: UseXtermInstanceOptions): XtermInstance {
         searchOpen.value = true
         return
       }
+
+      // 只读终端（AI 专属）：补全是输入辅助，只读态没有输入 —— 不触发也不导航浮层。
+      // 放在搜索唤起之后：Ctrl+Shift+F 与 Esc 关搜索仍放行，用户照样能搜 AI 的输出。
+      if (opts.readOnly?.()) return
 
       // 浮层可见时：在 document 范围拦截（不限于终端容器内），焦点在外部也能导航
       if (c.visible()) {
@@ -263,6 +272,8 @@ export function useXtermInstance(opts: UseXtermInstanceOptions): XtermInstance {
     // 右键粘贴：粘贴时去除末尾换行符，避免自动执行
     contextMenuHandler = (e: Event) => {
       e.preventDefault()
+      // 只读终端不接受粘贴：右键粘贴绕过 onData 直写通道，disableStdin 挡不住它
+      if (opts.readOnly?.()) return
       suppressAutoCopyUntil = Date.now() + 200
       navigator.clipboard.readText().then(text => {
         if (text) {

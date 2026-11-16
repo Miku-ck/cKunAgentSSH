@@ -25,8 +25,9 @@ def _ctx(turn_index: int) -> TurnContext:
 
 
 def _patch(monkeypatch, current_title: str, updated: dict, llm_result: str = "nginx 日志查看"):
+    # **kwargs 兜底：_call_llm_with_timeout 新增 thinking 等策略参数时桩不必逐个跟改
     async def fake_llm(messages, model_cfg, model_id, temperature, max_tokens,
-                       chunk_timeout, total_timeout, task_name):
+                       chunk_timeout, total_timeout, task_name, **_kwargs):
         return llm_result
 
     monkeypatch.setattr(pp.db, "get_conversation",
@@ -65,7 +66,7 @@ def test_custom_title_never_overwritten(monkeypatch):
     llm_called: dict = {}
 
     async def fake_llm(messages, model_cfg, model_id, temperature, max_tokens,
-                       chunk_timeout, total_timeout, task_name):
+                       chunk_timeout, total_timeout, task_name, **_kwargs):
         llm_called["n"] = True
         return "不应使用的标题"
 

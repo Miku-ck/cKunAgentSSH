@@ -11,7 +11,9 @@
 """
 import asyncio
 import base64
+import logging
 import os
+import uuid
 from agent.electron_bridge import ElectronBridge
 from agent.truncation_limits import TRUNC_THRESHOLD, TRUNC_HEAD, TRUNC_TAIL
 from agent.remote_protocol import (
@@ -20,6 +22,8 @@ from agent.remote_protocol import (
     has_sentinel_fragment,
     is_sentinel_line,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def truncate_output(output: str, threshold: int = TRUNC_THRESHOLD) -> str:
@@ -120,16 +124,35 @@ async def exec_remote(
     if not bridge.is_available():
         return None
 
+    # 取消句柄：主进程按它登记 exec 通道，run 取消时经 ssh_kill 终止远端命令。
+    # 每次 exec 独立 uuid，kill 不会误伤同会话上的其他执行。
+    exec_id = uuid.uuid4().hex
     try:
         result = await bridge.exec_ssh_command(
             ssh_session_id=ssh_session_id,
             command=command,
             timeout=float(timeout),
+            exec_id=exec_id,
         )
     except asyncio.CancelledError:
-        # C-review M9：客户端断连 → run 被取消。本地 HTTP 等待中止，但远程
-        # 命令无法经 bridge 终止（缺 kill 通道），只能让取消继续传播；
-        # 已知残留：远程命令可能继续执行，待 bridge 协议补命令中止后修复
+        # C-review M9 → kill 通道落地：run 被取消时先尽力终止远端命令再传播。
+        # kill 本身失败（通道丢失/exec 已结束/远端不支持 signal）只留痕不吞取消
+        # —— 远端残留降级为「与旧行为相同的已知限制」，但常规路径（OpenSSH）已可终止。
+        # anyio 的取消是持续投递：except 块里裸 await 在第一个检查点会再次被打断、
+        # kill 永远发不出去。shield 只保护内层协程 —— 外层仍被取消（取消语义原样
+        # 传播），但内层 task 会在后台继续跑完，kill 真正送达。
+        async def _kill():
+            try:
+                await bridge.kill_exec(exec_id)
+            except Exception as kill_err:
+                logger.warning(
+                    "run 取消后终止远端命令失败（exec_id=%s，远端命令可能继续执行）: %s",
+                    exec_id, kill_err)
+
+        try:
+            await asyncio.shield(_kill())
+        except asyncio.CancelledError:
+            pass
         raise
     except Exception as e:
         return False, "", None, f"远程命令执行失败: {e}"

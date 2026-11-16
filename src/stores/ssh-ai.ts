@@ -14,6 +14,7 @@
 import { computed, ref, triggerRef, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useSSHStore } from './ssh'
+import { useExecTargetStore } from './exec-target'
 import { useAgentStore } from './agent'
 import { useAppStore } from './app'
 import { useSettingsStore } from './settings'
@@ -204,18 +205,47 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     selectedExpertId.value = id
   }
 
+  // ── 附到下一条消息的插件收紧 ──
+  /** 默认 []（用户 2026-11-16：不预选，与技能同语义 —— 勾了才随消息带上）；
+   *  null 保留为「继承全部已授权插件」的 API 兼容态（headless/定时任务走这条，
+   *  UI 不再产生 null）。常驻选择：发送后不清空，逐条消息可改。
+   *  授权本身仍在设置同意流 —— 这里只是逐 run 收紧，不是第二授权入口。 */
+  const selectedPluginIds = ref<string[] | null>([])
+
+  function setSelectedPluginIds(ids: string[] | null) {
+    selectedPluginIds.value = ids
+  }
+
   /** 已上传、待随下一条消息注入的本地附件。上传通路不在这片：
    *  uploadFiles 早已存在，/chat/upload 也是后端真读真返的那条。 */
   const pendingAttachments = ref<ChatAttachment[]>([])
 
+  /** 图片附件的本地缩略图（objectURL，按 file_id 键控）。上传/粘贴都经过
+   *  uploadFiles，File 对象就在手上 —— createObjectURL 生成预览比向后端
+   *  再取一遍便宜且无鉴权问题。revoke 收口在 setPendingAttachments 一处。 */
+  const attachmentPreviews = ref<Record<string, string>>({})
+
   function setPendingAttachments(list: ChatAttachment[]) {
+    // 被摘掉的附件缩略图必须同步 revoke：部分移除只 revoke 缺的那几个，
+    // 全清（发送成功 / 换会话）一次 revoke 干净。收口在这一个函数，
+    // removePendingAttachment / _clearStagedInput 走它就都免费获得。
+    const keep = new Set(list.map(f => f.file_id))
+    const orphans = Object.keys(attachmentPreviews.value).filter(id => !keep.has(id))
+    if (orphans.length) {
+      const next = { ...attachmentPreviews.value }
+      for (const id of orphans) {
+        URL.revokeObjectURL(next[id]!)
+        delete next[id]
+      }
+      attachmentPreviews.value = next
+    }
     pendingAttachments.value = list
   }
 
   /** 摘掉一个附件。与技能同一理由：移除的算法（按 file_id 过滤）只该有一份，
    *  首页 chip 的 × 与上传失败回滚各写一遍就会漂。 */
   function removePendingAttachment(fileId: string) {
-    pendingAttachments.value = pendingAttachments.value.filter(f => f.file_id !== fileId)
+    setPendingAttachments(pendingAttachments.value.filter(f => f.file_id !== fileId))
   }
 
   /** 上传中锁只有这一把。首页挂的是 pendingAttachments，上传若能并发，后完成的那个
@@ -269,7 +299,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
    *  A 会话上传的文件挂在 B 会话头上既落不进 B 的目录，也不会随 B 的删除被清理。 */
   function _clearStagedInput() {
     selectedSkillIds.value = []
-    pendingAttachments.value = []
+    setPendingAttachments([])
   }
 
   // ── 会话 CRUD ──
@@ -496,11 +526,14 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   }
   watch(() => appStore.backendStatus, ensureModelLoaded, { immediate: true })
 
-  // ── 3. SSH 上下文构建：从当前活动 SSH 会话获取信息 ──
+  // ── 3. SSH 上下文构建：从 AI 的执行落点会话获取信息 ──
   // 选中片段/最近命令等"现场上下文"按需采集（问 AI 入口），避免每次 buildContext 发 IPC
   function buildContext(includeSelection: string, recentCommands?: string[]): SshAiContext | undefined {
     const sshStore = useSSHStore()
-    const session = sshStore.activeSession
+    // 落点会话由 exec-target 裁定：SSH 读 AI 专属会话，本地/工作树读用户活动会话；
+    // 无落点（含用户终端页开着远程 tab 但 AI 没选连接）返回 undefined —— 不借用用户终端。
+    const targetId = useExecTargetStore().targetSessionId
+    const session = targetId ? sshStore.sessions.find(s => s.id === targetId) : undefined
     if (!session) return undefined
 
     const base = {
@@ -681,8 +714,8 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     return true
   }
 
-  async function sendMessage(content: string, options?: { skillIds?: string[]; attachments?: ChatAttachment[]; mode?: string; approval?: string }): Promise<boolean> {
-    return sendAgentMessage(content, options?.skillIds || [], options?.attachments || [], options?.mode, options?.approval)
+  async function sendMessage(content: string, options?: { skillIds?: string[]; attachments?: ChatAttachment[]; mode?: string; approval?: string; pluginIds?: string[] | null }): Promise<boolean> {
+    return sendAgentMessage(content, options?.skillIds || [], options?.attachments || [], options?.mode, options?.approval, options?.pluginIds ?? null)
   }
 
   /** 上传文件（对话附件）：逐个调用后端 /chat/upload，失败项 toast 提示并跳过 */
@@ -705,6 +738,13 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       try {
         const att = await api.uploadChatFile(backendConvId, file)
         results.push(att)
+        // 图片生成本地缩略图（objectURL）：revoke 统一收口在 setPendingAttachments
+        if (att.kind === 'image') {
+          attachmentPreviews.value = {
+            ...attachmentPreviews.value,
+            [att.file_id]: URL.createObjectURL(file),
+          }
+        }
       } catch (e: any) {
         const detail = e?.detail || e?.message || String(e)
         toast.error(`上传 ${file.name} 失败：${detail}`)
@@ -716,28 +756,44 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   /** Agent 模式：多步工具调用，支持远程命令执行 */
   // 发送锁，防止快速连点创建多个会话
   let _agentSendLock = false
-  async function sendAgentMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], mode?: string, approval?: string): Promise<boolean> {
+  async function sendAgentMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], mode?: string, approval?: string, pluginIds: string[] | null = null): Promise<boolean> {
     if (_agentSendLock) return false
     _agentSendLock = true
     try {
-      return await _sendAgentMessageInner(content, skillIds, attachments, mode, approval)
+      return await _sendAgentMessageInner(content, skillIds, attachments, mode, approval, pluginIds)
     } finally {
       _agentSendLock = false
     }
   }
 
-  async function _sendAgentMessageInner(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], agentMode?: string, approval?: string): Promise<boolean> {
+  async function _sendAgentMessageInner(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], agentMode?: string, approval?: string, pluginIds: string[] | null = null): Promise<boolean> {
     // 附带文件拼入任务文本：Agent 走 /agent/run，直接注入内容让 LLM 读取。
     // 预算必须卡在这里：后端 AgentRunRequest.task 有 max_length=50000（与输入框
     // maxlength 同值），而每个附件各自可达 5 万字符——原样拼接会让整条消息在第一个
     // token 之前撞 422，用户只看到一句校验错误。放不下的附件整体丢弃并点名：
     // 塞半截文件比不要更容易骗人（模型会把它当全文下结论）。
+    // 图片/视频附件不拼内容（content 恒为空，拼进去只是空壳）：走请求体
+    // images/videos 字段（图片由后端构造 image_url；视频由后端把存储路径注入
+    // 任务）；正文里只留标记行，历史回看时才知道当时带了什么。
     let effectiveContent = content
+    let imageRefs: { file_id: string; filename: string }[] = []
+    let videoRefs: { file_id: string; filename: string }[] = []
     if (attachments.length > 0) {
+      const imageAtts = attachments.filter(a => a.kind === 'image')
+      const videoAtts = attachments.filter(a => a.kind === 'video')
+      const textAtts = attachments.filter(a => a.kind !== 'image' && a.kind !== 'video')
+      imageRefs = imageAtts.map(a => ({ file_id: a.file_id, filename: a.filename }))
+      videoRefs = videoAtts.map(a => ({ file_id: a.file_id, filename: a.filename }))
       const parts = [content]
-      let budget = TASK_CHAR_LIMIT - content.length
+      // 标记行也占 task 预算：先扣掉，文本附件的预算才不会把整条消息顶过 50K
+      const markerLines = [
+        ...imageAtts.map(a => `[图片: ${a.filename}]`),
+        ...videoAtts.map(a => `[视频: ${a.filename}]`),
+      ].join('\n')
+      if (markerLines) parts.push(markerLines)
+      let budget = TASK_CHAR_LIMIT - content.length - markerLines.length
       const dropped: string[] = []
-      for (const att of attachments) {
+      for (const att of textAtts) {
         // 后端只注入前 50K 字符（truncated 标记）：不告诉模型「这是节选」，它会
         // 把开头当成整份文件下结论（"日志里没有 ERROR"其实是被截断了）
         const head = att.truncated ? `${att.filename}（文件过大，以下仅为开头节选）` : att.filename
@@ -840,9 +896,13 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       conversationId: conv.backendConvId!,
       modelId: persistence.selectedModelId.value,
       systemPrompt,
-      // 可见终端执行模式：无论本地/远程都把活动会话 id 传给后端，
-      // 后端据此把 shell_exec 交付到当前可见终端执行（而非 headless）
-      sshSessionId: ctx?.sessionId || useSSHStore().activeSessionId || undefined,
+      // 图片/视频附件：只传引用（本体已落盘）。空数组不发字段（后端 None = 纯文本）
+      ...(imageRefs.length ? { images: imageRefs } : {}),
+      ...(videoRefs.length ? { videos: videoRefs } : {}),
+      // 可见终端执行模式：把 AI 的执行落点会话 id 传给后端，后端据此把 shell_exec
+      // 交付到那条会话执行（而非 headless）。落点由 exec-target 裁定 —— SSH 是 AI 专属
+      // 会话，本地/工作树是用户活动本地会话；无落点不发字段，绝不借用用户的远程终端。
+      sshSessionId: useExecTargetStore().targetSessionId || undefined,
       environment: ctx?.environment || 'test',
       // E2：三态思考模式。'inherit' → 省略字段让后端演化配置接管；
       // 'on'/'off' → 用户显式表态，前端把开关关掉时后端 None 分支不再触发。
@@ -882,6 +942,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       visibleTerminal: true,
       // 用户显式选择的技能 ID（后端 SkillRein 会与自动匹配的合并去重）
       skillIds,
+      // 逐 run 插件收紧：null = 未表态不发字段（继承全部已授权插件）；
+      // 数组（可空）= 显式选择，空数组是「本次一个插件都不带」的合法表态
+      ...(pluginIds != null ? { selectedPluginIds: pluginIds } : {}),
       // 专家跟随本次发送：空串不发字段，后端保持与引入前完全一致的行为
       expertId: selectedExpertId.value || undefined,
       // 对话设置：自动技能匹配开关 + 上下文窗口条数
@@ -918,8 +981,12 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // ── 专家选择 ──
     selectedExpertId,
     setSelectedExpert,
+    // ── 插件逐 run 收紧 ──
+    selectedPluginIds,
+    setSelectedPluginIds,
     // ── 待发送附件 ──
     pendingAttachments,
+    attachmentPreviews,
     setPendingAttachments,
     removePendingAttachment,
     addRemoteAttachment,

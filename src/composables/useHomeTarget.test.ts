@@ -1,9 +1,9 @@
 /**
- * 首页标题里的目标主机（spec 2026-09-29-home-command-panel · 用户故事 2/3，接缝 S2）
+ * 首页底栏的目标读数（spec 2026-09-29-home-command-panel · 用户故事 2/3，接缝 S2）
  *
- * 这条派生是首页唯一的目标选择入口：AI 的 shell_exec 落在 ssh store 的
- * activeSessionId 上，所以「换目标」的正确含义就是改那一个字段 —— 既不去
- * 远程管理页配置，也不能顺手把首页切成终端（用户正在输入，跳走等于吞掉现场）。
+ * 这里只测展示派生：本地非默认 shell 的差量标记（targetChip / targetHint）与
+ * 批量下发门槛（remoteCount / canBulkDispatch）。AI 的远程落点选择已迁到
+ * exec-target（aiSessionId，与用户终端隔离），不在本 composable 里。
  * 会话字段用的是 TerminalSession.shell（远程会话建时即写入 `username@host`，
  * 是这条连接当时的真实身份；连接记录事后被改名/改主机都不该影响已跑的会话）。
  */
@@ -62,43 +62,6 @@ describe('useHomeTarget', () => {
     expect(t.targetLabel.value).toBe('web-03')
   })
 
-  it('候选项是已打开的会话，且只有当前目标被标为选中', () => {
-    const { ssh, t } = mount()
-    ssh.sessions.push(
-      { id: 's1', name: 'web-03', type: 'remote', shell: 'root@10.20.1.7', connectionId: 'c1' },
-      { id: 's2', name: 'pwsh', type: 'local', shell: 'PowerShell' },
-    )
-    ssh.activeSessionId = 's2'
-    expect(t.options.value.map(o => o.sessionId)).toEqual(['s1', 's2'])
-    expect(t.options.value.map(o => o.active)).toEqual([false, true])
-    expect(t.options.value[0].label).toBe('root@10.20.1.7')
-    // 副标题给连接名，用户认得的是名字不是 IP
-    expect(t.options.value[0].hint).toBe('web-03')
-    // 本地行没有目录：label 与 hint 都空，由调用方决定不列这行
-    expect(t.options.value[1].label).toBe('')
-    expect(t.options.value[1].hint).toBe('')
-  })
-
-  it('选目标只改活动会话，首页状态不在这里被触碰', () => {
-    const { ssh, t } = mount()
-    ssh.sessions.push(
-      { id: 's1', name: 'web-03', type: 'remote', shell: 'root@10.20.1.7', connectionId: 'c1' },
-      { id: 's2', name: 'pg', type: 'remote', shell: 'ops@10.20.2.11', connectionId: 'c2' },
-    )
-    ssh.activeSessionId = 's1'
-    t.pick('s2')
-    expect(ssh.activeSessionId).toBe('s2')
-    expect(t.targetLabel.value).toBe('ops@10.20.2.11')
-  })
-
-  it('选到已关闭的会话不改状态', () => {
-    const { ssh, t } = mount()
-    ssh.sessions.push({ id: 's1', name: 'web-03', type: 'remote', shell: 'root@10.20.1.7', connectionId: 'c1' })
-    ssh.activeSessionId = 's1'
-    t.pick('gone')
-    expect(ssh.activeSessionId).toBe('s1')
-  })
-
   it('目标标记只给 chip 上没有的差量：远程不重复印地址，本地只有非默认 shell 才亮', () => {
     const { ssh, t } = mount()
     ssh.sessions.push({ id: 's1', name: 'web-03', type: 'remote', shell: 'root@10.20.1.7', connectionId: 'c1' })
@@ -118,39 +81,6 @@ describe('useHomeTarget', () => {
     ssh.sessions.push({ id: 's4', name: 'Git Bash', type: 'local', shell: 'Git Bash' })
     ssh.activeSessionId = 's4'
     expect(t.targetChip.value).toBe('Git Bash')
-  })
-
-  it('本地会话在候选项里用目录名当标签，读不出目录就留空（不编「本地终端」）', () => {
-    const { ssh, t } = mount()
-    ssh.sessions.push(
-      { id: 's1', name: 'PowerShell', type: 'local', shell: 'PowerShell', cwd: 'D:\\work\\cKunAgentSSH' },
-      { id: 's2', name: 'PowerShell', type: 'local', shell: 'PowerShell' },
-    )
-    const [withCwd, noCwd] = t.options.value
-    expect(withCwd.label).toBe('cKunAgentSSH')
-    expect(withCwd.hint).toBe('D:\\work\\cKunAgentSSH')
-    expect(withCwd.path).toBe('D:\\work\\cKunAgentSSH')
-    // 没有目录的会话：label / path 都空，调用方据此不列这一行
-    expect(noCwd.label).toBe('')
-    expect(noCwd.path).toBe('')
-  })
-
-  it('目录读数优先实时 cwd：终端里 cd 过之后，那个会话就属于新目录', () => {
-    const { ssh, t } = mount()
-    ssh.sessions.push({ id: 's1', name: 'PowerShell', type: 'local', shell: 'PowerShell', cwd: 'D:\\work\\a' })
-    ssh.setTerminalCwd('s1', 'D:\\work\\b')
-    expect(t.options.value[0].label).toBe('b')
-    expect(t.options.value[0].path).toBe('D:\\work\\b')
-    expect(ssh.sessionCwd('s1')).toBe('D:\\work\\b')
-  })
-
-  it('没绑定目录的会话即使上报了主目录也不进候选：默认不在项目就不读文件夹', () => {
-    const { ssh, t } = mount()
-    ssh.sessions.push({ id: 's1', name: 'PowerShell', type: 'local', shell: 'PowerShell' })
-    ssh.setTerminalCwd('s1', 'C:\\Users\\ckun')
-    // 终端跑在主目录，不代表用户选了「ckun 这个项目」
-    expect(t.options.value[0].label).toBe('')
-    expect(t.options.value[0].path).toBe('')
   })
 
   it('远程地址拆不出来时宁可不显示，不把会话名冒充 IP', () => {

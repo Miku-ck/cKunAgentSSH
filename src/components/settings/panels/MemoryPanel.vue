@@ -1,8 +1,7 @@
 <template>
   <div class="panel">
     <header class="panel-header">
-      <h3>记忆</h3>
-      <p class="panel-desc">Agent 长期记忆的注入预算与容量上限 —— 影响每次运行写进 system prompt 的记忆条目与常驻画像块</p>
+      <h3>记忆 <InfoTip text="Agent 长期记忆的注入预算与容量上限：影响每次运行写进 system prompt 的记忆条目与常驻画像块。修改即时同步到后端，只发改动过的项，失败自动回滚到上一次成功值。" /></h3>
     </header>
 
     <div class="panel-body">
@@ -36,9 +35,6 @@
         <span class="stats-label">当前记忆状态</span>
         <span class="stats-value">{{ statsText }}</span>
       </div>
-      <p class="foot-hint">
-        修改即时同步到后端，且只发你改动过的那几项；同步失败时自动回滚到上一次成功值。
-      </p>
       <!-- 读不到后端时说实话：面板上这套是本地值，可能与服务端不一致。
            数据已经安全了（整包覆盖那条路径没了），但"看起来就等于库里"是假的。 -->
       <p v-if="!settingsStore.memoryLoaded" class="foot-hint unread">
@@ -72,6 +68,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
+import InfoTip from '@/components/common/InfoTip.vue'
 import SettingRow from '@/components/settings/fields/SettingRow.vue'
 import SettingSlider from '@/components/settings/fields/SettingSlider.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'

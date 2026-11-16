@@ -133,6 +133,7 @@
         :pending-id="pendingConnId"
         @close="showConnPicker = false"
         @pick="handleConnect"
+        @remote-mgr="showConnPicker = false; emit('remote-mgr')"
       />
     </Teleport>
 
@@ -187,6 +188,7 @@ onMounted(() => { void Promise.all([loadDockerModalCss(), loadK8sPageCss()]) })
 
 // 页面隐藏时收起弹窗：与 Docker 页同一约定（独立页是 v-show 常驻，弹窗不然会跨页留着）
 const props = defineProps<{ active?: boolean }>()
+const emit = defineEmits<{ 'remote-mgr': [] }>()
 
 const host = provideK8sHost()
 const toast = useToastStore()

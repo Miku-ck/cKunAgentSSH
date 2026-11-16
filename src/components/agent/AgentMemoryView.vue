@@ -52,7 +52,7 @@
           <input v-model.number="newMem.importance" type="range" min="0" max="1" step="0.05" />
           <span class="mem-importance">{{ newMem.importance.toFixed(2) }}</span>
         </label>
-        <span class="mem-new-hint">直写生效并置顶，不经对账；不带向量，关键词检索照常命中</span>
+        <span class="mem-new-hint"><InfoTip text="直写生效并置顶，不经对账；不带向量，关键词检索照常命中" /></span>
         <button class="btn btn-sm" :disabled="!newMem.content.trim() || addingBusy"
                 @click="onAdd">{{ addingBusy ? '写入中…' : '写入' }}</button>
       </div>
@@ -64,7 +64,7 @@
 
       <template v-else-if="tab === 'memories'">
         <p v-if="!memories.length" class="mem-hint">
-          没有匹配的记忆。Agent 完成任务后会自动沉淀关键事实，经后台对账后可在此查看、编辑或作废。
+          没有匹配的记忆 <InfoTip text="Agent 完成任务后会自动沉淀关键事实，经后台对账后可在此查看、编辑或作废。" />
         </p>
         <ul v-else class="mem-list">
           <li v-for="m in memories" :key="m.id" class="mem-item">
@@ -104,12 +104,12 @@
       <!-- ── 对账队列 ── -->
       <template v-else-if="tab === 'jobs'">
         <div class="mem-jobs-bar">
-          <span class="mem-new-hint">对账 / 池修剪 / 衰减按定时跑；这里可立刻催一轮</span>
+          <span class="mem-new-hint"><InfoTip text="对账 / 池修剪 / 衰减按定时跑；这里可立刻催一轮" /></span>
           <button class="btn btn-sm" :disabled="tickBusy" @click="onTickNow">
             {{ tickBusy ? '整理中…' : '立即整理' }}
           </button>
         </div>
-        <p v-if="!jobs.length" class="mem-hint">队列为空 —— 后台对账已消化所有待写入记忆。</p>
+        <p v-if="!jobs.length" class="mem-hint">队列为空 <InfoTip text="后台对账已消化所有待写入记忆。" /></p>
         <ul v-else class="mem-list">
           <li v-for="j in jobs" :key="j.id" class="mem-item job">
             <div class="mem-line">
@@ -129,7 +129,7 @@
 
       <!-- ── 画像块 ── -->
       <template v-else>
-        <p v-if="!blocks.length" class="mem-hint">还没有画像块。Agent 探测目标机后会自动写入主机画像。</p>
+        <p v-if="!blocks.length" class="mem-hint">还没有画像块 <InfoTip text="Agent 探测目标机后会自动写入主机画像。" /></p>
         <ul v-else class="mem-list">
           <li v-for="b in blocks" :key="b.key" class="mem-item">
             <div class="mem-line">
@@ -225,6 +225,7 @@ import {
 } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
 import { parseBackendTs } from '@/utils/format'
+import InfoTip from '@/components/common/InfoTip.vue'
 
 defineEmits<{ close: [] }>()
 
@@ -703,7 +704,7 @@ onMounted(() => { loadStats(); loadMemories() })
 .mem-new-row input:not(.mem-new-scope) { flex: 1; min-width: 120px; }
 .mem-new-imp { display: flex; align-items: center; gap: 5px; font-size: 0.8462rem; color: var(--text-secondary); }
 .mem-new-imp input[type='range'] { width: 96px; accent-color: var(--accent-primary); }
-.mem-new-hint { flex: 1; font-size: 0.8077rem; color: var(--text-tertiary); }
+.mem-new-hint { flex: 1; display: flex; align-items: center; justify-content: flex-end; font-size: 0.8077rem; color: var(--text-tertiary); }
 .mem-new .mem-edit { margin-bottom: 0; }
 .mem-diff {
   max-height: 140px; overflow-y: auto; margin-bottom: var(--spacing-4); padding: var(--spacing-4) var(--spacing-6);

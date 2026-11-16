@@ -18,6 +18,7 @@ __all__ = [
     "delete_model_config",
     "set_default_model",
     "get_default_model",
+    "resolve_fallback_model_cfg",
 ]
 
 
@@ -27,9 +28,12 @@ __all__ = [
 _MC_COLS = (
     "id, name, model_id, provider, base_url, api_key, "
     "supports_thinking, supports_image, supports_tool_calling, "
-    "is_default, is_default_ssh, "
+    "is_default, is_default_ssh, fallback_model_id, "
     "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at"
 )
+
+# 备用链写侧校验的深度上限（运行时只取一跳，这里防的是保存时的环与失控链）
+_FALLBACK_CHAIN_MAX_DEPTH = 8
 
 
 def _resolve_model_pk(ref: str) -> Optional[str]:
@@ -56,6 +60,53 @@ def _resolve_model_pk(ref: str) -> Optional[str]:
         return row["id"] if row else None
     finally:
         conn.close()
+
+
+def _assert_fallback_chain_ok(pk: str, fallback_pk: str) -> None:
+    """备用链写侧校验：自指与环（A→B→A）直接拒绝，链深上限 8。
+
+    存量链也可能已经环了（历史脏数据）——从目标出发沿链走，撞到 `pk` 或
+    任何已见节点即环。链上悬空引用（指向已删除行）不构成环，放行。
+    """
+    if not fallback_pk:
+        return
+    if fallback_pk == pk:
+        raise ValueError("备用模型不能指向自身")
+    seen = {pk}
+    cur: Optional[str] = fallback_pk
+    conn = _get_conn()
+    try:
+        for _ in range(_FALLBACK_CHAIN_MAX_DEPTH):
+            if cur is None or cur in seen:
+                raise ValueError("备用模型链存在环（如 A→B→A），已拒绝保存")
+            seen.add(cur)
+            row = conn.execute(
+                "SELECT fallback_model_id FROM models_config WHERE id = ?", (cur,)
+            ).fetchone()
+            nxt = (row["fallback_model_id"] or "").strip() if row else ""
+            if not nxt:
+                return
+            cur = _resolve_model_pk(nxt)
+            if cur is None:
+                return
+    finally:
+        conn.close()
+    raise ValueError(f"备用模型链超过 {_FALLBACK_CHAIN_MAX_DEPTH} 层，已拒绝保存")
+
+
+def _normalize_fallback_ref(self_pk: str, ref: str) -> str:
+    """把用户传入的备用引用（行主键或模型名）归一为行主键；空串=清除。
+
+    引用不存在抛 ValueError（fail-fast 拼写错误），自指/环抛 ValueError。
+    """
+    ref = (ref or "").strip()
+    if not ref:
+        return ""
+    fb_pk = _resolve_model_pk(ref)
+    if fb_pk is None:
+        raise ValueError(f"备用模型不存在: {ref}")
+    _assert_fallback_chain_ok(self_pk, fb_pk)
+    return fb_pk
 
 
 def list_models_config() -> list[dict]:
@@ -120,7 +171,9 @@ def create_model_config(
     provider: str = "custom",
     supports_thinking: bool = False,
     supports_image: bool = False,
-    supports_tool_calling: bool = False,
+    # 能力门上线后该列有真实语义（False=预判去 tools）；UI 写侧勾选已撤，
+    # 默认必须与存量基线迁移同口径取 True，显式传 False 仍生效。
+    supports_tool_calling: bool = True,
     temperature: float = 0.7,
     # max_tokens 是「上下文窗口」列（与 models_config 建表 DEFAULT 16384 一致），
     # 不是输出预算 —— 输出预算由 max_output_tokens 管。窗口若默认 4096，
@@ -130,6 +183,7 @@ def create_model_config(
     top_p: float = 0.9,
     is_default_ssh: bool = False,
     reasoning_tokens: int = 8192,
+    fallback_model_id: str = "",
 ) -> dict:
     """创建模型配置，返回完整记录"""
     # 去除首尾空格：粘贴时可能带入换行/空白，导致上游 API 校验失败（401）
@@ -138,6 +192,8 @@ def create_model_config(
     api_key = protect_secret((api_key or "").strip())
     model_id = (model_id or "").strip()
     mid = _new_id()
+    # 备用引用归一为行主键并校验（不存在/环 fail-fast）；新行不可能被存量链引用
+    fallback_pk = _normalize_fallback_ref(mid, fallback_model_id)
     now = _now()
     conn = _get_conn()
     try:
@@ -147,15 +203,16 @@ def create_model_config(
         conn.execute(
             "INSERT INTO models_config "
             "(id, name, model_id, provider, base_url, api_key, supports_thinking, supports_image, supports_tool_calling, "
-            "is_default, is_default_ssh, "
+            "is_default, is_default_ssh, fallback_model_id, "
             "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 mid, name, model_id, provider, base_url, api_key,
                 1 if supports_thinking else 0,
                 1 if supports_image else 0,
                 1 if supports_tool_calling else 0,
                 1 if is_default_ssh else 0,
+                fallback_pk,
                 temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, next_order, now, now,
             ),
         )
@@ -181,8 +238,11 @@ def update_model_config(config_id: str, **kwargs) -> Optional[dict]:
         "name", "model_id", "provider", "base_url", "api_key",
         "supports_thinking", "supports_image", "supports_tool_calling",
         "temperature", "max_tokens", "max_output_tokens", "reasoning_tokens", "top_p", "sort_order",
-        "is_default", "is_default_ssh",
+        "is_default", "is_default_ssh", "fallback_model_id",
     }
+    # 备用引用先归一校验（环/自指/不存在 fail-fast），再进通用 sets
+    if kwargs.get("fallback_model_id") is not None:
+        kwargs["fallback_model_id"] = _normalize_fallback_ref(pk, kwargs["fallback_model_id"])
     sets = []
     params = []
     for k, v in kwargs.items():
@@ -243,6 +303,10 @@ def delete_model_config(model_id: str) -> bool:
         ).fetchone()
         if row and (row["is_default"] or row["is_default_ssh"]):
             raise ValueError("Cannot delete a model that is set as default")
+        # 清掉其它行对被删模型的备用引用（悬空引用运行时被忽略，但留着会误导
+        # 排障；默认模型已禁删，普通模型删后引用必须显式置空）
+        conn.execute(
+            "UPDATE models_config SET fallback_model_id = '' WHERE fallback_model_id = ?", (pk,))
         cur = conn.execute("DELETE FROM models_config WHERE id = ?", (pk,))
         conn.commit()
         return cur.rowcount > 0
@@ -314,3 +378,24 @@ def get_default_model(mode: Optional[str] = None, mask_key: bool = True) -> Opti
         return result
     finally:
         conn.close()
+
+
+def resolve_fallback_model_cfg(model_cfg: dict) -> Optional[dict]:
+    """解析主模型配置的备用模型完整配置（mask_key=False，供 StreamLLMClient 直用）。
+
+    运行时只取一跳（A 的备用是 B；B 自己的备用在运行中不追）——每 run 只切换一次，
+    更深的链路写侧校验允许保存但运行时用不到。以下任一情况返回 None（不启用回退）：
+    主模型未配置备用 / 备用引用已悬空 / 自指 / 备用缺 base_url 或 api_key
+    （密钥信封解密失败按空串处理，见 unprotect_secret —— 切过去也是 401）。
+    """
+    ref = (model_cfg.get("fallback_model_id") or "").strip()
+    if not ref:
+        return None
+    fb = get_model_config(ref, mask_key=False)
+    if not fb:
+        return None
+    if fb.get("id") == model_cfg.get("id"):
+        return None  # 自指（写侧已挡，运行时兜底）
+    if not (fb.get("base_url") or "").strip() or not (fb.get("api_key") or ""):
+        return None  # 密钥不可用（含信封解密失败）—— 切过去只会 401
+    return fb

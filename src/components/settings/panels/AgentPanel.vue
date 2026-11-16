@@ -2,7 +2,6 @@
   <div class="panel">
     <header class="panel-header">
       <h3>Agent 治理</h3>
-      <p class="panel-desc">工具授权、审批白名单与自演化策略 —— 让"能真正执行运维"的 Agent 可见、可控、可回收</p>
     </header>
 
     <div class="panel-body">
@@ -11,14 +10,10 @@
         <button class="grp-head" @click="open.budget = !open.budget">
           <span class="grp-caret" :class="{ open: open.budget }">▸</span>
           <span class="grp-title">运行预算熔断</span>
+          <InfoTip :focusable="false" text="每次 Agent 运行的成本上限（美元）与 token 上限。超出后 run 以 budget_exceeded 终止，已完成的工具效果保留。0 = 使用后端默认预算。这两项落在对话与终端的运行上；后台定时任务另有内置上限，不受这里约束。修改即时保存到本地设置，下一次运行生效；数字框里的 0 = 不覆盖后端默认，要真正取消熔断请勾「关闭预算熔断」（它才发显式的 0）。" />
           <span class="grp-badge">{{ budgetSummary }}</span>
         </button>
         <div v-show="open.budget" class="grp-body">
-          <p class="hint">
-            每次 Agent 运行的成本上限（美元）与 token 上限。超出后 run 以
-            <code>budget_exceeded</code> 终止，已完成的工具效果保留。0 = 使用后端默认预算。
-            这两项落在对话与终端的运行上；后台定时任务另有内置上限，不受这里约束。
-          </p>
           <div class="budget-row">
             <label class="budget-field">
               <span class="budget-label">成本上限（USD）</span>
@@ -50,19 +45,9 @@
             </label>
           </div>
           <div class="runtime-toggle-row">
-            <div class="runtime-toggle-info">
-              <span class="runtime-label">关闭预算熔断</span>
-              <span class="runtime-desc">
-                后端把显式 <code>0</code> 解释为「不设上限」。长批量任务被默认的 $2 /
-                3M token 掐断时用它；代价是这次跑飞了没有硬止损。
-              </span>
-            </div>
+            <span class="runtime-label">关闭预算熔断 <InfoTip text="后端把显式 0 解释为「不设上限」。长批量任务被默认的 $2 / 3M token 掐断时用它；代价是这次跑飞了没有硬止损。" /></span>
             <ToggleSwitch v-model="agentCfg.breakerDisabled" />
           </div>
-          <p class="hint muted">
-            修改即时保存到本地设置，下一次运行生效。数字框里的 0 = 不覆盖后端默认；
-            要真正取消熔断请勾上面那一项（它才发显式的 0）。
-          </p>
         </div>
       </section>
 
@@ -71,37 +56,20 @@
         <button class="grp-head" @click="open.runtime = !open.runtime">
           <span class="grp-caret" :class="{ open: open.runtime }">▸</span>
           <span class="grp-title">运行控制</span>
+          <InfoTip :focusable="false" text="迭代上限、动态步数预算与意图引导共同决定单次 Agent run 的步数弹性。动态预算接管后 max_iterations 作为演化异常时的兜底；意图引导关闭则跳过规划阶段与思考预算限制（旧行为）。" />
           <span class="grp-badge">{{ runtimeSummary }}</span>
         </button>
         <div v-show="open.runtime" class="grp-body">
-          <p class="hint">
-            迭代上限、动态步数预算与意图引导共同决定单次 Agent run 的"步数弹性"。
-            三者互不冲突：动态预算接管后 <code>max_iterations</code> 作为演化异常时的兜底；
-            意图引导关闭则跳过规划阶段与思考预算限制（旧行为）。
-          </p>
           <div class="runtime-row">
-            <label class="runtime-field">
-              <span class="runtime-label">最大迭代步数</span>
-              <SettingSlider v-model="agentCfg.maxIterations" class="slider-inline" :min="1" :max="500" unit="" />
-            </label>
-            <p class="hint muted runtime-desc">
-              后端 <code>max_iterations</code> 允许 1-500。动态预算开启时优先使用演化习得值，越界才退回此上限。
-              这一项与上面的预算都只约束对话/终端里的运行：后台定时任务是 <code>schedule_engine</code>
-              固定的 8 步加内置上限，不读设置页这几个值。
-            </p>
+            <span class="runtime-label">最大迭代步数 <InfoTip text="后端 max_iterations 允许 1-500。动态预算开启时优先使用演化习得值，越界才退回此上限。这一项与预算都只约束对话/终端里的运行：后台定时任务是 schedule_engine 固定的 8 步加内置上限，不读设置页这几个值。" /></span>
+            <SettingSlider v-model="agentCfg.maxIterations" class="slider-inline" :min="1" :max="500" unit="" />
           </div>
           <div class="runtime-toggle-row">
-            <div class="runtime-toggle-info">
-              <span class="runtime-label">动态步数预算</span>
-              <span class="runtime-desc">允许演化模块按 <code>max_iterations</code>/温度/输出长度自学习覆盖</span>
-            </div>
+            <span class="runtime-label">动态步数预算 <InfoTip text="允许演化模块按 max_iterations / 温度 / 输出长度自学习覆盖。" /></span>
             <ToggleSwitch v-model="agentCfg.dynamicBudget" />
           </div>
           <div class="runtime-toggle-row">
-            <div class="runtime-toggle-info">
-              <span class="runtime-label">意图识别 + 思考引导</span>
-              <span class="runtime-desc">关闭后 run 跳过规划阶段、无思考预算限制、无引导语注入（旧行为）</span>
-            </div>
+            <span class="runtime-label">意图识别 + 思考引导 <InfoTip text="关闭后 run 跳过规划阶段、无思考预算限制、无引导语注入（旧行为）。" /></span>
             <ToggleSwitch v-model="agentCfg.enableIntentionGuide" />
           </div>
         </div>
@@ -112,26 +80,17 @@
         <button class="grp-head" @click="open.ops = !open.ops">
           <span class="grp-caret" :class="{ open: open.ops }">▸</span>
           <span class="grp-title">运维策略</span>
+          <InfoTip :focusable="false" text="授权保留时长落在后端 ~/.ckunagentic/allowlist.txt 的判定上，改完即刻生效（无需重启）；自动审批开关与审批兜底等待同样即时落到后端裁决链路。默认环境等其余项是本机渲染端策略。" />
           <span class="grp-badge">{{ opsSummary }}</span>
         </button>
         <div v-show="open.ops" class="grp-body">
-          <p class="hint">
-            授权保留时长落在后端 <code>~/.ckunagentic/allowlist.txt</code> 的判定上，改完即刻生效（无需重启）；
-            自动审批开关与审批兜底等待同样即时落到后端裁决链路。下面的默认环境等其余项是本机渲染端策略。
-          </p>
           <p v-if="!policyLoaded" class="hint err">
             未能读取服务端的授权策略：下面三项显示的是本地默认值，不代表库里是什么。
             <button class="link-btn" @click="loadPermissionPolicy({ notify: true })">重试</button>
           </p>
 
           <div class="ops-toggle-row">
-            <div class="ops-info">
-              <span class="runtime-label">授权保留时长</span>
-              <span class="runtime-desc">
-                「始终允许」与手动登记的永久授权多久后自动失效。默认「永久」即引入该设置前的行为；
-                缩短时长会立刻撤销已到期条目，prod 预登记命令因此可能当场回到「未预授权」状态。
-              </span>
-            </div>
+            <span class="runtime-label">授权保留时长 <InfoTip text="「始终允许」与手动登记的永久授权多久后自动失效。默认「永久」即引入该设置前的行为；缩短时长会立刻撤销已到期条目，prod 预登记命令因此可能当场回到「未预授权」状态。" /></span>
             <select
               v-model.number="ttlDraft"
               class="setting-select"
@@ -146,15 +105,7 @@
           </div>
 
           <div class="ops-toggle-row">
-            <div class="ops-info">
-              <span class="runtime-label">自动审批</span>
-              <span class="runtime-desc">
-                「自动审批」档下弹卡前先让模型代审一道；关闭后模型不再代审，
-                所有需授权命令逐条弹卡问人（手动审批语义）。环境变量总闸
-                <code>CKUN_AGENT_DISABLE_AUTO_APPROVE=1</code> 压过本开关。
-                hardline 阻断、prod 预授权、用户显式拒绝不受本开关影响。
-              </span>
-            </div>
+            <span class="runtime-label">自动审批 <InfoTip text="「自动审批」档下弹卡前先让模型代审一道；关闭后模型不再代审，所有需授权命令逐条弹卡问人（手动审批语义）。环境变量总闸 CKUN_AGENT_DISABLE_AUTO_APPROVE=1 压过本开关。hardline 阻断、prod 预授权、用户显式拒绝不受本开关影响。" /></span>
             <ToggleSwitch
               :model-value="autoApprove"
               :disabled="policySaving"
@@ -163,13 +114,7 @@
           </div>
 
           <div class="ops-toggle-row">
-            <div class="ops-info">
-              <span class="runtime-label">审批兜底等待</span>
-              <span class="runtime-desc">
-                审批卡无人响应多久后标记「已超时」（待办保留、不按拒绝处理，
-                重新确认仍可放行）。选「永久等待」则卡片永不标记超时。
-              </span>
-            </div>
+            <span class="runtime-label">审批兜底等待 <InfoTip text="审批卡无人响应多久后标记「已超时」（待办保留、不按拒绝处理，重新确认仍可放行）。选「永久等待」则卡片永不标记超时。" /></span>
             <select
               v-model.number="fallbackDraft"
               class="setting-select"
@@ -184,12 +129,7 @@
           </div>
 
           <div class="ops-toggle-row">
-            <div class="ops-info">
-              <span class="runtime-label">新增连接默认环境</span>
-              <span class="runtime-desc">
-                只决定「添加连接」表单的初值，仍可逐条改；编辑已有连接时保留它原本的标记，不会被这里重写
-              </span>
-            </div>
+            <span class="runtime-label">新增连接默认环境 <InfoTip text="只决定「添加连接」表单的初值，仍可逐条改；编辑已有连接时保留它原本的标记，不会被这里重写。" /></span>
             <select v-model="agentCfg.defaultEnvironment" class="setting-select">
               <option value="test">测试 (test)</option>
               <option value="prod">生产 (prod)</option>
@@ -197,13 +137,7 @@
           </div>
 
           <div class="ops-toggle-row">
-            <div class="ops-info">
-              <span class="runtime-label">生产环境额外确认</span>
-              <span class="runtime-desc">
-                关闭后不再为 prod 目标多问一句：审批卡片的生产警示条、批量下发中「仅因目标是 prod」的确认框都会去掉。
-                dangerous 逐条审批、prod 危险命令必须预登记 allowlist、hardline 无条件阻断 —— 三条都不受此开关影响
-              </span>
-            </div>
+            <span class="runtime-label">生产环境额外确认 <InfoTip text="关闭后不再为 prod 目标多问一句：审批卡片的生产警示条、批量下发中「仅因目标是 prod」的确认框都会去掉。dangerous 逐条审批、prod 危险命令必须预登记 allowlist、hardline 无条件阻断——三条都不受此开关影响。" /></span>
             <ToggleSwitch v-model="agentCfg.prodConfirm" />
           </div>
         </div>
@@ -214,6 +148,7 @@
         <button class="grp-head" @click="open.tools = !open.tools">
           <span class="grp-caret" :class="{ open: open.tools }">▸</span>
           <span class="grp-title">工具开关</span>
+          <InfoTip :focusable="false" text="关闭后该工具不再暴露给模型执行。危险档（dangerous）命令级授权仍需逐条审批。" />
           <span class="grp-badge">{{ enabledToolCount }}/{{ tools.length }} 启用</span>
         </button>
         <div v-show="open.tools" class="grp-body">
@@ -223,7 +158,6 @@
             <button class="link-btn" @click="loadTools({ notify: true })">重试</button>
           </p>
           <template v-else>
-            <p class="hint">关闭后该工具不再暴露给模型执行。危险档（dangerous）命令级授权仍需逐条审批。</p>
             <div v-for="grp in toolGroups" :key="grp.risk" class="risk-group">
               <div class="risk-label" :class="grp.risk">{{ riskText[grp.risk] }}（{{ grp.list.length }}）</div>
               <div v-for="t in grp.list" :key="t.name" class="tool-row">
@@ -251,13 +185,13 @@
         <button class="grp-head" @click="open.perm = !open.perm">
           <span class="grp-caret" :class="{ open: open.perm }">▸</span>
           <span class="grp-title">审批授权</span>
+          <InfoTip :focusable="false" :text="permHint" />
           <span class="grp-badge">{{ permSummary }}</span>
         </button>
         <div v-show="open.perm" class="grp-body">
-          <p class="hint">
-            审批弹窗点"始终允许"后写入此白名单（持久化，进程重启仍生效{{ allowlistTtl ? `，但按「运维策略 → 授权保留时长」${ttlText(allowlistTtl)}后自动失效` : '' }}）。撤销立即生效。
+          <div class="grp-tools">
             <button class="link-btn" @click="loadPermissions({ notify: true })">刷新</button>
-          </p>
+          </div>
           <div class="allow-row">
             <input v-model.trim="allowTool" class="text-input" placeholder="工具名（如 shell_exec）" list="perm-tool-names" />
             <datalist id="perm-tool-names">
@@ -271,8 +205,8 @@
             <button class="btn btn-primary" :disabled="!allowTool || allowing" @click="onAllow">
               {{ allowing ? '登记中…' : '手动授权' }}
             </button>
+            <InfoTip text="命令工具建议填绑定命令：授权键是命令哈希绑定（改命令即失效）；hardline 底线命令不受白名单放行。填了限定主机的授权只对那台机器生效——在测试机上点的「始终允许」不会带到生产机。" />
           </div>
-          <p class="hint muted">命令工具建议填绑定命令：授权键是命令哈希绑定（改命令即失效）；hardline 底线命令不受白名单放行。填了<b>限定主机</b>的授权只对那台机器生效 —— 在测试机上点的「始终允许」不会带到生产机。</p>
           <p v-if="permError" class="hint err">
             {{ permError }}：下面这份清单不代表库里有什么。
             <button class="link-btn" @click="loadPermissions({ notify: true })">重试</button>
@@ -298,15 +232,12 @@
         <button class="grp-head" @click="open.webtools = !open.webtools">
           <span class="grp-caret" :class="{ open: open.webtools }">▸</span>
           <span class="grp-title">Web 搜索密钥</span>
+          <InfoTip :focusable="false" text="web_search 工具优先走 Tavily（结构化摘要 + 答案），未配置密钥时自动降级 360/DuckDuckGo 免费搜索。环境变量 TAVILY_API_KEY 优先于此处的本地存储。" />
           <span class="grp-badge" :class="{ live: webTools.tavily_api_key_set }">
             {{ tavilyBadge }}
           </span>
         </button>
         <div v-show="open.webtools" class="grp-body">
-          <p class="hint">
-            web_search 工具优先走 Tavily（结构化摘要 + 答案），未配置密钥时自动降级
-            360/DuckDuckGo 免费搜索。环境变量 <code>TAVILY_API_KEY</code> 优先于此处的本地存储。
-          </p>
           <p v-if="webToolsError" class="hint err">
             {{ webToolsError }}：上面那枚「未配置」不代表服务端的状态。
             <button class="link-btn" @click="loadWebTools({ notify: true })">重试</button>
@@ -330,22 +261,21 @@
         <button class="grp-head" @click="open.strat = !open.strat">
           <span class="grp-caret" :class="{ open: open.strat }">▸</span>
           <span class="grp-title">策略与自演化</span>
+          <InfoTip :focusable="false" text="Agent 每次运行后自动反思并演化配置策略，下一轮运行即刻读回生效（自动应用 + 全程可见）。这里可逐条停用或淘汰不再合理的演化，无需重启。" />
           <span class="grp-badge" :class="{ live: tickStatus?.running }">
             {{ tickStatus ? (tickStatus.running ? '意识循环运行中' : '意识循环已停')
               : (tickError ? '循环状态未读取' : '加载中…') }}
           </span>
         </button>
         <div v-show="open.strat" class="grp-body">
-          <p class="hint">
-            Agent 每次运行后自动反思并演化配置策略，<b>下一轮运行即刻读回生效</b>（当前立场：自动应用 + 全程可见）。
-            这里可逐条停用或淘汰不再合理的演化，无需重启。
+          <div class="grp-tools">
             <button class="link-btn" @click="loadStrategies({ notify: true })">刷新</button>
-          </p>
+          </div>
           <p v-if="stratError" class="hint err">
             {{ stratError }}
             <button class="link-btn" @click="loadStrategies({ notify: true })">重试</button>
           </p>
-          <p v-else-if="!strategies.length" class="hint muted">尚无演化策略（运行若干任务后自动产生）</p>
+          <p v-else-if="!strategies.length" class="hint muted">尚无演化策略</p>
           <div v-for="s in strategies" :key="s.id" class="strat-row" :class="{ off: !s.enabled }">
             <div class="tool-info">
               <span class="strat-name">{{ s.name }}</span>
@@ -364,18 +294,6 @@
             />
             <button class="btn btn-danger btn-sm" @click="onDeleteStrategy(s)">淘汰</button>
           </div>
-        </div>
-      </section>
-
-      <section class="grp static">
-        <div class="grp-head">
-          <span class="grp-title">运行历史与 Trace 回放</span>
-        </div>
-        <div class="grp-body">
-          <p class="hint">
-            每次 Agent 运行的完整轨迹（每步命令、耗时、成本、状态流转）已内联在对话气泡的执行卡中，
-            点卡片上的「轨迹」即可就地回放。全局任务列表页将随「运维轨迹」后续版本提供。
-          </p>
         </div>
       </section>
     </div>
@@ -406,6 +324,7 @@ import { useSSHStore } from '@/stores/ssh'
 import { parseBackendTs } from '@/utils/format'
 import { useSettingsStore, BUDGET_LIMITS } from '@/stores/settings'
 import { useConfirm } from '@/composables/useConfirm'
+import InfoTip from '@/components/common/InfoTip.vue'
 import ToggleSwitch from '@/components/settings/fields/ToggleSwitch.vue'
 import SettingSlider from '@/components/settings/fields/SettingSlider.vue'
 
@@ -728,6 +647,9 @@ const permSummary = computed(() => [
   policyLoaded.value ? ttlText(allowlistTtl.value) : '授权时长未读取',
 ].join(' · '))
 
+const permHint = computed(() =>
+  `审批弹窗点「始终允许」后写入此白名单（持久化，进程重启仍生效${allowlistTtl.value ? `，但按「运维策略 → 授权保留时长」${ttlText(allowlistTtl.value)}后自动失效` : ''}）。撤销立即生效。`)
+
 async function onRevoke(group: { id: string; host: string; tool: string; keys: string[] }) {
   const scope = group.host ? `主机 ${group.host}` : '所有主机'
   const ok = await confirm({
@@ -1020,21 +942,17 @@ onMounted(async () => {
 }
 .num-input { width: 120px; }
 .num-input.input-error { border-color: var(--status-error-text); }
-.runtime-row { margin: var(--spacing-8) 0; }
-.runtime-field { display: block; }
-.runtime-label { font-size: 0.9231rem; color: var(--text-primary); font-weight: 500; }
-.runtime-desc { display: block; font-size: 0.8846rem; color: var(--text-secondary); margin-top: var(--spacing-2); }
+.runtime-row { margin: var(--spacing-8) 0; display: flex; flex-direction: column; gap: var(--spacing-6); }
+.runtime-label { font-size: 0.9231rem; color: var(--text-primary); font-weight: 500; display: inline-flex; align-items: center; gap: var(--spacing-6); }
 .runtime-toggle-row {
   display: flex; align-items: center; justify-content: space-between;
   gap: var(--spacing-12); padding: var(--spacing-8) 0; border-top: 1px solid var(--border-subtle); margin-top: var(--spacing-8);
 }
-.runtime-toggle-info { display: flex; flex-direction: column; gap: var(--spacing-2); }
 .ops-toggle-row {
   display: flex; align-items: center; justify-content: space-between;
   gap: var(--spacing-12); padding: var(--spacing-8) 0; border-top: 1px solid var(--border-subtle);
 }
 .ops-toggle-row:first-of-type { border-top: none; }
-.ops-info { display: flex; flex-direction: column; gap: var(--spacing-2); min-width: 0; }
 .setting-select { flex-shrink: 0; }
 .setting-select:disabled { opacity: .5; cursor: default; }
 .slider-inline { margin-top: var(--spacing-6); }

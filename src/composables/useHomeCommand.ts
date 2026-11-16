@@ -63,6 +63,9 @@ export function useHomeCommand() {
       approval: sshAi.approvalMode,
       mode: sshAi.posture ?? undefined,
       skillIds: [...sshAi.selectedSkillIds],
+      // 逐 run 插件收紧：null = 未表态（不传字段），数组 = 显式选择。
+      // 常驻选择，发送后不清空（与专家同语义）
+      pluginIds: sshAi.selectedPluginIds != null ? [...sshAi.selectedPluginIds] : undefined,
       attachments: [...sshAi.pendingAttachments],
     })) return false
     // 技能与附件是"这一条消息带什么"，不是常驻档：发完即清，否则下一条静默复用

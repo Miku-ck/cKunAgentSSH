@@ -207,8 +207,7 @@
   flex-direction: column;
   gap: var(--spacing-10);
 }
-.arm-title { font-size: 1.0769rem; font-weight: 600; color: var(--text-primary); }
-.arm-sub { font-size: 0.9231rem; color: var(--text-secondary); line-height: 1.5; }
+.arm-title { display: flex; align-items: center; gap: var(--spacing-6); font-size: 1.0769rem; font-weight: 600; color: var(--text-primary); }
 .arm-input {
   height: 28px;
   padding: 0 var(--spacing-10);
@@ -334,12 +333,6 @@
 }
 .token-empty-icon { width: 28px; height: 28px; color: var(--text-tertiary); opacity: .7; }
 .token-empty-title { font-size: 0.9231rem; color: var(--text-secondary); }
-.token-empty-sub {
-  font-size: 0.8462rem;
-  color: var(--text-tertiary);
-  line-height: 1.6;
-  max-width: 360px;
-}
 
 /* 表单：浅底卡片化容器，与列表容器同圆角 */
 .token-form {
@@ -361,6 +354,9 @@
 
 .form-label {
   flex: 0 0 56px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 0.8462rem;
   color: var(--text-secondary);
 }
@@ -372,13 +368,6 @@
 
 .token-input-wrap { flex: 1; display: flex; align-items: center; gap: var(--spacing-6); min-width: 0; }
 .token-input-wrap .arm-input { flex: 1; min-width: 0; }
-
-.form-hint {
-  font-size: 0.7692rem;
-  color: var(--text-tertiary);
-  line-height: 1.5;
-  padding-left: calc(56px + var(--spacing-10));
-}
 
 /* 校验错误：danger 令牌色带（替代裸文本） */
 .token-error {

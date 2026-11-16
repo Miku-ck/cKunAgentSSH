@@ -112,8 +112,11 @@ def test_finally_fallback_is_gated_and_cancel_safe():
     src = _source()
     assert "if not assistant_persisted:" in src
     body = src[src.index("if not assistant_persisted:"):]
-    assert "await asyncio.shield(" in body[:400]
+    assert "await persist_interrupted_run(" in body[:400]
     assert "except BaseException:" in body[:900]
+    # v2 抗取消：兜底与全部异步清理收进独立 task _final_cleanup，finally 里
+    # 以 shield 等待 —— 正常路径等落库完成，断连路径外层被取消时内层继续跑完
+    assert "await asyncio.shield(_cleanup_task)" in src
 
 
 def test_persist_helper_has_no_post_process():

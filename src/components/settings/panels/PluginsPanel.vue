@@ -1,8 +1,7 @@
 <template>
   <div class="panel">
     <header class="panel-header">
-      <h3>插件管理</h3>
-      <p class="panel-desc">MCP server / 外部进程提供新工具。安装即停用；验证工具清单并确认后才启动；每次调用仍走审批与审计。</p>
+      <h3>插件管理 <InfoTip text="MCP server / 外部进程提供新工具。安装即停用；验证工具清单并确认后才启动；每次调用仍走审批与审计。配置变更会递增 revision、撤销同意并关闭进程。插件工具不提供「始终允许」，只支持仅本次 / 本会话；自动审批模型不会代判插件调用，计划模式禁用全部插件工具。" /></h3>
     </header>
 
     <div class="panel-body">
@@ -10,16 +9,16 @@
         <button class="grp-head" @click="openList = !openList">
           <span class="grp-caret" :class="{ open: openList }">▸</span>
           <span class="grp-title">已安装插件</span>
+          <InfoTip :focusable="false" text="插件在本机执行代码，与远程运维命令是两条独立边界：SSH 命令仍只落到目标主机，本机插件必须单独授权。" />
           <span class="grp-badge">{{ store.plugins.length }} 个</span>
         </button>
         <div v-show="openList" class="grp-body">
-          <p class="hint">
-            插件在本机执行代码，与远程运维命令是两条独立边界：SSH 命令仍只落到目标主机，本机插件必须单独授权。
+          <div class="grp-tools">
             <button class="link-btn" :disabled="store.loading" @click="load">{{ store.loading ? '加载中…' : '刷新' }}</button>
             <button class="link-btn" @click="openInstall">从本地安装</button>
-          </p>
+          </div>
           <p v-if="store.error" class="hint err">{{ store.error }}</p>
-          <p v-if="!store.plugins.length" class="hint muted">还没有插件，点「从本地安装」添加</p>
+          <p v-if="!store.plugins.length" class="hint muted">还没有插件</p>
 
           <template v-for="p in store.plugins" :key="p.id">
             <div class="row plugin-row" :class="{ off: !p.enabled }">
@@ -35,13 +34,14 @@
               <div class="acts">
                 <button class="btn sm" :disabled="busy" @click="onValidate(p)">验证并加载工具</button>
                 <button class="btn primary sm" :disabled="busy || !store.toolsOf(p).length || !!p.consented_at" @click="onConsent(p)">确认启用</button>
+                <InfoTip text="勾选表示你确认该工具不改变任何状态；服务端声明的 readOnlyHint 仅供参考。未勾选的工具一律 dangerous、不可撤销、不自动重试。" />
                 <button class="btn sm" @click="toggleTools(p.id)">{{ expanded.has(p.id) ? '收起' : '工具清单' }}</button>
                 <button class="btn sm" :disabled="!p.consented_at" @click="onToggle(p)">{{ p.enabled ? '停用' : '启用' }}</button>
                 <button class="btn btn-danger sm" @click="onDelete(p)">删除</button>
               </div>
             </div>
             <div v-if="expanded.has(p.id)" class="tool-list">
-              <p v-if="!store.toolsOf(p).length" class="hint muted">尚未验证工具清单。验证会启动插件进程读取工具定义，但不会启用它。</p>
+              <p v-if="!store.toolsOf(p).length" class="hint muted">尚未验证工具清单 <InfoTip text="验证会启动插件进程读取工具定义，但不会启用它。" /></p>
               <div v-for="t in store.toolsOf(p)" :key="t.name" class="tool-line">
                 <label>
                   <input
@@ -57,19 +57,8 @@
                   {{ store.readonlyOf(p).includes(t.name) ? '已确认只读' : '需审批' }}
                 </span>
               </div>
-              <p class="hint">勾选表示你确认该工具不改变任何状态；服务端声明的 readOnlyHint 仅供参考。未勾选的工具一律 dangerous、不可撤销、不自动重试。</p>
             </div>
           </template>
-        </div>
-      </section>
-
-      <section class="grp static">
-        <div class="grp-head"><span class="grp-title">授权边界</span></div>
-        <div class="grp-body">
-          <p class="hint">
-            配置变更会递增 revision、撤销同意并关闭进程。插件工具不提供「始终允许」，只支持仅本次 / 本会话；
-            自动审批模型不会代判插件调用，计划模式禁用全部插件工具。
-          </p>
         </div>
       </section>
     </div>
@@ -109,6 +98,7 @@
 /** PluginsPanel — 插件安装、工具发现、同意流与只读确认。居中弹窗 + 共享焦点管理。 */
 import { onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import type { Plugin } from '@/api/core'
+import InfoTip from '@/components/common/InfoTip.vue'
 import { usePluginsStore } from '@/stores/plugins'
 import { useConfirm } from '@/composables/useConfirm'
 import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'

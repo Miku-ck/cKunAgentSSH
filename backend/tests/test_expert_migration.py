@@ -22,7 +22,8 @@ def test_four_builtins_seeded(base_db):
 
 def test_general_ops_builtin_upgraded_to_ops_pack(base_db):
     row = _experts()["general_ops"]
-    assert row["name"] == "运维专家"
+    # 用户 2026-11-16：显示名「运维专家」→「运维」（slug 仍为 general_ops）
+    assert row["name"] == "运维"
     assert "智能运维助手" in row["identity_prompt"]
     assert "远程运维方法" in row["identity_prompt"]
 

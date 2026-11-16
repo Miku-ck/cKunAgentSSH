@@ -391,6 +391,10 @@ export interface ChatAttachment {
   size?: number
   content: string
   truncated?: boolean
+  /** 图片附件走二进制通道：content 恒为空串，模型消费的是原图（image_url）。
+   *  视频附件同样二进制落盘：模型无法直接观看，run 时后端把存储路径注入任务。 */
+  kind?: 'text' | 'image' | 'video'
+  mime?: string
 }
 
 // ── 专家（Expert）：运行策略配置包，不引入新可执行能力 ──────────────────

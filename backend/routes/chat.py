@@ -36,6 +36,53 @@ ALLOWED_UPLOAD_EXTS = {
 # 无扩展名的常见构建文件：Path("Makefile").suffix 是空串，只按后缀匹配永远放行不了
 ALLOWED_UPLOAD_NAMES = {"makefile", "dockerfile"}
 
+# 图片扩展名：走二进制存储 + 多模态注入（image_url），不做 UTF-8 解码与文本截断。
+# 存储层刻意放宽（svg/ico/tiff/avif/heic/heif）：能否真的被模型消费是能力问题，
+# 在模型调用层暴露并给出人话提示 —— 存储层拦掉反而让用户对着 400 一头雾水。
+# ⚠️ 与前端 HomeComposer 的 IMAGE_EXT_BY_MIME 保持同口径（跨语言无法共享单一源）。
+ALLOWED_IMAGE_EXTS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+    ".svg", ".ico", ".tif", ".tiff", ".avif", ".heic", ".heif",
+}
+
+_IMAGE_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".avif": "image/avif",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+}
+
+# 视频扩展名：二进制落盘，模型无法直接观看 —— 上传回执只带身份，运行时把
+# 存储路径与元数据提示注入任务（Agent 可用 shell 工具 ffprobe/ffmpeg 分析）。
+# 刻意不含 .ts：该后缀已被文本白名单占用（TypeScript 源码），语义二义性
+# 宁可拒收也不猜 —— MPEG-TS 用户请改用 .mp4/.mkv 等无歧义容器。
+# ⚠️ 与前端 HomeComposer 的 VIDEO_EXT_BY_MIME 保持同口径。
+ALLOWED_VIDEO_EXTS = {".mp4", ".webm", ".mkv", ".mov", ".m4v", ".avi", ".wmv", ".flv"}
+
+_VIDEO_MIME = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+    ".mov": "video/quicktime",
+    ".m4v": "video/x-m4v",
+    ".avi": "video/x-msvideo",
+    ".wmv": "video/x-ms-wmv",
+    ".flv": "video/x-flv",
+}
+
+# 视频单文件上限：远大于文本/图片（10MB）—— 短屏录/排障录像常见几十 MB。
+# 读取走 MAX+1 同款带上限读，不会先吃满内存。
+MAX_VIDEO_SIZE = 100 * 1024 * 1024
+
 
 def _uploads_root() -> Path:
     """上传文件根目录：与数据库同目录下的 uploads/（跨重装稳定）"""
@@ -56,22 +103,35 @@ async def upload_chat_file(
     file: UploadFile = File(...),
     conversation_id: str = Form(""),
 ):
-    """上传对话附件（文本类文件），返回内容供前端随消息注入 LLM 上下文"""
+    """上传对话附件（文本类文件、图片或视频），返回内容供前端随消息注入 LLM 上下文"""
     raw_name = file.filename or "unnamed"
     # 消毒文件名：去掉路径分隔符，最长 120 字符
     safe_name = raw_name.replace("\\", "/").split("/")[-1][:120].strip() or "unnamed"
     suffix = Path(safe_name).suffix.lower()
-    if suffix not in ALLOWED_UPLOAD_EXTS and Path(safe_name).name.lower() not in ALLOWED_UPLOAD_NAMES:
+    content_type = (file.content_type or "").lower()
+    is_image = suffix in ALLOWED_IMAGE_EXTS or content_type.startswith("image/")
+    # 视频判定放在文本白名单之前：.mp4 等后缀不在文本表里本就轮不到文本分支，
+    # 这里显式短路是为了让 content_type=video/* 的无扩展名文件也走对通道。
+    # 但必须让位于文本后缀：浏览器按扩展名猜 MIME，会把 .ts（TypeScript 源码）
+    # 发成 video/mp2t —— 后缀与 content_type 冲突时后缀赢，MPEG-TS 请改容器。
+    is_video = (suffix in ALLOWED_VIDEO_EXTS or content_type.startswith("video/")) \
+        and suffix not in ALLOWED_UPLOAD_EXTS \
+        and Path(safe_name).name.lower() not in ALLOWED_UPLOAD_NAMES
+    if not is_image and not is_video and suffix not in ALLOWED_UPLOAD_EXTS \
+            and Path(safe_name).name.lower() not in ALLOWED_UPLOAD_NAMES:
         raise HTTPException(
             status_code=400,
-            detail=f"不支持的文件类型 '{suffix or safe_name}'，仅支持文本类文件（txt/log/md/代码/配置等）",
+            detail=f"不支持的文件类型 '{suffix or safe_name}'，仅支持文本类文件（txt/log/md/代码/配置等）、"
+                   f"图片（png/jpg/webp 等）与视频（mp4/webm/mkv 等）",
         )
 
     # C-review MINOR-4：带上限读取（MAX+1）再校验大小 — 原实现全量读入内存后
-    # 才检查，超限文件会先占用超出上限的内存
-    data = await file.read(MAX_UPLOAD_SIZE + 1)
-    if len(data) > MAX_UPLOAD_SIZE:
-        raise HTTPException(status_code=413, detail="文件超过 10MB 上限")
+    # 才检查，超限文件会先占用超出上限的内存。视频上限独立且更大。
+    size_cap = MAX_VIDEO_SIZE if is_video else MAX_UPLOAD_SIZE
+    cap_label = "100MB" if is_video else "10MB"
+    data = await file.read(size_cap + 1)
+    if len(data) > size_cap:
+        raise HTTPException(status_code=413, detail=f"文件超过 {cap_label} 上限")
     if len(data) == 0:
         raise HTTPException(status_code=400, detail="文件内容为空")
 
@@ -87,6 +147,36 @@ async def upload_chat_file(
     dest = conv_dir / f"{file_id}_{safe_name}"
     await asyncio.to_thread(dest.write_bytes, data)
 
+    if is_image:
+        # 图片走二进制通道：绝不 decode（二进制 decode 只产出替换字符的乱码），
+        # 也不存在 50k 文本截断 —— 模型消费的是原图（base64 data URL 在 /agent/run
+        # 侧按需读取构造）。落盘副本保留在 uploads/，供 run 请求按 file_id 取用。
+        mime = _IMAGE_MIME.get(suffix) or content_type or "image/png"
+        return {
+            "file_id": file_id,
+            "filename": safe_name,
+            "size": len(data),
+            "content": "",
+            "truncated": False,
+            "kind": "image",
+            "mime": mime,
+        }
+
+    if is_video:
+        # 视频走二进制通道：模型无法直接观看视频内容，上传只做落盘存档；
+        # 运行时（/agent/run 侧）按 file_id 解析出存储路径，把路径与 ffprobe
+        # 分析提示注入任务文本，由 Agent 的 shell 工具按需检查元数据。
+        mime = _VIDEO_MIME.get(suffix) or content_type or "video/mp4"
+        return {
+            "file_id": file_id,
+            "filename": safe_name,
+            "size": len(data),
+            "content": "",
+            "truncated": False,
+            "kind": "video",
+            "mime": mime,
+        }
+
     text = data.decode("utf-8", errors="replace")
     truncated = len(text) > MAX_ATTACHMENT_CHARS
     if truncated:
@@ -98,6 +188,7 @@ async def upload_chat_file(
         "size": len(data),
         "content": text,
         "truncated": truncated,
+        "kind": "text",
     }
 
 

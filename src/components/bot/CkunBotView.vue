@@ -40,7 +40,8 @@
           <button role="tab" :aria-selected="store.channel === 'wechat'" :class="{ active: store.channel === 'wechat' }" @click="store.selectChannel('wechat')">微信</button>
         </div>
         <template v-if="store.channel === 'local'">
-          <button class="btn btn-new new-chat" :disabled="!store.activePersonaId || store.streaming" @click="createChat">新增会话</button>
+          <!-- 没有会话时主区空态自带 CTA，这里不重复一枚「新增会话」 -->
+          <button v-if="store.activeConversationId" class="btn btn-new new-chat" :disabled="!store.activePersonaId || store.streaming" @click="createChat">新增会话</button>
           <div class="history-label">陪聊记录</div>
           <div class="conversation-list">
             <div v-for="c in store.filteredConversations" :key="c.id" class="conversation" :class="{ active: c.id === store.activeConversationId }">
@@ -53,7 +54,7 @@
                  空容器会让人把「还没读到」误认为「真的没有」。 -->
             <p v-if="store.loading" class="sidebar-empty">正在读取会话…</p>
             <p v-else-if="store.error && !store.filteredConversations.length" class="sidebar-error">{{ store.error }}</p>
-            <p v-else-if="!store.filteredConversations.length" class="sidebar-empty">还没有会话。点「新增会话」开始第一段。</p>
+            <p v-else-if="!store.filteredConversations.length" class="sidebar-empty">还没有会话</p>
           </div>
         </template>
         <template v-else>
@@ -81,7 +82,7 @@
                  否则会闪一句「还没有 QQ 消息」把「还没读到」说成「真的没有」。 -->
             <p v-if="store.remoteError" class="sidebar-error">{{ store.remoteError }}</p>
             <p v-else-if="store.remoteConversationsLoading" class="sidebar-empty">正在读取{{ store.remoteChannelLabel }}会话…</p>
-            <p v-else-if="!store.remoteConversations.length" class="sidebar-empty">{{ remoteEmptyHint }}</p>
+            <p v-else-if="!store.remoteConversations.length" class="sidebar-empty">还没有{{ store.remoteChannelLabel }}消息</p>
           </div>
         </template>
       </aside>
@@ -107,23 +108,21 @@
           <div v-if="!store.isRemote && !store.activeConversationId" class="chat-empty">
             <template v-if="store.loading">
               <h2>正在读取…</h2>
-              <p>稍等一下，马上就好。</p>
             </template>
             <template v-else>
               <h2>今天想聊点什么？</h2>
-              <p>到「人格」页挑一位，新增一段只属于你们的会话。</p>
+              <button v-if="!store.activePersonaId" class="btn btn-primary" @click="tab = 'personas'">选择人格</button>
+              <button v-else class="btn btn-primary" :disabled="store.streaming" @click="createChat">新增会话</button>
             </template>
           </div>
-          <!-- 主区不重复侧栏的渠道级提示（remoteEmptyHint 已在侧栏说过「在 QQ 里 @ 一下」）：
-               同一屏内同一句话出现两次是噪音，这里只说「看哪一侧」。 -->
+          <!-- 主区不重复侧栏的空态文案：这里只在读取失败时把错误说出来。 -->
           <div v-else-if="store.isRemote && !store.remoteActiveId" class="chat-empty">
             <template v-if="store.remoteConversationsLoading">
               <h2>正在读取…</h2>
-              <p>稍等一下，马上就好。</p>
             </template>
             <template v-else>
               <h2>{{ store.remoteError ? `${store.remoteChannelLabel} 记录读取失败` : `还没有 ${store.remoteChannelLabel} 消息` }}</h2>
-              <p>{{ store.remoteError || '从左侧选一条会话查看。' }}</p>
+              <p v-if="store.remoteError">{{ store.remoteError }}</p>
             </template>
           </div>
           <!-- 本地与 QQ 记录共用这一份气泡：方向、配色、meta、渲染口径都只按角色决定，
@@ -260,13 +259,16 @@
     </div>
 
     <div v-else-if="tab === 'personas'" class="persona-page">
-      <div class="section-heading"><h3>人格</h3><button class="btn btn-new" @click="openPersona()">新增人格</button></div>
+      <div class="section-heading"><h3>人格</h3><button v-if="store.personas.length" class="btn btn-new" @click="openPersona()">新增人格</button></div>
       <!-- 空状态独立成 flex:1 的居中容器：与列表拆成两个同级空壳，否则平分高度把居中顶偏。
            加载中、加载失败、真空三态分开说：网络慢时不能说「还没有人格」，用户会当真。 -->
       <div v-if="!store.personas.length" class="persona-empty">
         <p v-if="store.loading">正在读取人格…</p>
         <p v-else-if="store.error">{{ store.error }}</p>
-        <p v-else>还没有人格。用「新增人格」造一位，它会带着自己的性格和说话方式陪你聊。</p>
+        <template v-else>
+          <p>还没有人格</p>
+          <button class="btn btn-primary" @click="openPersona()">新增人格</button>
+        </template>
       </div>
       <div v-else class="persona-grid">
         <article v-for="p in store.personas" :key="p.id" class="persona-card">
@@ -488,10 +490,6 @@ function relationHint(state: { stage: string; turns: number; days_since: number 
 
 const remoteActivePersona = computed(() => store.remoteActiveConversation?.persona || null)
 const remotePersonaName = computed(() => personaName(remoteActivePersona.value) || '机器人')
-/** 只读侧空态：说清「这条渠道要等对方发消息」，而不是让人以为功能坏了。 */
-const remoteEmptyHint = computed(() => (store.channel === 'wechat'
-  ? '还没有微信消息；让微信用户给机器人发一条试试。'
-  : '还没有 QQ 消息；在 QQ 里 @ 一下机器人试试。'))
 
 // ── 远端会话自定义显示（QQ / 微信）──
 // 弹窗绑「点进来的那一行」而不是当前活动会话：列表每 5 秒轮询刷新，
@@ -767,7 +765,7 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: var(--page-title-size); letter-spac
 .relation-bar { width: 34px; height: 3px; flex: 0 0 34px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-primary) 20%, transparent); overflow: hidden; }
 .relation-bar b { display: block; height: 100%; background: var(--accent-primary); transition: width .3s ease; }
 .bot-messages { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: var(--spacing-10) max(var(--spacing-24), calc((100% - 760px) / 2)) var(--spacing-8); }
-.chat-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-secondary); } .chat-empty h2 { color: var(--text-primary); font-family: var(--font-spec); font-size: 1.5385rem; } .chat-empty p { margin-top: var(--spacing-8); font-family: var(--font-spec); font-size: 1rem; }
+.chat-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-secondary); } .chat-empty h2 { color: var(--text-primary); font-family: var(--font-spec); font-size: 1.5385rem; } .chat-empty p { margin-top: var(--spacing-8); font-family: var(--font-spec); font-size: 1rem; } .chat-empty .btn { margin-top: var(--spacing-16); }
 /* 基准取自 QQ 记录那套气泡：人格说的话用强调色（那才是你在读的内容），人说的话走中性卡片。
    尾巴朝自己这侧：bot 在左收左下、人在右收右下。 */
 .greeting { align-self: flex-start; max-width: 82%; margin-bottom: var(--spacing-16); padding: var(--spacing-12) var(--spacing-14); border: 1px solid color-mix(in srgb, var(--accent-primary) 24%, transparent); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--radius-sm); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); box-shadow: none; color: var(--text-secondary); line-height: 1.7; white-space: pre-wrap; }
@@ -845,7 +843,7 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: var(--page-title-size); letter-spac
 .composer-send.stop { background: var(--danger-bg); color: var(--danger-text); box-shadow: none; } .composer-send.stop:hover:not(:disabled) { filter: none; background: var(--danger-border); }
 .persona-page { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: var(--spacing-24) var(--padding); }
 /* 空状态双向居中，且只在无人格时占满；有列表时它不渲染，不影响网格 */
-.persona-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+.persona-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--spacing-16); }
 .persona-empty p { max-width: 420px; color: var(--text-tertiary); font-family: var(--font-spec); font-size: 14px; line-height: 1.7; text-align: center; } .section-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-20); } .section-heading h3 { font-family: var(--font-spec); font-size: var(--page-title-size); }
 /* persona-page 是 flex column：网格与标题都不许被纵向压缩，否则长列表塌高 */
 .section-heading, .persona-grid { flex: 0 0 auto; }

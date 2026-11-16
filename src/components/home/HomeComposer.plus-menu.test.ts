@@ -1,8 +1,10 @@
 /**
  * ＋ 菜单六项级联结构的版面守卫（?raw 静态契约，与 HomeWorkspace.layout.test.ts 同风格）
  *
- * 钉住五件事：左栏恰为六项且常驻（附件在目标上面 —— 用户 2026-11-10 指定）；
- * 附件 / 技能 / 专家 / 插件在右栏级联展开（带搜索 + 图标/标题/描述列表）；
+ * 钉住：左栏六项且常驻（附件在目标上面 —— 用户 2026-11-10 指定；
+ * 附件点击直达文件选择对话框、远端文件入口移除 —— 用户 2026-11-15 指定）；
+ * 技能 / 专家 / 插件在右栏级联展开（带搜索 + 图标/标题列表，说明一律走 title
+ * 悬浮 —— 用户 2026-11-16 指定「只显示列表，不要冗余信息和小字」）；
  * 技能不显示条数数字；一级卡片静止、动效只允许出现在二级面板；落点切换留在底栏 chip。
  */
 import { describe, expect, it } from 'vitest'
@@ -33,12 +35,19 @@ describe('＋ 菜单左栏六项', () => {
     }
     expect(plusRoot).toContain('class="hcc-cascade-left"')
     expect(plusRoot).toContain('class="hcc-cascade-right"')
-    // 带 › 的四项展开右栏，而不是把整个卡片内容换掉
-    expect(plusRoot).toContain("openCascade('attach')")
+    // 附件 = 一步直达：点击直接开文件选择对话框（用户 2026-11-15），
+    // 远端文件入口已移除 —— 附件按钮不带 ›、不挂 openCascade
+    const pickAt = plusRoot.indexOf('@click="pickFiles"')
+    const attachBtn = plusRoot.slice(
+      plusRoot.lastIndexOf('<button', pickAt), plusRoot.indexOf('</button>', pickAt))
+    expect(attachBtn).toContain('@click="pickFiles"')
+    expect(attachBtn).not.toContain('casc-arrow')
+    expect(attachBtn).not.toContain('openCascade')
+    expect(plusRoot).not.toContain('>远端文件</span>')
+    // 技能 / 专家 / 插件照旧走级联
     expect(plusRoot).toContain("openCascade('skill')")
     expect(plusRoot).toContain("openCascade('expert')")
     expect(plusRoot).toContain("openCascade('plugin')")
-    expect(plusRoot).toContain('class="casc-arrow">›</span>')
   })
 
   it('技能不显示条数数字（用户 2026-11-10 指定）', () => {
@@ -46,20 +55,22 @@ describe('＋ 菜单左栏六项', () => {
     expect(composer).not.toContain('.casc-n')
   })
 
-  it('右栏面板共用搜索框（附件面除外），技能 / 专家 / 插件按名称与描述过滤', () => {
+  it('右栏面板共用搜索框，技能 / 专家 / 插件按名称与描述过滤', () => {
     expect(composer).toContain('v-model="cascadeQuery"')
     expect(composer).toContain('class="casc-search"')
-    expect(composer).toContain('v-if="plusPane !== \'attach\'" class="casc-search"')
     expect(composer).toContain('filteredSkills')
     expect(composer).toContain('filteredExperts')
     expect(composer).toContain('filteredPlugins')
     expect(composer).toContain('function cascadeMatch(')
-    expect(plusRoot).toContain('<template v-if="plusPane === \'attach\'">')
-    expect(plusRoot).toContain('<template v-else-if="plusPane === \'skill\'">')
+    // 附件面已随「一步直达」移除：右栏只有技能 / 专家 / 插件三个面板
+    expect(plusRoot).not.toContain("plusPane === 'attach'")
+    expect(plusRoot).not.toContain('HomeRemoteFilePicker')
+    expect(plusRoot).toContain('<template v-if="plusPane === \'skill\'">')
     expect(plusRoot).toContain('<template v-else-if="plusPane === \'expert\'">')
-    // 右栏列表按截图保留图标 + 标题 + 一行描述
+    // 用户 2026-11-16：二级列表只显示列表 —— 每项只留名字单行，描述小字移除，
+    // 辨识信息走 :title 悬浮
     expect(plusRoot).toContain('class="ci-name"')
-    expect(plusRoot).toContain('class="ci-desc"')
+    expect(plusRoot).not.toContain('class="ci-desc"')
   })
 
   it('每项只留一行主标题，说明小字改成 title（hover 才提示）', () => {
@@ -110,11 +121,16 @@ describe('＋ 菜单左栏六项', () => {
     expect(composer).toContain('if (!skillsStore.enabledSkills.length) void skillsStore.loadRemoteSkills()')
   })
 
-  it('插件面板是只读清单、不新开权限', () => {
-    expect(composer).toContain('class="casc-item ro"')
-    expect(composer).toContain('安装与授权在「设置 → 插件」，此处不新开权限')
-    // 本期不做 per-run 插件收紧：插件选择不得进入发送装配
-    expect(composer).not.toContain('selectedPluginIds')
+  it('插件面板是逐 run 勾选清单，授权仍在同意流', () => {
+    // 用户 2026-11-16：插件从只读清单改为真勾选（默认全选、可逐个取消）
+    expect(composer).toContain('function isPluginOn(')
+    expect(composer).toContain('function togglePlugin(')
+    expect(composer).toContain('sshAi.setSelectedPluginIds(current)')
+    // 旧「只读行」样式与类名整体退役
+    expect(composer).not.toContain('class="casc-item ro"')
+    expect(composer).not.toContain('casc-item.ro')
+    // 授权入口说明仍只走 title
+    expect(composer).toContain('title="安装与授权在「设置 → 插件」"')
   })
 
   it('＋ 里不再有 SSH / 连接分组，落点全部迁到底栏 chip', () => {
@@ -142,14 +158,15 @@ describe('＋ 菜单左栏六项', () => {
   })
 })
 
-describe('附件是左栏第一项（独立底栏入口已移除）', () => {
-  it('附件动作收进右栏二级面板：本地文件 / 远端文件 / 远端目录选择器', () => {
-    expect(plusRoot).toContain('title="添加附件"')
+describe('附件一步直达（用户 2026-11-15 指定，取代旧「本地/远端」二级面板）', () => {
+  it('附件一步直达：右栏无附件面、远端文件选择器与其回调已整体移除', () => {
     expect(plusRoot).toContain('@click="pickFiles"')
-    expect(plusRoot).toContain('<HomeRemoteFilePicker')
-    expect(plusRoot).toContain('@back="attachPane = \'root\'"')
-    expect(plusRoot).toContain('attachPane = \'remote\'')
-    expect(plusRoot).toContain(':disabled="!remoteSession"')
+    // 远端文件入口按用户要求移除（2026-11-15）：选择器与回调都不再存在
+    expect(composer).not.toContain('HomeRemoteFilePicker')
+    expect(composer).not.toContain('onRemotePicked')
+    // 旧二级面板的中间态已移除：attachPane / 本地文件按钮不再存在
+    expect(composer).not.toContain('attachPane')
+    expect(plusRoot).not.toContain("ci-name\">本地文件")
     expect(plusRoot).not.toContain('btn-primary')
   })
 
@@ -157,9 +174,8 @@ describe('附件是左栏第一项（独立底栏入口已移除）', () => {
     expect(composer).not.toContain('ref="attachRef"')
     expect(composer).not.toContain('showAttachMenu')
     expect(composer).not.toContain('toggleAttachMenu')
-    // 选完文件 / 远端文件后收起整个 ＋ 菜单
+    // 点附件即开文件选择并收起 ＋ 菜单
     expect(composer).toContain('fileInputRef.value?.click()\n  closePlusMenu()')
-    expect(composer).toContain('function onRemotePicked() {\n  closePlusMenu()')
   })
 
   it('＋ 菜单与落点菜单互斥，点外面各自收起', () => {
@@ -277,16 +293,24 @@ describe('落点：一枚位置 + 一枚目录，工作树多一枚分支，共�
     expect(composer).toContain("landingMenu === 'dir' && landing.kind !== 'ssh'")
     expect(composer).toContain('chooseDirChip(r.path)')
     expect(composer).toContain('pickDirChip')
-    expect(composer).toContain('打开文件夹…')
+    // 「打开文件夹…」已改为「＋ 新建工作区」（用户 2026-11-15 指定，图 1 样式）
+    expect(composer).not.toContain('打开文件夹…')
+    expect(composer).toContain('<span class="ol">新建工作区</span>')
+    const entryAt = composer.indexOf('<span class="ol">新建工作区</span>')
+    const entryBtn = composer.slice(
+      composer.lastIndexOf('<button', entryAt), composer.indexOf('</button>', entryAt))
+    expect(entryBtn).toContain('@click="pickDirChip"')
+    expect(entryBtn).toContain('M8 3v10M3 8h10')  // ＋ 图标
   })
 
-  it('SSH 会话列表 / 批量下发 / 管理服务器归**第一枚** chip（落点面）', () => {
+  it('SSH 连接配置 / 批量下发 / 管理服务器归**第一枚** chip（落点面）', () => {
     const kindPane = composer.slice(
       composer.indexOf("landingMenu === 'kind'"),
       composer.indexOf("landingMenu === 'dir' && landing.kind !== 'ssh'"),
     )
-    expect(kindPane).toContain('remoteTargetOptions')
-    expect(kindPane).toContain('chooseRemoteChip(o.sessionId)')
+    // SSH 面列的是连接配置（不是已开的远程会话）：选中即建 AI 专属会话，与用户终端隔离
+    expect(kindPane).toContain('sshConnectionOptions')
+    expect(kindPane).toContain('chooseSshConn(o.id)')
     expect(kindPane).toContain('canBulkDispatch')
     expect(kindPane).toContain('openRemoteManager')
 
@@ -296,7 +320,7 @@ describe('落点：一枚位置 + 一枚目录，工作树多一枚分支，共�
       composer.indexOf("landingMenu === 'dir'"),
       composer.indexOf("landingMenu === 'repo'"),
     )
-    expect(sshDirPane).not.toContain('chooseRemoteChip')
+    expect(sshDirPane).not.toContain('chooseSshConn')
     expect(sshDirPane).not.toContain('连接服务器…')
     expect(sshDirPane).not.toContain('管理服务器…')
   })

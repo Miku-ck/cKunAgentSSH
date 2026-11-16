@@ -91,10 +91,15 @@ def test_legacy_plaintext_model_row_still_readable(tmp_workspace):
 
 # ── 平台降级与非 Windows 路径（任何平台都跑）───────────────────────────────
 
-def test_non_windows_platform_keeps_plaintext(monkeypatch):
-    """非 win32 平台暂保持明文落库（TODO：接系统凭据库），读写均为恒等变换。"""
+def test_non_windows_missing_keyring_rejects_save(monkeypatch):
+    """非 win32 且 keyring 不可用 → 保存显式失败（fail-closed），绝不降级明文落库。
+    旧行为「明文恒等落库」已废弃；keyring 可用路径的守卫见 test_secret_keyring_envelope.py。"""
     monkeypatch.setattr(db, "_SECRET_PROTECTION_PLATFORM", "linux")
-    assert db.protect_secret(KEY) == KEY
+    monkeypatch.setattr(db, "_keyring_import",
+                        lambda: (_ for _ in ()).throw(ImportError("keyring not installed")))
+    with pytest.raises(db.SecretStorageError):
+        db.protect_secret(KEY)
+    # 读取侧对旧明文行仍恒等返回（历史行兼容不变）
     assert db.unprotect_secret(KEY) == KEY
 
 

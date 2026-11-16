@@ -2,7 +2,6 @@
   <div class="panel models-panel">
     <header class="panel-header">
       <h3>模型</h3>
-      <p class="panel-desc">管理 LLM 提供商与模型配置</p>
     </header>
 
     <div class="panel-body">

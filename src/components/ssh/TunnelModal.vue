@@ -32,9 +32,8 @@
         <!-- local / dynamic：本地监听 -->
         <div v-if="form.type !== 'remote'" class="field-grid">
           <div class="field">
-            <label>本地监听地址</label>
+            <label>本地监听地址 <InfoTip v-if="form.type === 'dynamic'" text="D 类固定 127.0.0.1，不对局域网开放" /></label>
             <input v-model="form.listenHost" type="text" :disabled="form.type === 'dynamic'">
-            <div v-if="form.type === 'dynamic'" class="hint">D 类固定 127.0.0.1，不对局域网开放</div>
           </div>
           <div class="field" :class="{ bad: !!portErr.listenPort }">
             <label>本地监听端口</label>
@@ -65,9 +64,8 @@
         <!-- local / remote：目标 -->
         <div v-if="form.type !== 'dynamic'" class="field-grid">
           <div class="field" :class="{ bad: !!dstHostErr }">
-            <label>{{ form.type === 'remote' ? '本机目标主机（远端回连到这）' : '目标主机' }}</label>
+            <label>{{ form.type === 'remote' ? '本机目标主机（远端回连到这）' : '目标主机' }} <InfoTip v-if="!dstHostErr && form.type !== 'remote'" text="从远端视角解析（不是你本机）" /></label>
             <input v-model="form.dstHost" type="text" @input="dstHostErr = !form.dstHost.trim() ? '必须填写目标主机' : ''">
-            <div v-if="!dstHostErr && form.type !== 'remote'" class="hint">从远端视角解析（不是你本机）</div>
             <div class="err">{{ dstHostErr }}</div>
           </div>
           <div class="field" :class="{ bad: !!portErr.dstPort }">
@@ -91,6 +89,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
+import InfoTip from '@/components/common/InfoTip.vue'
 import { useTunnelStore } from '@/stores/tunnel'
 import { useSSHStore } from '@/stores/ssh'
 import { useToastStore } from '@/stores/toast'
@@ -318,11 +317,6 @@ async function save(): Promise<void> {
 .field input:focus,
 .field select:focus { border-color: var(--accent-primary); }
 .field input:disabled { opacity: 0.5; cursor: not-allowed; }
-.field .hint {
-  font-size: 0.8462rem;
-  color: var(--text-tertiary);
-  margin-top: var(--spacing-4);
-}
 .field .err {
   display: none;
   font-size: 0.8462rem;

@@ -6,6 +6,7 @@
 import asyncio
 import base64
 import logging
+import re
 from functools import partial
 from itertools import count
 from types import SimpleNamespace
@@ -45,22 +46,59 @@ def parse_conversation_key(conversation_key: str) -> "tuple[str, str] | None":
     return partition, openid
 
 
-# botpy 1.2.1 只按 HTTP 状态抛异常，业务码（400xxxxx）只出现在异常文案里，
-# 所以主动消息的失败分类只能「异常类型 + 文案」双轨判定。
+# botpy 1.2.1 只按 HTTP 状态抛异常：SDK 的 http 层丢弃响应体里的业务码（code 字段），
+# 码只剩异常文案开头残留的数字（400xxxxx 形态）。分类双轨：数字码优先（平台改
+# 文案措辞不影响码），中文 marker 降级为兜底（码认不出/没码时仍按旧口径分类）。
 _PERMISSION_MARKERS = ("无权限", "无好友", "非群成员", "不是群成员", "拒收")
 _QUOTA_MARKERS = ("频控", "频率", "频繁", "配额", "达上限", "超过")
 _CONTENT_MARKERS = ("违规", "内容无效")
+
+# 业务码形态：4 开头、总长 8-9 位数字，锚定文案开头（防把输出里的普通数字当码）。
+_ERROR_CODE_RE = re.compile(r"^\s*(4\d{7,8})\b")
+# 已知锚点：40034105 / 400341 前缀 = 群/单聊推送未授权（proactive._push_qq 寄存
+# 分支的文档化场景）。码命中优先于前缀兜底 —— 40034100 形态上落 400341 前缀，
+# 但真实语义是超频控，必须显式锚 quota。
+_CODE_CATEGORIES = {
+    "40034105": "permission",
+    "40034100": "quota",
+    "40034006": "content",
+    "40054013": "permission",
+    "40054004": "permission",
+}
+_CODE_PREFIX_CATEGORIES = (
+    ("400341", "permission"),
+)
+
+
+def _extract_error_code(text: str) -> "str | None":
+    """从异常文案开头提取平台业务码；形态不符返回 None。"""
+    m = _ERROR_CODE_RE.match(text or "")
+    return m.group(1) if m else None
 
 
 def classify_proactive_error(exc: BaseException) -> "tuple[str, str]":
     """主动消息失败的处置口径。
 
+    码命中优先 → marker 兜底 → 默认 network。类别枚举（permission/quota/content/
+    wakeup_limit/network）不变，消费方（proactive._push_qq 的寄存/退避分支与
+    _reply_plain 的回落分支）零改动。
     permission 降级寄存（平台不让主动发），其余一律跳过等下一轮：频控会自己恢复，
     内容违规换句话才有效，网络错误当没发过比当「憋着的话」更干净。
     """
     text = str(exc or "").strip()
     if "召回" in text and "上限" in text:
         return "wakeup_limit", text
+    code = _extract_error_code(text)
+    if code:
+        cat = _CODE_CATEGORIES.get(code)
+        if cat is None:
+            for prefix, prefix_cat in _CODE_PREFIX_CATEGORIES:
+                if code.startswith(prefix):
+                    cat = prefix_cat
+                    break
+        if cat:
+            return cat, text
+        # 码未知：不按 network 粗判，落入 marker 兜底（旧口径仍接得住）
     if type(exc).__name__ == "ForbiddenError" or any(m in text for m in _PERMISSION_MARKERS):
         return "permission", text
     if any(m in text for m in _QUOTA_MARKERS):
@@ -152,7 +190,7 @@ class QQInboundAdapter:
             return
         if group_ambient.seen_event(self.channel_id, message.group_openid, message.id):
             return
-        group_ambient.note_line(
+        group_ambient.note_line_persisted(
             self.channel_id,
             message.group_openid,
             getattr(getattr(message, "author", None), "username", "") or "",

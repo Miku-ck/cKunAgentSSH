@@ -42,7 +42,7 @@
               :title="s.name"
               draggable="true"
               @click="activateTerminal(s.id)"
-              @auxclick.middle.prevent="store.closeSession(s.id)"
+              @auxclick.middle.prevent="requestCloseSession(s.id)"
               @contextmenu.prevent="showTabContextMenu($event, s.id)"
               @dragstart="onTabDragStart(s.id, $event)"
               @dragover.prevent
@@ -57,8 +57,10 @@
               />
               <IconMonitor v-if="s.type === 'remote'" :width="12" :height="12" :stroke-width="2" />
               <IconTerminal v-else :width="12" :height="12" :stroke-width="2" />
+              <!-- AI 专属会话徽标：与用户终端 tab 区分（只读，运行中不可关） -->
+              <span v-if="s.ai" class="tab-ai-badge">AI</span>
               <span class="tab-label">{{ s.name }}</span>
-              <button class="tab-close" aria-label="关闭终端" @click.stop="store.closeSession(s.id)">×</button>
+              <button class="tab-close" aria-label="关闭终端" @click.stop="requestCloseSession(s.id)">×</button>
             </div>
           </div>
 
@@ -125,7 +127,7 @@ v-show="s.id === store.activeSessionId"
 
         <!-- SFTP 文件传输页面 -->
         <div v-show="activeNavPage === 'sftp'" class="sftp-page">
-          <SftpView v-if="pageMounted('sftp')" />
+          <SftpView v-if="pageMounted('sftp')" @remote-mgr="openRemoteManager" />
         </div>
 
         <!-- 运维轨迹页面 -->
@@ -146,6 +148,7 @@ v-show="s.id === store.activeSessionId"
         <div v-show="activeNavPage === 'dashboard'" class="dashboard-page">
           <DashboardView
             v-if="pageMounted('dashboard')"
+            @remote-mgr="openRemoteManager"
           />
         </div>
 
@@ -156,12 +159,12 @@ v-show="s.id === store.activeSessionId"
 
         <!-- Docker 管理页面（依附当前远程 SSH 会话） -->
         <div v-show="activeNavPage === 'docker'" class="docker-page">
-          <DockerView v-if="pageMounted('docker')" :active="activeNavPage === 'docker'" @exec-terminal="activateTerminal($event)" />
+          <DockerView v-if="pageMounted('docker')" :active="activeNavPage === 'docker'" @exec-terminal="activateTerminal($event)" @remote-mgr="openRemoteManager" />
         </div>
 
         <!-- K8s 集群页（同样依附远程 SSH 会话，经 kubectl 读数） -->
         <div v-show="activeNavPage === 'k8s'" class="k8s-page">
-          <K8sView v-if="pageMounted('k8s')" :active="activeNavPage === 'k8s'" />
+          <K8sView v-if="pageMounted('k8s')" :active="activeNavPage === 'k8s'" @remote-mgr="openRemoteManager" />
         </div>
 
         <!-- Git 页面（GitHub 加速 + 仓库管理，C 方案双子页） -->
@@ -275,6 +278,8 @@ const CkunBotView = defineAsyncComponent(() => import('@/components/bot/CkunBotV
 const CommandPalette = defineAsyncComponent(() => import('@/components/common/CommandPalette.vue'))
 import { useSSHStore } from '@/stores/ssh'
 import { useSshAiStore } from '@/stores/ssh-ai'
+import { useAgentStore } from '@/stores/agent'
+import { useToastStore } from '@/stores/toast'
 import { useTunnelStore } from '@/stores/tunnel'
 import { useAccessStore } from '@/stores/access'
 import { useSettings } from '@/composables/useSettings'
@@ -288,6 +293,8 @@ import { tabStatusKind } from '@/utils/tab-status'
 
 const store = useSSHStore()
 const sshAiStore = useSshAiStore()
+const agent = useAgentStore()
+const toast = useToastStore()
 const { openSettings } = useSettings()
 
 // 终端组件引用映射（key: sessionId, value: 组件实例）
@@ -398,8 +405,35 @@ function openRemoteManager() {
 
 const paletteOpen = ref(false)
 
+/** AI 专属 tab 运行中不许关：关了等于抽走 AI 正在用的终端。与首页 disconnectTarget
+ *  同一姿态（运行中不关），这里把原因说出来；其余会话照常关。守卫放在 UI 层而非
+ *  store.closeSession —— 后者还被 exec-target 切换目标时程序化调用，不该被运行态拦下。 */
+function requestCloseSession(id: string): void {
+  const s = store.sessions.find(x => x.id === id)
+  if (s?.ai && agent.isRunning) {
+    toast.warning('AI 正在使用这条连接')
+    return
+  }
+  void store.closeSession(id)
+}
+
+/** 这次右键关闭动作会不会波及 AI 专属 tab（运行中要拦）。与 store.handleTabContextAction
+ *  的切片口径一致：closeLeft/Right 按目标标签的位置切，closeAll 全收。 */
+function ctxCloseHitsAi(action: TabCtxAction, targetId: string): boolean {
+  const aiIdx = store.sessions.findIndex(s => s.ai)
+  if (aiIdx === -1) return false
+  const idx = store.sessions.findIndex(s => s.id === targetId)
+  switch (action) {
+    case 'closeCurrent': return aiIdx === idx
+    case 'closeLeft': return aiIdx < idx
+    case 'closeRight': return aiIdx > idx
+    case 'closeAll': return true
+    default: return false
+  }
+}
+
 function closeActiveSession(): void {
-  if (store.activeSessionId) void store.closeSession(store.activeSessionId)
+  if (store.activeSessionId) requestCloseSession(store.activeSessionId)
 }
 
 const { mruSwitcher } = useGlobalShortcuts({
@@ -517,6 +551,11 @@ type TabCtxAction = 'duplicate' | 'closeCurrent' | 'closeLeft' | 'closeRight' | 
 function handleTabCtxAction(action: TabCtxAction) {
   const targetId = tabCtxMenu.value.targetId
   tabCtxMenu.value.visible = false
+  // 运行中批量关闭也不许波及 AI 专属 tab（closeAll / closeLeft / closeRight 都可能带上它）
+  if (action !== 'duplicate' && agent.isRunning && ctxCloseHitsAi(action, targetId)) {
+    toast.warning('AI 正在使用这条连接')
+    return
+  }
   store.handleTabContextAction(action, targetId)
 }
 

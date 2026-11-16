@@ -75,12 +75,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useSSHStore, type SSHConnection } from '@/stores/ssh'
+import { useExecTargetStore } from '@/stores/exec-target'
 import { useToastStore } from '@/stores/toast'
 import { useModalFocusTrap } from '@/composables/useModalFocusTrap'
 
 const emit = defineEmits<{ close: [] }>()
 
 const ssh = useSSHStore()
+const landing = useExecTargetStore()
 const toast = useToastStore()
 const addr = ref('')
 const busy = ref(false)
@@ -137,21 +139,16 @@ async function refresh(): Promise<void> {
   }
 }
 
-/** 同一 connectionId 已开会话就切过去，不再新堆一个标签（主机历史里连第二次是常态）。 */
+/** 这个弹窗只挂在 AI 输入框上：连上即建一条 AI 专属会话（与用户终端隔离），
+ *  不切用户终端 tab。重选当前连接由 chooseSshConnection 判重，不拆了重连。
+ *  建连失败的原因落在 landing.error —— 这里转成 toast 并留着弹窗，不静默关闭。 */
 async function connectTo(c: SSHConnection): Promise<void> {
   if (busy.value) return
-  const existing = ssh.sessions.find(s => s.type === 'remote' && s.connectionId === c.id)
-  if (existing) {
-    ssh.switchSession(existing.id)
-    emit('close')
-    return
-  }
   busy.value = true
   try {
-    await ssh.connectRemote(c.id, 80, 24)
-    emit('close')
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : String(e))
+    await landing.chooseSshConnection(c.id)
+    if (landing.error) toast.error(landing.error)
+    else emit('close')
   } finally {
     busy.value = false
   }

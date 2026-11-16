@@ -30,7 +30,10 @@ class CreateModelRequest(BaseModel):
     provider: str = "custom"
     supports_thinking: bool = False
     supports_image: bool = False
-    supports_tool_calling: bool = False
+    # 能力门（supports_tool_calling 消费）上线后该列有了真实语义（False=预判去 tools）。
+    # UI 写侧勾选已撤（前端不在写入体里带它），默认必须与存量基线迁移同口径取 True
+    # —— 否则每个新建模型都会被能力门剥掉工具。显式传 False 仍生效。
+    supports_tool_calling: bool = True
     temperature: float = Field(0.7, ge=0, le=2)
     # max_tokens = 上下文窗口（与 models_config 列默认及 create_model_config 一致）；
     # 输出预算由 max_output_tokens 单独控制，不要在这里压低窗口。
@@ -40,6 +43,8 @@ class CreateModelRequest(BaseModel):
     reasoning_tokens: int = Field(8192, ge=0, le=1000000, description="推理内容最大 token 数，0 表示使用 max_output_tokens")
     top_p: float = Field(0.9, ge=0, le=1)
     is_default_ssh: bool = False
+    # 备用模型引用（行主键或模型名；空 = 不启用回退）。写侧归一为行主键并做环校验。
+    fallback_model_id: str = ""
 
 
 class UpdateModelRequest(BaseModel):
@@ -58,6 +63,8 @@ class UpdateModelRequest(BaseModel):
     top_p: Optional[float] = Field(None, ge=0, le=1)
     sort_order: Optional[int] = None
     is_default_ssh: Optional[bool] = None
+    # 备用模型引用；None = 不改，"" = 清除，非空 = 归一为行主键并做环校验
+    fallback_model_id: Optional[str] = None
 
 
 # ── 模型配置 CRUD ──
@@ -130,10 +137,14 @@ def create_model_config(req: CreateModelRequest):
             top_p=req.top_p,
             is_default_ssh=req.is_default_ssh,
             reasoning_tokens=req.reasoning_tokens,
+            fallback_model_id=req.fallback_model_id,
         )
         return result
     except HTTPException:
         raise
+    except ValueError as e:
+        # 备用引用校验失败（不存在/自指/环）属输入错误，400 而非 500
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         # S10-19：服务端故障不是输入错误。原实现把**任何**异常折成 400 + str(e)，
         # 于是 "database is locked" / "disk I/O error" / 缺列这类运维问题在面板上
@@ -149,7 +160,11 @@ def update_model_config(config_id: str, req: UpdateModelRequest):
     """更新模型配置"""
     # 路径参数用 config_id 避免与 UpdateModelRequest.model_id 字段同名冲突
     data = req.model_dump(exclude_unset=True)
-    result = db.update_model_config(config_id, **data)
+    try:
+        result = db.update_model_config(config_id, **data)
+    except ValueError as e:
+        # 备用引用校验失败（不存在/自指/环）属输入错误，400 而非 404/500
+        raise HTTPException(status_code=400, detail=str(e))
     if not result:
         raise HTTPException(status_code=404, detail="Model not found")
     # 模型配置变更后清除 embedding 客户端缓存（base_url/api_key 可能已变）

@@ -32,7 +32,6 @@
     </div>
     <div v-if="isEmpty" class="history-empty">
       <div class="history-empty-title">还没有会话</div>
-      <div class="history-empty-hint">发出第一条消息后，这里会留下记录</div>
     </div>
   </div>
 </template>
@@ -199,11 +198,5 @@ function timeOf(ts: string): string {
 .history-empty-title {
   font-size: 0.9231rem;
   color: var(--text-secondary);
-}
-
-.history-empty-hint {
-  font-size: 0.8462rem;
-  line-height: 1.5;
-  color: var(--text-tertiary);
 }
 </style>

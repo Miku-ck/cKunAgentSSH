@@ -24,8 +24,14 @@ PLUGIN_PROMPT_SECTION = (
 )
 
 
-async def build_plugin_tools(policy, manager=None) -> tuple[list, list[str]]:
-    """返回 (工具实例列表, 警告列表)。"""
+async def build_plugin_tools(policy, manager=None,
+                             selected_plugin_ids=None) -> tuple[list, list[str]]:
+    """返回 (工具实例列表, 警告列表)。
+
+    selected_plugin_ids（用户 2026-11-16 逐 run 收紧）：None = 未表态（全部已授权
+    插件，与引入前行为等价）；list（可空）= 本次只装这些，与专家允许集再求交。
+    id 或 slug 命中皆可（前端只拿得到行 id，slug 留给手动触发/测试）。
+    """
     import database as db
 
     manager = manager or get_plugin_manager()
@@ -36,6 +42,12 @@ async def build_plugin_tools(policy, manager=None) -> tuple[list, list[str]]:
         candidates = [
             r for r in candidates
             if r["id"] in allowed or r["slug"] in allowed
+        ]
+    if selected_plugin_ids is not None:
+        allowed_run = set(selected_plugin_ids)
+        candidates = [
+            r for r in candidates
+            if r["id"] in allowed_run or r["slug"] in allowed_run
         ]
     if not candidates:
         return [], []

@@ -611,6 +611,13 @@ class ScheduleEngine:
             max_reasoning_tokens=safe_reasoning,
             enable_thinking=True,
             enable_tools=True,
+            # 模型能力门：与交互式运行同口径（标记不支持的模型预判去 tools）
+            supports_tool_calling=(
+                bool(model_cfg["supports_tool_calling"])
+                if model_cfg.get("supports_tool_calling") is not None else None
+            ),
+            # 备用模型回退：与主 run 链路同口径
+            fallback_model_cfg=db.resolve_fallback_model_cfg(model_cfg),
             enable_intention_guide=False,
             enable_dynamic_budget=False,
         )

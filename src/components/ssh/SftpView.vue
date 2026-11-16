@@ -78,7 +78,8 @@
         </div>
         <div class="conn-list">
           <div v-if="sshStore.connections.length === 0" class="conn-empty">
-            暂无 SSH 连接配置,请先在"远程管理"中新增连接
+            <p>暂无 SSH 连接配置</p>
+            <button class="btn btn-primary" type="button" @click="showConnPicker = false; emit('remote-mgr')">新增连接</button>
           </div>
           <div
             v-for="conn in sshStore.connections"
@@ -252,6 +253,7 @@ const store = useSftpStore()
 const sshStore = useSSHStore()
 const toast = useToastStore()
 const { confirm } = useConfirm()
+const emit = defineEmits<{ 'remote-mgr': [] }>()
 
 const showConnPicker = ref(false)
 const connecting = ref(false)
@@ -985,9 +987,10 @@ async function onChmodApply(mode: number): Promise<void> {
 .conn-close:hover { color: var(--text-primary); }
 .conn-list { padding: var(--spacing-6); overflow-y: auto; }
 .conn-empty {
-  padding: var(--spacing-24) var(--spacing-16); text-align: center;
-  font-size: 0.9231rem; color: var(--text-tertiary);
+  padding: var(--spacing-24) var(--spacing-16); display: flex; flex-direction: column; align-items: center; gap: var(--spacing-12);
+  text-align: center; font-size: 0.9231rem; color: var(--text-tertiary);
 }
+.conn-empty p { margin: 0; }
 .conn-item {
   display: flex; align-items: center; gap: var(--spacing-10);
   padding: var(--spacing-8) var(--spacing-10); border-radius: var(--radius-sm); cursor: pointer;

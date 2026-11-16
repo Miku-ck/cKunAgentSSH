@@ -93,21 +93,35 @@ async def _call_llm(prompt: str, candidates_block: str, model_cfg: dict) -> "lis
         {"role": "system", "content": "你是精确的记忆对账引擎，只输出 JSON。"},
         {"role": "user", "content": prompt + "\n\n" + candidates_block},
     ]
-    text = await _call_llm_with_timeout(
-        messages=messages, model_cfg=model_cfg, model_id=model_id,
-        temperature=0.1, max_tokens=1024,
-        chunk_timeout=_CHUNK_TIMEOUT, total_timeout=_TOTAL_TIMEOUT,
-        task_name="reconcile",
-    )
-    if not text:
-        return None
+    # 路线 B：预算随 models_config 的 max_output_tokens 动态（缺省 1024 兜底），
+    # 调用点不再写死常量 —— 换模型零改动。机械对账是结构化 JSON 裁决，声明
+    # thinking="off"：思考型模型不再把输出预算烧在 reasoning 上
+    # （修复 finish_reason=length + 空内容 → job 循环失败的根因）。
     try:
-        raw = _extract_json(text)
-        decisions = json.loads(raw).get("decisions")
-        if isinstance(decisions, list):
-            return decisions
-    except (json.JSONDecodeError, AttributeError) as e:
-        logger.warning("[reconcile] LLM 输出解析失败: %s, raw=%s", e, text[:200])
+        base_budget = int(model_cfg.get("max_output_tokens") or 0) or 1024
+    except (TypeError, ValueError):
+        base_budget = 1024
+    text = None
+    for attempt, budget in enumerate((base_budget, base_budget * 2), 1):
+        text = await _call_llm_with_timeout(
+            messages=messages, model_cfg=model_cfg, model_id=model_id,
+            temperature=0.1, max_tokens=budget,
+            chunk_timeout=_CHUNK_TIMEOUT, total_timeout=_TOTAL_TIMEOUT,
+            task_name="reconcile" if attempt == 1 else "reconcile_retry",
+            thinking="off",
+        )
+        if not text:
+            # 空内容/超时：升一档预算重试一次（思考未被关掉或预算不足的兜底，
+            # 对齐 post_processor 记忆路径 [1024, 2048] 的首查/重试预算策略）
+            continue
+        try:
+            raw = _extract_json(text)
+            decisions = json.loads(raw).get("decisions")
+            if isinstance(decisions, list):
+                return decisions
+        except (json.JSONDecodeError, AttributeError) as e:
+            logger.warning("[reconcile] LLM 输出解析失败 (attempt=%d, max_tokens=%s): %s, raw=%s",
+                           attempt, budget, e, text[:200])
     return None
 
 
@@ -295,6 +309,9 @@ async def _rewrite_episodic(content: str, model_cfg: dict) -> str:
             temperature=0.2, max_tokens=256,
             chunk_timeout=_CHUNK_TIMEOUT, total_timeout=_TOTAL_TIMEOUT,
             task_name="episodic_rewrite",
+            # 机械改写（1-2 句摘要）：关思考。256 预算下思考型模型必然
+            # 全耗尽 → 每次都退化规则版，改写功能对思考模型形同虚设。
+            thinking="off",
         )
     except Exception as e:
         logger.warning("[reconcile] episodic 改写失败，保留规则版: %s", e)

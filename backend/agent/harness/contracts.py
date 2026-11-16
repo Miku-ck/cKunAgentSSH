@@ -339,6 +339,20 @@ class AgentConfig:
     max_tokens: Optional[int] = None  # None 表示不传 max_tokens，由 vLLM 自决输出上限
     enable_thinking: bool = False
     enable_tools: bool = True
+    # ── 模型能力门（models_config.supports_tool_calling 的消费点）──
+    # 三态：None=未知（旧路径未注入/旧行）维持现状，带 tools 上去靠 llm_adapter
+    # 的 BadRequest 降级兜底；False=模型行显式标记不支持工具调用 → Driver 预判
+    # 直接以纯文本模式跑，不白烧一轮撞 400；True=标记支持，行为不变。
+    # 供三个持有点注入：routes/agent.py / schedule_engine.py / headless_run.py。
+    supports_tool_calling: Optional[bool] = None
+    # ── 备用模型回退（M9-3）──
+    # 主模型配置的备用端点完整配置（mask_key=False 的整行 dict：base_url/api_key/
+    # model_id，由 db.resolve_fallback_model_cfg 解析，None=不启用）。
+    # LLM 调用 TRANSIENT 重试耗尽时由 Stirrups 切换（每 run 一次）；FATAL 与
+    # 上下文超限不触发切换（切端点解决不了这两类）。
+    fallback_model_cfg: Optional[dict] = None
+    # （视觉多模态不走此配置：图片内容块由路由层构造，经 Harness.run(images=…)
+    # 直接注入 Stirrups —— 见 harness.assemble 与 stirrups.images）
     llm_max_retries: int = 2
     compress_on_context_overflow: bool = True
     auto_rollback_on_tool_failure: bool = True  # 工具失败时自动回滚（保护文件一致性）

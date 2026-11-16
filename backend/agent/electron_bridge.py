@@ -185,23 +185,42 @@ class ElectronBridge:
         ssh_session_id: str,
         command: str,
         timeout: float = 30.0,
+        exec_id: str | None = None,
     ) -> dict:
         """在远程 SSH 会话上执行命令
+
+        exec_id：本次执行的取消句柄（调用方生成，如 uuid4）。携带它时主进程会把
+        exec 通道句柄按该 id 登记，run 取消后可用 kill_exec(exec_id) 终止远端命令
+        （C-review M9 的 kill 通道）。缺省不带 —— 行为与旧版完全一致。
 
         返回结构: {success: bool, output: str, error: str, exit_code: int | None}
         """
         if not self.is_available():
             self._raise_unavailable()
 
-        return await self._send(
-            "ssh_exec",
-            {
-                "sshSessionId": ssh_session_id,
-                "command": command,
-                "timeout": timeout,
-            },
-            timeout,
-        )
+        payload = {
+            "sshSessionId": ssh_session_id,
+            "command": command,
+            "timeout": timeout,
+        }
+        if exec_id:
+            payload["execId"] = exec_id
+        return await self._send("ssh_exec", payload, timeout)
+
+    async def kill_exec(self, exec_id: str, timeout: float = 5.0) -> dict:
+        """按 exec_id 终止一次在途/在跑的远程命令（ssh_kill op）。
+
+        返回结构: {found: bool, signaled: bool, pending: bool}
+        - found+signaled：exec 通道已收到 KILL 信号（或已关通道兜底）；
+        - found+pending：远端 exec 通道尚未建立（client.exec 回调未到），
+          主进程已登记 pendingKill，通道建立时立即补杀；
+        - found=False：该 exec 已正常结束或从未存在 —— 诚实上报，不是错误。
+
+        主进程不可达时抛 BridgeError（调用方决定吞不吞：取消路径只应留痕）。
+        """
+        if not self.is_available():
+            self._raise_unavailable()
+        return await self._send("ssh_kill", {"execId": exec_id}, timeout)
 
     async def connect_ssh(self, connection_id: str, timeout: float = 60.0) -> dict:
         """按连接 ID 自动建立一条轻量 SSH 会话（供定时任务无头执行）。

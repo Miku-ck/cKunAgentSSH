@@ -78,13 +78,13 @@ def test_route_emits_suggestion_for_ops_task():
         "type": "expert_suggestion",
         "slug": ops["slug"],
         "name": ops["name"],
-        "reason": "检测到运维任务，建议切到运维专家",
+        "reason": "检测到运维任务，建议切到运维",
         "task": task,
         "run_id": "test-run",
     }
     assert event["type"] == "expert_suggestion"
     assert event["slug"] == "general_ops"
-    assert event["name"] == "运维专家"
+    assert event["name"] == "运维"
     assert event["task"] == task
     assert event["run_id"] == "test-run"
     assert event["reason"]
