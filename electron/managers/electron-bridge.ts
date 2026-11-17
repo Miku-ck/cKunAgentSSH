@@ -160,7 +160,7 @@ export class ElectronBridge {
             // 诚实上报：已正常结束或从未存在，不是错误（kill 与完成竞态时属正常）。
             // 用 200 而非 404：Python 侧 _send 对 >=400 一律抛 BridgeError，
             // 三态契约（found=False 不是错误）只有走 200 才真正可达。
-            return { status: 200, body: { success: true, found: false } }
+            return { status: 200, body: { success: true, found: false, signaled: false, pending: false } }
           }
           return { status: 200, body: { success: true, ...outcome } }
         }

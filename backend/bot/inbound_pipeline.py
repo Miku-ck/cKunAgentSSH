@@ -85,7 +85,11 @@ class InboundPipeline:
         # 自己的发言也进上下文：下一句接话才知道刚才说过什么，避免复读。
         if spoken:
             persona = (conversation.get("persona") or {}).get("name") or "我"
-            group_ambient.note_line_persisted(inbound.channel_id, group_openid, persona, reply)
+            # 同步 SQLite 提交（节流时还有 DELETE）：走线程池，别阻塞事件循环
+            # 内的并发请求（SSE 心跳/健康检查）。跨线程调用安全（同 qq_channel）。
+            await asyncio.to_thread(
+                group_ambient.note_line_persisted, inbound.channel_id, group_openid, persona, reply
+            )
 
     async def _handle_locked(self, inbound, provider, persona_id: str) -> None:
         conversation = await asyncio.to_thread(
