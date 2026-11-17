@@ -229,7 +229,7 @@ async def test_model_connection(config_id: str):
 
     start = _time.monotonic()
     try:
-        async with netconfig.new_client(default_timeout=10.0) as client:
+        async with netconfig.new_client(default_timeout=10.0, target_url=models_url) as client:
             resp = await client.get(models_url, headers=headers)
             logger.info(
                 "[TEST] upstream HTTP %s, latency=%.0fms",

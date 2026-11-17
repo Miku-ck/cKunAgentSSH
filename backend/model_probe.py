@@ -38,8 +38,9 @@ def _probe_first_model(base_url: str, api_key: str = "EMPTY",
         url = base_url.rstrip("/")
         if not url.endswith("/models"):
             url = f"{url}/models"
-        # 代理仍由 new_sync_client 统一接（不能丢），只把超时改成请求级
-        with netconfig.new_sync_client() as _c:
+        # 代理仍由 new_sync_client 统一接（不能丢），只把超时改成请求级。
+        # 探测目标常是内网 vLLM（192.168.x.x），必须绕过代理直连
+        with netconfig.new_sync_client(target_url=url) as _c:
             resp = _c.get(url, timeout=timeout,
                           headers={"Authorization": f"Bearer {api_key or 'EMPTY'}"})
         resp.raise_for_status()

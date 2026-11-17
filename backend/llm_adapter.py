@@ -68,7 +68,9 @@ async def _get_client(base_url: str, api_key: str) -> openai.AsyncOpenAI:
         timeout=netconfig.http_timeout(netconfig.LLM_TIMEOUT_DEFAULT),
         # 用户未设超时时 = SDK 默认 1 次重试，与原行为一致
         max_retries=netconfig.retry_count(),
-        http_client=netconfig.proxy_http_client(),
+        # 内网/回环端点自动绕过代理直连（如局域网 vLLM 192.168.x.x，
+        # 走系统代理会 ConnectTimeout —— 代理是出公网用的）
+        http_client=netconfig.proxy_http_client(target_url=base_url),
     )
     _client_cache[key] = client
     # 超容量时淘汰最久未使用的

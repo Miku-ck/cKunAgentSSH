@@ -130,8 +130,12 @@ def test_probe_timeout_is_request_level_not_client_default(probe_env):
     # 请求级 timeout 恒为探测预算本身
     assert calls[0]["timeout"] == 3.0
     # client 默认超时即便被用户值接管也无所谓：per-request 优先。关键是不再把
-    # 3.0 交出去当 default_timeout（那才会被替换）
-    assert clients[0][1] == {}, "new_sync_client 不应收到 default_timeout"
+    # 3.0 交出去当 default_timeout（那才会被替换）。
+    # target_url 只是路由提示（内网/回环端点绕过代理直连），与超时预算无关，
+    # 允许出现；但除它之外不得再夹带任何超时参数。
+    assert "default_timeout" not in clients[0][1]
+    assert "timeout" not in clients[0][1]
+    assert set(clients[0][1]) <= {"target_url"}
 
 
 def test_probe_url_normalized(probe_env):

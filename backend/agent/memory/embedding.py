@@ -39,7 +39,7 @@ class EmbeddingClient:
             # PERF-005：共享 AsyncClient（键=超时+代理），不再每次调用重付
             # TCP(+TLS) 握手；连接池随进程长驻，HTTP 策略变更由 settings
             # 写入侧调 invalidate_http_clients() 重建（与 llm_adapter 同钩子）
-            client = _shared_http_client()
+            client = _shared_http_client(self._endpoint())
             resp = await client.post(
                 self._endpoint(),
                 headers=headers,
@@ -94,13 +94,19 @@ _EMBED_TIMEOUT = 10.0
 _http_clients: dict = {}
 
 
-def _shared_http_client():
-    """按 (超时, 代理) 取共享 AsyncClient；调用方不关闭（连接池随进程长驻）。"""
+def _shared_http_client(target_url: str = ""):
+    """按 (超时, 目标裁决后的代理) 取共享 AsyncClient；调用方不关闭（连接池随进程长驻）。
+
+    键里放的是 proxy_for_target 的结果而非原始策略代理：内网端点（如局域网
+    vLLM）绕过代理直连，与公网端点走代理是两种不同的客户端，必须分开建池。
+    """
     import netconfig
-    key = (_EMBED_TIMEOUT, netconfig.proxy_url() or "")
+    proxy = netconfig.proxy_for_target(target_url or None) or ""
+    key = (_EMBED_TIMEOUT, proxy)
     client = _http_clients.get(key)
     if client is None or client.is_closed:
-        client = netconfig.new_client(default_timeout=_EMBED_TIMEOUT)
+        client = netconfig.new_client(default_timeout=_EMBED_TIMEOUT,
+                                      target_url=target_url or None)
         _http_clients[key] = client
     return client
 

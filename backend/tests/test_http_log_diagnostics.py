@@ -159,6 +159,71 @@ def test_new_client_without_proxy_stays_direct(clean_policy, monkeypatch):
     assert "proxy" not in captured and captured["timeout"] == 15.0
 
 
+# ── G4 补丁：内网/回环目标绕过代理直连 ──────────────────────────────────────
+# 代理是给"出公网"用的：局域网 vLLM（192.168.x.x）走代理会被代理拒绝或超时
+# （实测 ConnectTimeout），这类故障排查成本极高，必须在出口统一裁决。
+
+@pytest.mark.parametrize("url", [
+    "http://192.168.150.40:9033/v1",
+    "http://10.0.0.5:8000",
+    "http://172.16.1.1/v1",
+    "http://172.31.255.255/v1",
+    "http://127.0.0.1:7888",
+    "http://localhost:7888",
+    "http://[::1]:9000/v1",
+    "http://169.254.10.2/meta",
+])
+def test_internal_targets_bypass_proxy(clean_policy, url):
+    clean_policy.set_policy("http://corp-proxy:3128", 0, 1)
+    assert clean_policy.proxy_for_target(url) is None
+    assert clean_policy._target_bypasses_proxy(url) is True
+
+
+@pytest.mark.parametrize("url", [
+    "https://api.openai.com/v1",
+    "http://8.8.8.8/v1",
+    "http://172.32.0.1/v1",      # 172.32 不在 172.16/12 内，是公网
+    "http://192.169.1.1/v1",     # 192.169 不是 192.168/16
+    "https://gw.example.com/v1", # 域名不解析，交由用户显式清空代理
+    "",
+    None,
+    "not a url",
+])
+def test_public_targets_keep_proxy(clean_policy, url):
+    clean_policy.set_policy("http://corp-proxy:3128", 0, 1)
+    assert clean_policy.proxy_for_target(url) == "http://corp-proxy:3128"
+    assert clean_policy._target_bypasses_proxy(url) is False
+
+
+def test_no_policy_proxy_means_direct_regardless(clean_policy):
+    # 没配代理时 bypass 逻辑不参与：proxy_for_target 恒为 None
+    clean_policy.set_policy("", 0, 1)
+    assert clean_policy.proxy_for_target("http://8.8.8.8") is None
+    assert clean_policy.proxy_for_target("http://192.168.1.1") is None
+
+
+def test_factories_skip_proxy_for_internal_target(clean_policy, monkeypatch):
+    captured = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _capture)
+    clean_policy.set_policy("http://corp-proxy:3128", 0, 1)
+    with pytest.raises(RuntimeError):
+        clean_policy.proxy_http_client(target_url="http://192.168.150.40:9033/v1")
+    assert "proxy" not in captured          # 内网 → 直连
+    with pytest.raises(RuntimeError):
+        clean_policy.proxy_http_client(target_url="https://api.openai.com/v1")
+    assert captured["proxy"] == "http://corp-proxy:3128"  # 公网 → 走代理
+    # 不传 target 时行为不变（向后兼容既有调用点）
+    captured.clear()
+    with pytest.raises(RuntimeError):
+        clean_policy.proxy_http_client()
+    assert captured["proxy"] == "http://corp-proxy:3128"
+
+
 # ── 路由：读写 + 脱敏 + 缓存重建 ─────────────────────────────────────────────
 
 def test_http_put_then_get_masks_proxy(client, clean_policy):

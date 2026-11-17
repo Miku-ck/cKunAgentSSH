@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import re
@@ -264,17 +265,68 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def proxy_http_client(**kwargs) -> httpx.AsyncClient:
+def proxy_http_client(target_url: Optional[str] = None, **kwargs) -> httpx.AsyncClient:
     """只带代理的 AsyncClient，供把超时作为 SDK 参数传的场合（openai SDK 会按
-    每请求覆盖 httpx 客户端默认超时，所以超时必须由调用方另外传）。"""
-    proxy = proxy_url()
+    每请求覆盖 httpx 客户端默认超时，所以超时必须由调用方另外传）。
+
+    target_url：本次客户端要访问的服务端地址（如 LLM base_url）。目标是
+    回环/内网地址时跳过代理直连 —— 代理是给"出公网"用的，内网端点（如
+    局域网 vLLM 192.168.x.x）走代理会被代理服务器拒绝或超时（实测
+    ConnectTimeout），这类故障排查成本极高，所以在出口统一裁决。
+    """
+    proxy = proxy_for_target(target_url)
     if proxy:
         kwargs["proxy"] = proxy
     return _httpx().AsyncClient(**kwargs)
 
 
-def new_client(default_timeout: Optional[float] = None, **kwargs) -> httpx.AsyncClient:
+# 回环/内网/链路本地地址一律直连。ipaddress.is_private 覆盖 10/8、172.16/12、
+# 192.168/16、127/8、169.254/16、IPv6 UMA/环回等，比手写网段列表诚实。
+_BYPASS_HOSTNAMES = {"localhost"}
+
+
+def _target_bypasses_proxy(target_url: Optional[str]) -> bool:
+    """目标地址是否应绕过代理（回环/内网/链路本地）。
+
+    只认 IP 字面量和 localhost 字面量，不做 DNS 解析 —— 解析既阻塞出口，
+    也会让"域名当前指向内网"这类动态行为变得不可预测；域名型内网主机
+    （如 my-vllm.lan）走 NO_PROXY 约定之外的场景，留给用户显式清空代理。
+    """
+    if not target_url:
+        return False
+    try:
+        host = (urlsplit(target_url).hostname or "").strip().lower()
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host in _BYPASS_HOSTNAMES:
+        return True
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local
+
+
+def proxy_for_target(target_url: Optional[str]) -> Optional[str]:
+    """按目标地址裁决代理：内网/回环直连（返回 None），其余沿用策略。"""
+    proxy = proxy_url()
+    if proxy and _target_bypasses_proxy(target_url):
+        logger.info("目标 %s 为内网/回环地址，跳过代理直连", redact_proxy(target_url))
+        return None
+    return proxy
+
+
+def new_client(default_timeout: Optional[float] = None,
+               target_url: Optional[str] = None, **kwargs) -> httpx.AsyncClient:
     """统一出口的 AsyncClient：代理 + 超时（用户值优先于调用点默认）。
+
+    target_url 已知时传入（如内网 LLM/embedding 端点）：目标是回环/内网
+    地址则跳过代理直连（见 proxy_for_target）。面向公网的调用点（web 搜索、
+    抓取）不必传 —— 那正是代理存在的意义。
 
     follow_redirects 刻意沿用 httpx 默认（False）：调用点原来没开重定向的，
     接上这里也不该突然开始跟随（web_fetch 的 SSRF 守卫就依赖不跟随）。
@@ -285,17 +337,18 @@ def new_client(default_timeout: Optional[float] = None, **kwargs) -> httpx.Async
     to = http_timeout(default_timeout)
     if to is not None:
         kwargs["timeout"] = to
-    proxy = proxy_url()
+    proxy = proxy_for_target(target_url)
     if proxy:
         kwargs["proxy"] = proxy
     return _httpx().AsyncClient(**kwargs)
 
 
-def new_sync_client(default_timeout: Optional[float] = None, **kwargs) -> httpx.Client:
+def new_sync_client(default_timeout: Optional[float] = None,
+                    target_url: Optional[str] = None, **kwargs) -> httpx.Client:
     to = http_timeout(default_timeout)
     if to is not None:
         kwargs["timeout"] = to
-    proxy = proxy_url()
+    proxy = proxy_for_target(target_url)
     if proxy:
         kwargs["proxy"] = proxy
     return _httpx().Client(**kwargs)
