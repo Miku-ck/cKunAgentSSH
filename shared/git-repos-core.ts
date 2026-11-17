@@ -145,14 +145,6 @@ export interface SyncEndpoint {
   error?: string
 }
 
-/** 端点状态 → 圆点色档（返回值直接当样式类名用：ok / behind / diverged / off） */
-export function syncDotClass(ep: SyncEndpoint): 'ok' | 'behind' | 'diverged' | 'off' {
-  if (ep.state === 'ok') return 'ok'
-  if (ep.state === 'behind') return 'behind'
-  if (ep.state === 'diverged') return 'diverged'
-  return 'off'
-}
-
 /** 单仓一次同步探测的结果（electron/git-repos.ts syncProbe 的行结构） */
 export interface SyncProbeResult {
   path: string

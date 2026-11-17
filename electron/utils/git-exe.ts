@@ -57,8 +57,3 @@ export async function resolveGitExecutable(): Promise<string | null> {
   }
   return null
 }
-
-/** 用户手动装了 git 之后强制重探 */
-export function resetGitExecutableCache(): void {
-  cachedExe = null
-}

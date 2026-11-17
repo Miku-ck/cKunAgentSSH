@@ -13,9 +13,6 @@
  * 渲染形态与 ls 一致：有 x 才把 s/t 落进 x 位（保留执行位），无 x 用大写 S/T。
  */
 
-/** 权限位掩码：只取 12 位（含 SUID/SGID/sticky），去掉文件类型位。 */
-export const PERM_BITS_MASK = 0o7777
-
 /** SUID / SGID / sticky 三位的掩码 */
 export const SUID_BIT = 0o4000
 export const SGID_BIT = 0o2000

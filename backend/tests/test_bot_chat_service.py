@@ -226,7 +226,6 @@ def test_get_recent_bot_messages_carries_created_at(base_db):
     单测之前只注入时间戳给 turn_events，所以没暴露这个断链。
     """
     import database as db
-    from datetime import datetime, timedelta, timezone
 
     persona = db.create_bot_persona(name="晚风")
     conv = db.create_bot_conversation(persona_id=persona["id"], channel="local")

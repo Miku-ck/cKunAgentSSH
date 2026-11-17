@@ -89,8 +89,6 @@ export const PROVIDER_LABELS: Record<PrivateTokenProvider, string> = {
   custom: '自定义',
 }
 
-export const BUILTIN_PROVIDERS = Object.keys(PROVIDER_HOSTS) as Array<keyof typeof PROVIDER_HOSTS>
-
 export function defaultPrivateTokens(): GitPrivateToken[] {
   const now = Date.now()
   // 出厂模板：PAT 为空（占位），用户到 UI 里填真实值 —— 源码里不落真实凭据。
@@ -529,10 +527,6 @@ export function buildGitPushSshArgs(): string[] {
 
 export function buildGitPushUnsetSubsectionArgs(subsection: string): string[] {
   return ['config', '--global', '--unset', `url.${subsection}.pushInsteadOf`]
-}
-
-export function buildGitPushSshUnsetArgs(): string[] {
-  return buildGitPushUnsetSubsectionArgs(GIT_SSH_PUSH_SUBSECTION)
 }
 
 /** 是否为本应用写入的 push 规则（两种模式各一个子节） */
