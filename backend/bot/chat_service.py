@@ -185,6 +185,27 @@ class BotChatService:
     # "[11:54]" 开头），且不能每条都标（浪费 token 又干扰语气）。
     HISTORY_TIME_GAP_MINUTES = 30
 
+    # 无正文时的终止原因归一：finish_reason → 可诊断的人话提示。
+    # 借鉴 dsh-pet llm-call.ts 把终止原因翻译成人话，替代笼统的"没内容"。
+    # 本地渠道把 RuntimeError 文案脱敏后推给前端（routes/bot.py:439-444），
+    # QQ/微信只进日志（inbound_pipeline.py:128-131）——所以文案要既友好又能诊断：
+    # 用户看到人话，日志里保留原始 finish_reason。
+    _NO_CONTENT_HINTS = {
+        "length": "刚才那句说到一半超长了，我换个短点的说法。",
+        "content_filter": "这个话题我不太方便接。",
+        "abort": "生成被中断了，你再说一遍？",
+        "aborted": "生成被中断了，你再说一遍？",
+    }
+
+    @classmethod
+    def _no_content_error(cls, finish_reason: str) -> RuntimeError:
+        """按模型流的终止原因生成"无正文"异常（异常类型不变，仍由上游统一兜底）。"""
+        hint = cls._NO_CONTENT_HINTS.get(
+            finish_reason or "", "我这边没生成出内容，你再说一遍？"
+        )
+        logger.warning("模型未返回正文 (finish_reason=%s): %s", finish_reason or "<empty>", hint)
+        return RuntimeError(hint)
+
     @staticmethod
     def _to_llm_message(item: dict, prev_ts: datetime | None = None) -> dict:
         """历史条目转 OpenAI message：仅带图的用户消息构造成多模态数组；其余
@@ -372,6 +393,7 @@ class BotChatService:
 
         parts: list[str] = []
         reasoning_parts: list[str] = []
+        finish_reason = ""
         async for chunk in chat_stream(
             base_url=model["base_url"],
             api_key=model.get("api_key") or "EMPTY",
@@ -391,6 +413,9 @@ class BotChatService:
             # reasoning 只在「人格开了思考 + 本地面」下发：QQ 被动回复是单条纯文本，
             # 无思考展示位；人格没勾思考时，上游即便回了 reasoning chunk 也一律丢掉
             # （既不显示也不落库），否则人格上的思考开关形同虚设。
+            # getattr 兜底：第三方/测试 chunk 对象未必带该字段。
+            if getattr(chunk, "finish_reason", ""):
+                finish_reason = chunk.finish_reason
             if enable_thinking and channel == "local" and chunk.reasoning:
                 reasoning_parts.append(chunk.reasoning)
                 yield "reasoning", chunk.reasoning
@@ -399,7 +424,7 @@ class BotChatService:
                 yield "content", chunk.content
         reply = "".join(parts).strip()
         if not reply:
-            raise RuntimeError("模型未返回可显示的内容")
+            raise self._no_content_error(finish_reason)
 
         # 状态层后处理（P1）：规则管骨架，确定性改写比 prompt 约束可靠。
         # 没精力 → 禁感叹号（放在去 AI 味之前，让清洗看到的是最终标点）。
@@ -584,6 +609,7 @@ class BotChatService:
         from llm_adapter import chat_stream
 
         parts: list[str] = []
+        finish_reason = ""
         async for chunk in chat_stream(
             base_url=model["base_url"],
             api_key=model.get("api_key") or "EMPTY",
@@ -596,11 +622,14 @@ class BotChatService:
             tools=None,
             disable_thinking=True,
         ):
+            # getattr 兜底：第三方/测试 chunk 对象未必带该字段。
+            if getattr(chunk, "finish_reason", ""):
+                finish_reason = chunk.finish_reason
             if chunk.content:
                 parts.append(chunk.content)
         reply = "".join(parts).strip()
         if not reply:
-            raise RuntimeError("模型未返回可显示的内容")
+            raise self._no_content_error(finish_reason)
 
         # 清洗链路与正常回复一致，只是省掉记账：发出去的必须是渠道能直接投递的形态。
         reply = strip_ai_smell(reply)

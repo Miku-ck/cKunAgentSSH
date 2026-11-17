@@ -3,20 +3,24 @@
 > 方案日期：2026-11-16
 > 参照对象：`PC2005-cloud/dsh-pet` v0.4.9（MIT 开源，本地源码直读，证据见 `dsh-pet-chat-rea-report.md`）
 > 目标模块：`backend/bot/chat_service.py` 及链路上下游
-> 性质：方案文档 + 实施记录。**第一批（P0-1 / P1-1 / P1-2）已实施并测试通过**，第二批待评估。每项标明证据（文件:行号）与验证方式。
+> 性质：方案文档 + 实施记录。**第一批（P0-1 / P1-1 / P1-2）与第二批 P1-3 已实施并测试通过**；P2-1 / P2-2 经证据核实后决定不做（理由见附录 C）。每项标明证据（文件:行号）与验证方式。
 
 ---
 
-## 实施状态（2026-11-16）
+## 实施状态（2026-11-17 更新）
 
 | 批次 | 项目 | 状态 | 实际改动 |
 |---|---|---|---|
 | 一 | P0-1 `created_at` 断链 | ✅ 已实施 | `database.py` SELECT 增加 `created_at` 列 |
 | 一 | P1-1 历史时间锚点 | ✅ 已实施 | `chat_service.py` 加 `HISTORY_TIME_GAP_MINUTES=30`、`_to_llm_message(prev_ts)`、历史组装处逐条推进时间戳 |
 | 一 | P1-2 召回超时降级 | ✅ 已实施 | `_memory_note` 用 `asyncio.wait_for(..., 1.5)` 包裹，超时返回空串 |
-| 二 | P1-3 / P2-1 / P2-2 | ⏸ 待评估 | 未改动 |
+| 二 | P1-3 无正文错误归一 | ✅ 已实施 | `chat_service.py` 加 `_NO_CONTENT_HINTS` + `_no_content_error()`；`stream_reply`/`ambient_reply` 收集 `finish_reason`，无正文时给人话提示且日志带原因 |
+| 二 | P2-1 输入端硬限额 | ⛔ 决定不做 | 阈值需真实输入分布支撑、固定值对不同上下文窗口不严谨；`safe_max_tokens` 已按输入自适应封顶输出 |
+| 二 | P2-2 跨模型回落 | ⛔ 决定不做 | 模型按人格绑定，跨模型回落致语气/能力漂移；无实际端点故障需求 |
 
-**测试**：新增 3 个钉子测试（`tests/test_bot_chat_service.py`）；`test_bot_chat_service.py` 9/9 通过、相关回归 63/63 通过、**backend 全量 4213/4213 通过**、`py_compile` 干净。
+**测试**：
+- 第一批：新增 3 个钉子测试；`test_bot_chat_service.py` 9/9、相关回归 63/63、全量 4213/4213 通过。
+- 第二批 P1-3：新增 10 个测试（7 参数化映射 + 3 端到端透传）；`test_bot_chat_service.py` **19/19**、相关回归（state/service/group_ambient/routes）**109/109** 通过、`py_compile` 干净；全量结果见附录 C（含一次环境性失败的说明，非回归）。
 
 ---
 
@@ -249,3 +253,52 @@ if not reply:
 ## 5. 一句话总结
 
 cKunBot 的对话骨架比 dsh-pet 更成熟，**不需要重写**；真正值得做的是：修一个静默 bug（`created_at` 断链）、补两个时间维度的感知（历史时间锚点、召回超时）、以及两处可选的稳健性加固。全部改动合计约 50 行，不动核心管线、不破坏现有的 `scope` 隔离与安全宪章。
+
+---
+
+## 附录 C · 第二批实施结论（2026-11-17）
+
+### C1. P1-3 无正文错误归一 —— 已实施
+
+**动手前的契约核实**（这正是方案要求"先摸清上游异常处理"的答案）：
+
+| 核实项 | 结论 | 证据 |
+|---|---|---|
+| `StreamChunk` 是否带 `finish_reason` | ✅ 已带，无需改适配层 | `llm_adapter.py:154-164` 定义；`llm_adapter.py:371-376` 从 `chunk.choices[0].finish_reason` 透传 |
+| 本地渠道异常怎么处理 | 转成前端可见的 `error` SSE 事件（文案脱敏后推给用户） | `routes/bot.py:439-444` |
+| QQ/微信渠道异常怎么处理 | 统一 `except Exception` → `provider.fallback(failure)` 固定文案，**异常文案只进日志** | `inbound_pipeline.py:128-131`；`qq_manager.py:412-413`、`wechat_manager.py:346-347` |
+
+**结论**：异常类型保持 `RuntimeError` 不变 → 三条渠道的兜底行为完全不动，零回归风险。改动只影响"异常文案内容"与"日志诊断信息"：
+- 本地用户从笼统的"模型未返回可显示的内容"升级为按原因的人话（`length`→"说到一半超长了"、`content_filter`→"不太方便接"、`abort/aborted`→"生成被中断了"、未知→通用兜底）。
+- QQ/微信日志新增 `finish_reason=<值>`，故障可诊断。
+
+**实际改动**（`chat_service.py`）：新增类级 `_NO_CONTENT_HINTS` 映射 + `_no_content_error()` 类方法（内嵌 warn 日志）；`stream_reply`、`ambient_reply` 两处 chunk 循环各用 `getattr(chunk, "finish_reason", "")` 收集原因（getattr 兜底兼容第三方/测试 chunk 对象），无正文时 `raise self._no_content_error(finish_reason)`。
+
+**验证**：新增 10 个测试（7 个参数化映射覆盖 4 种已知原因 + 正常 stop + 空值 + 未知未来值；3 个端到端测试锁住"finish_reason 从 chunk 透传到异常文案"这一前提）。`test_bot_chat_service.py` 19/19、相关回归 109/109、`py_compile` 干净。
+
+### C2. P2-1 输入端硬限额 —— 决定不做
+
+方案原文已标注"可选、除非实际出现上下文溢出否则可不做"。本轮核实时确认两点，使该改动**收益不成立**：
+1. `safe_max_tokens`（`safe_tokens.py:15-60`）已按 prompt 大小用 `estimate_tokens` 估算输入、自适应下调输出预算，并留 1024 token 余量——这正是防 vLLM 400 的机制，输入侧再加一道固定字符阈值属于重复保护。
+2. dsh-pet 的 32768 字符阈值来自其独立模式的请求契约，cKunBot 的历史固定 40 轮且经 `cap_text_tokens` 收敛；在没有真实输入长度分布/溢出报错的前提下设固定阈值，可能误裁正常长对话的关键上下文。
+
+**决定**：暂不实施。若未来真的出现上下文溢出报错，应先取真实输入长度分布再定阈值，且只从最早历史裁、system/memory 永不裁。
+
+### C3. P2-2 跨模型回落 —— 决定不做
+
+cKunBot 模型按人格绑定（`_model_for_persona`），跨模型回落意味着"这个人格此刻用另一个模型说话"，会引入语气漂移、思考能力不一致、成本失控。方案已判定风险大于收益，本轮维持该结论：未出现实际端点故障需求前不引入。
+
+### C4. 一个顺带确认、无需改动的点
+
+dsh-pet 的时间戳踩坑是"标在 assistant 上，模型会照抄成 `[11:54]` 开头"。第一批 P1-1 的实现只标 user、不标 assistant（`chat_service.py:199-202`），已从根源规避该坑，**无需再在 system prompt 加"不要复述时间戳"的防御指令**——避免无谓增加 prompt 长度。
+
+### C5. 全量测试的一次环境性失败（如实记录，非回归）
+
+第二批验证时，`pytest tests/ -q` 全量跑出现 **212 failed / 719 errors / 3573 passed**（与第一批时的 4213/4213 全绿不同）。经定位确认**与 P1-3 改动无关**，依据：
+
+1. **错误类型与分布**：errors 是 `sqlite3.ProgrammingError`/`AttributeError`/`SystemError` 等 fixture setup 错误（非断言失败），分散在 `test_webhook_notify`、`test_wechat_manager`、`test_spawn_subagent_recon`、`test_workflow_*` 等模块——这些文件**均不引用 `chat_service`**。
+2. **单独复现全过**：把报错模块里的测试单独跑（`test_webhook_notify.py::test_no_url_no_request`、`test_spawn_subagent_recon.py::test_空结论按失败上抛`）全部通过；其中前者单测耗时 53 秒，显示单进程启动/清理开销极大。
+3. **改动相关测试全绿**：`test_bot_chat_service.py` 19/19、相关回归 109/109、`py_compile` 干净。
+4. **环境线索**：全量输出末尾出现 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`（沙箱批量删除拦截），且大批量跑时 fixture 间存在全局 DB 连接/状态串扰；第一批同样命令曾全绿，属时序/资源相关的既有测试稳定性问题。
+
+**结论**：本项目全量测试在单进程跑 4000+ 用例时存在环境相关的不稳定性。可靠的功能验证以"改动相关测试 + 相关回归 + 报错模块单独复现"为准，三者均绿。若需稳定的全量基线，建议后续按模块分片跑或引入 pytest-xdist 隔离，而非据此次全量结果判定回归。

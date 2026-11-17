@@ -5,8 +5,9 @@ from bot.chat_service import BotChatService
 
 
 class _Chunk:
-    def __init__(self, content=None, reasoning=None):
+    def __init__(self, content=None, reasoning=None, finish_reason=""):
         self.content, self.reasoning = content, reasoning
+        self.finish_reason = finish_reason
 
 
 @pytest.mark.asyncio
@@ -287,3 +288,56 @@ async def test_memory_recall_times_out_without_blocking(monkeypatch):
 
     assert note == ""
     assert elapsed < 3.0, f"召回超时保护失效，耗时 {elapsed:.1f}s"
+
+
+# ── P1-3：无正文时按 finish_reason 归一提示 ──
+
+@pytest.mark.parametrize("reason,fragment", [
+    ("length", "超长"),
+    ("content_filter", "不太方便接"),
+    ("abort", "被中断"),
+    ("aborted", "被中断"),
+    ("stop", "没生成出内容"),          # 未知/正常终止但无正文 → 通用兜底
+    ("", "没生成出内容"),
+    ("unknown_future_reason", "没生成出内容"),
+])
+def test_no_content_error_maps_finish_reason(reason, fragment):
+    """归一函数把每种终止原因翻译成人话，未知原因回落通用提示。"""
+    err = BotChatService._no_content_error(reason)
+    assert isinstance(err, RuntimeError)
+    assert fragment in str(err)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason,fragment", [
+    ("length", "超长"),
+    ("content_filter", "不太方便接"),
+    ("abort", "被中断"),
+])
+async def test_stream_reply_no_content_carries_finish_reason(monkeypatch, reason, fragment):
+    """端到端：finish_reason 从 chunk 流透传到无正文异常文案。
+
+    这条钉子测试锁住的是"llm_adapter 已透传 finish_reason"这个前提——
+    若上游哪天不再透传，这里会红。异常类型仍是 RuntimeError，上游兜底契约不变。
+    """
+    async def fake_stream(**kw):
+        yield _Chunk(content="", finish_reason=reason)
+
+    monkeypatch.setattr("llm_adapter.chat_stream", fake_stream)
+    monkeypatch.setattr(
+        cs_mod.db, "get_bot_conversation",
+        lambda cid: {"persona": {"name": "n", "reply_style": "moderate",
+                                 "enable_thinking": 0, "personality": "", "background": ""}},
+    )
+    monkeypatch.setattr(
+        BotChatService, "_model_for_persona",
+        lambda self, p: {"base_url": "u", "api_key": "k", "model_id": "m",
+                         "max_tokens": 8192, "temperature": 0.7, "top_p": 0.9},
+    )
+    monkeypatch.setattr(cs_mod.db, "get_recent_bot_messages", lambda cid, n: [])
+    monkeypatch.setattr(cs_mod.db, "add_bot_message", lambda *a, **kw: None)
+    monkeypatch.setattr(cs_mod.memory_mod, "embed_client_for", lambda m: None)
+
+    with pytest.raises(RuntimeError) as ei:
+        [x async for x in BotChatService().stream_reply("c1", "在吗", channel="local")]
+    assert fragment in str(ei.value)
