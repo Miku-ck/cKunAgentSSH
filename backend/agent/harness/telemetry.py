@@ -159,6 +159,10 @@ class SSEAdapter:
         # 按 kind 填充字段（与原 engine.py yield 的 dict 结构保持一致）
         if kind == "state":
             result["state"] = payload.get("state", "")
+            # O5：运行中成本快照（driver 每轮迭代附），前端据此实时显示 token/费用。
+            # done 事件仍带完整快照，这里只是让过程中可见；缺席保持字段缺省。
+            if payload.get("cost"):
+                result["cost"] = payload["cost"]
         elif kind == "content":
             result["content"] = payload.get("content", "")
         elif kind == "reasoning":
@@ -315,4 +319,9 @@ class SSEAdapter:
             result["tool"] = payload.get("tool", "")
             if payload.get("expired"):
                 result["expired"] = True
+        elif kind == "plan_mode_block":
+            # 计划模式拦截：此前只在 _KIND_MAP 里映射了事件名，没有投影分支，
+            # payload 的 tool/reason 全部丢失 → 前端 warning 退化成一句空话。
+            result["tool"] = payload.get("tool", "")
+            result["block_reason"] = payload.get("reason", "")
         return result

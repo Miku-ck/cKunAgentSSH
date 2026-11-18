@@ -341,3 +341,46 @@ async def test_stream_reply_no_content_carries_finish_reason(monkeypatch, reason
     with pytest.raises(RuntimeError) as ei:
         [x async for x in BotChatService().stream_reply("c1", "在吗", channel="local")]
     assert fragment in str(ei.value)
+
+
+def test_memory_search_timeout_is_configurable(base_db):
+    """B6：陪聊记忆召回超时走 app_settings，默认 1.5s，脏值/越界回默认。"""
+    import database as db
+    from bot.chat_service import _memory_search_timeout_s
+
+    assert _memory_search_timeout_s() == 1.5
+    db.set_app_setting("bot.memory_search_timeout_s", "3.5")
+    assert _memory_search_timeout_s() == 3.5
+    db.set_app_setting("bot.memory_search_timeout_s", "999")
+    assert _memory_search_timeout_s() == 1.5, "越界回默认"
+    db.set_app_setting("bot.memory_search_timeout_s", "not-a-number")
+    assert _memory_search_timeout_s() == 1.5, "脏值回默认"
+
+
+def test_bot_llm_usage_is_logged(monkeypatch, caplog):
+    """O2：陪聊 LLM 的 usage 必须可观测——此前三处调用整段丢弃 token 读数。"""
+    import logging
+    from bot.cost_log import record_bot_llm_usage
+
+    with caplog.at_level(logging.INFO, logger="bot.cost_log"):
+        record_bot_llm_usage("p1", "m1", 1200, 300, scene="proactive")
+
+    assert any(
+        "bot.llm.usage" in r.message
+        and "scene=proactive" in r.message
+        and "persona=p1" in r.message
+        and "prompt=1200" in r.message
+        and "completion=300" in r.message
+        for r in caplog.records
+    ), f"未记录结构化 usage: {[r.message for r in caplog.records]}"
+
+
+def test_bot_llm_usage_floor_is_zero(monkeypatch, caplog):
+    """脏读数（负数/None）不得记成负数 token。"""
+    import logging
+    from bot.cost_log import record_bot_llm_usage
+
+    with caplog.at_level(logging.INFO, logger="bot.cost_log"):
+        record_bot_llm_usage("", "", -5, None)
+
+    assert any("prompt=0" in r.message and "completion=0" in r.message for r in caplog.records)

@@ -962,7 +962,7 @@ def _stub_compose(monkeypatch, text="想起你上次说的那个展"):
     """生成路径自己有 E2E 用例覆盖：这里只钉住「探口确实生成了一句话」。"""
     seen = []
 
-    async def fake_compose(persona, state_desc, *, topic=None, channel="local"):
+    async def fake_compose(persona, state_desc, *, topic=None, channel="local", stage=""):
         seen.append((persona["id"], channel, topic))
         return text
 
@@ -1145,7 +1145,7 @@ async def test_compose_builds_the_system_prompt_from_the_persona(base_db, monkey
     monkeypatch.setattr(llm_adapter, "chat_stream", fake_stream)
     persona = db.create_bot_persona(name="晚风", address_user="小林")
 
-    text = await pro._compose(persona, "此刻：想找她说说话", channel="qq")
+    text = await pro._compose(persona, "此刻：想找她说说话", channel="qq", stage="陌生")
 
     assert text == "在吗"
     assert seen["model_id"] == "m1"
@@ -1153,6 +1153,7 @@ async def test_compose_builds_the_system_prompt_from_the_persona(base_db, monkey
     assert "晚风" in system and "小林" in system, "人格与称呼得真进 prompt"
     assert "禁止表格" in system, "QQ 渠道口径：发出去是纯文本"
     assert "此刻：想找她说说话" in system, "状态快照也要进去"
+    assert "你们的关系（陌生）" in system, "主动开口也带关系阶段分寸（B5）"
 
 
 @pytest.mark.asyncio
@@ -1465,3 +1466,36 @@ async def test_probe_marks_the_plan_as_asked(base_db, monkeypatch):
     finally:
         conn.close()
     assert state == "asked"
+
+
+@pytest.mark.asyncio
+async def test_proactive_outbound_is_sanitized(base_db, monkeypatch):
+    """主动消息必须过与被动回复相同的出站清洗，敏感信息不得推送到 IM。
+
+    B1 回归：主动路径曾绕过 strip_sensitive_lines，用户口述的手机号/口令
+    会被原样推到 QQ/微信。这里桩生成层返回含敏感行的文本，断言真正投递
+    出去的文本与 probe 回显都不含敏感内容。
+    """
+    from bot.character import has_sensitive
+
+    persona, conv = _persona_conv(channel="qq", external_id="c2c:user-1")
+    target = _qq_target(persona, conv, external_id="c2c:user-1")
+    scheduler = pro.ProactiveScheduler()
+
+    leaky = "在吗，想和你说件事\n我的手机号是 13812345678，记一下"
+
+    async def fake_compose(*_a, **_kw):
+        return leaky
+
+    calls = _stub_sender(monkeypatch, [("ok", "")])
+    monkeypatch.setattr(pro, "_compose", fake_compose)
+
+    result = await scheduler.probe(target)
+
+    assert result["action"] == "push"
+    # 真正投递出去的文本必须已经过敏感行兜底。
+    assert calls, "应当有一次真实投递"
+    sent_text = calls[0][1]
+    assert not has_sensitive(sent_text), f"投递文本仍含敏感信息: {sent_text}"
+    # 回显与实际投递同源，不能屏幕上是原文、落库是清洗后的。
+    assert result["text"] == sent_text

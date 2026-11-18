@@ -644,12 +644,18 @@ class Driver:
         # ── OBSERVING → THINK ──
         await ctx.transition(State.OBSERVING, event="continue")
         await ctx.transition(State.THINKING, event="continue")
+        # O5：每轮迭代结束附上成本快照，前端才能在运行中显示 token/费用，
+        # 而不是等 done 事件才一次性出现。snapshot 是纯内存计算，无 IO 开销。
+        _live_cost = (
+            harness.cost_tracker.snapshot(iterations=iteration + 1).to_dict()
+            if harness.cost_tracker else {}
+        )
         yield TraceEvent(
             kind="state",
             source="driver",
             run_id=ctx.run_id,
             iteration=iteration + 1,
-            payload={"state": "thinking"},
+            payload={"state": "thinking", "cost": _live_cost},
         )
 
     async def _execute_serial_call(

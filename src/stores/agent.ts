@@ -17,7 +17,7 @@ import { StreamingThinkScrubber } from '@/utils/think-scrubber'
 import { useToastStore } from './toast'
 import { useAgentDeliver } from '@/composables/useAgentDeliver'
 import type { GrantScope } from '@/utils/approval-scopes'
-import { PERMISSION_MODE_DEFAULT, type PermissionModeKey } from '@/utils/run-modes'
+import { type PermissionModeKey } from '@/utils/run-modes'
 import { isRunTerminalState } from '@/utils/agent-run-status'
 
 interface ToolCallEntry {
@@ -181,6 +181,12 @@ export const useAgentStore = defineStore('agent', () => {
   const currentConversationId = ref('')
   // H14: 意图识别结果（用于规划列表展示）
   const intentionInfo = ref<AgentIntentionInfo | null>(null)
+  /** 动态预算扩展记录（budget_extended 事件）：用户看到的执行步数上限实际被抬高，
+   *  界面据此说明，避免"说好 20 步却跑了 30 步"的预期落差。 */
+  const budgetExtension = ref<{ initial: number; extendedTo: number; added: number } | null>(null)
+  /** 最近一次反思请求（reflection_request 事件）：run 结束触发反思的信号，
+   *  不弹提示打扰用户，仅留档供轨迹面板按需展示。 */
+  const lastReflection = ref<{ finalState: string; iterations: number; toolCalls: number } | null>(null)
   /** 运维专家建议（非阻塞 chip）：后端 expert_suggestion 事件回填，用户切换/忽略后清空 */
   const expertSuggestion = ref<{ slug: string; name: string; reason: string; task: string } | null>(null)
   // 澄清向导状态 — clarification_needed 事件触发时填充，ClarifyingWizard 组件据此渲染
@@ -208,23 +214,6 @@ export const useAgentStore = defineStore('agent', () => {
    * 与 snapshot 的 duration 同源同一格，两处不会量出两个时长。
    */
   const runStartedAt = ref(0)
-  /**
-   * 本次 run 的指令原文（runAgent 的 task 入参）。run-head 要显示它、run 标签
-   * 标题要摘要它，而这两个地方都不能去"当前会话的最后一条用户消息"里捞：
-   * 那条捞法在用户运行中切了会话之后就指向另一个会话（M-19 修的就是这类串台）。
-   * 与 runStartedAt 同性质 —— 按 run 覆写，_reset 不碰它（runAgent 紧跟着就写新值）。
-   */
-  const lastTask = ref('')
-  /** 本次 run 绑定的终端会话 id（runAgent 的 sshSessionId 入参）。
-   *  与 lastTask 同一个理由：run-head 的「目标主机」不能读"此刻的活动会话"，
-   *  运行中切了会话就会把主机 A 的 run 标成主机 B —— 用户据此批准的就是错的目标。 */
-  const lastSshSessionId = ref('')
-  /** 本次 run 的归因两格：发起那一刻实际发出去的值，run-head 只读它们。
-   *  与 lastTask 同一个理由 —— 读"设置面板里的当前选择"会在运行中改设置时把历史
-   *  改写：审批档从「手动」显示成「自动」，用户据此以为这一轮是模型代判跑完的。
-   *  审批档的缺省取 PERMISSION_MODE_DEFAULT，与请求体同一口径，不另抄一份 'normal'。 */
-  const lastModelId = ref('')
-  const lastPermissionMode = ref<PermissionModeKey>(PERMISSION_MODE_DEFAULT)
 
   // 可见终端执行模式：交付编排器（模块级单例，跨组件共享）
   const agentDeliver = useAgentDeliver()
@@ -330,10 +319,6 @@ export const useAgentStore = defineStore('agent', () => {
     _reset()
 
     runStartedAt.value = Date.now()
-    lastTask.value = options.task
-    lastSshSessionId.value = options.sshSessionId || ''
-    lastModelId.value = options.modelId || ''
-    lastPermissionMode.value = options.permissionMode ?? PERMISSION_MODE_DEFAULT
 
     status.value = 'running'
     currentState.value = 'thinking'
@@ -470,6 +455,8 @@ export const useAgentStore = defineStore('agent', () => {
     lastRunId.value = ''
     currentConversationId.value = ''
     intentionInfo.value = null
+    budgetExtension.value = null
+    lastReflection.value = null
     clarificationWizard.value = null
     expertSuggestion.value = null
     // 清理所有 pending 的向导关闭定时器，避免组件卸载后 timer 仍触发回调
@@ -491,6 +478,8 @@ export const useAgentStore = defineStore('agent', () => {
     warnings.value = []
     errorMessage.value = ''
     intentionInfo.value = null
+    budgetExtension.value = null
+    lastReflection.value = null
     humanHelpRequests.value = []
     permissionRequests.value = []
     clarificationWizard.value = null
@@ -626,6 +615,9 @@ export const useAgentStore = defineStore('agent', () => {
         if (event.iteration !== undefined) iteration.value = event.iteration
         // 问题 1/4：实时捕获当前 run_id（SSE 全事件透传），供授权键控与中止清理使用
         if (event.run_id) lastRunId.value = event.run_id
+        // O5：运行中成本快照（后端每轮迭代附在 state 事件上），实时更新面板显示。
+        // 仅覆盖已提供的字段，done 事件的完整快照仍会再次写入。
+        if (event.cost) costInfo.value = event.cost
         break
 
       case 'content':
@@ -901,6 +893,43 @@ export const useAgentStore = defineStore('agent', () => {
         }
         break
 
+      case 'budget_extended':
+        // 动态预算扩展：用户看到的执行步数上限被后端抬高，同步 totalIterations
+        // 并留一条 warning 说明，避免"说好 20 步却跑了 30 步"的预期落差。
+        if (event.extended_to !== undefined) {
+          totalIterations.value = event.extended_to
+          budgetExtension.value = {
+            initial: event.initial ?? 0,
+            extendedTo: event.extended_to,
+            added: event.added ?? 0,
+          }
+          if (event.added && event.added > 0) {
+            warnings.value.push(
+              `执行预算已从 ${event.initial ?? 0} 步扩展到 ${event.extended_to} 步（任务复杂度上调）`
+            )
+          }
+        }
+        break
+
+      case 'plan_mode_block':
+        // 计划模式下写操作被拦：后端只落 trace，前端此前静默丢弃。转成 warning
+        // 让用户看到"为什么这条命令没执行"，而不是以为 agent 卡住了。
+        warnings.value.push(
+          `计划模式下拦截了写操作${event.tool ? `（${event.tool}）` : ''}` +
+          (event.block_reason ? `：${event.block_reason}` : '')
+        )
+        break
+
+      case 'reflection_request':
+        // 反思触发信号：后端路由层据此跑事后反思，前端不弹提示打扰用户，
+        // 仅留档供轨迹面板按需展示。此前该事件静默丢弃（sse.ts 已声明类型）。
+        lastReflection.value = {
+          finalState: event.final_state || '',
+          iterations: event.iterations ?? 0,
+          toolCalls: event.tool_calls_count ?? 0,
+        }
+        break
+
       case 'clarification_needed': {
         // 澄清向导触发：后端 PRE_TOOL_CALL 拦截器发现意图不明的工具调用（如 rm -rf *）
         // 一次推送全部步骤 + 当前步；前端据此弹出卡片组
@@ -1024,12 +1053,7 @@ export const useAgentStore = defineStore('agent', () => {
     content,
     reasoning,
     runStartedAt,
-    lastTask,
-    lastSshSessionId,
-    lastModelId,
-    lastPermissionMode,
-    // 步号两项此前没导出：只有 snapshot() 这个一次性出口用得上，而 run-head 要
-    // 在运行中持续显示「第 n 步」
+    // 步号两项由 snapshot() 固化到历史轨迹，也在运行中持续更新供面板显示
     iteration,
     totalIterations,
     toolCalls,
@@ -1041,6 +1065,8 @@ export const useAgentStore = defineStore('agent', () => {
     lastRunId,
     currentConversationId,
     intentionInfo,
+    budgetExtension,
+    lastReflection,
     clarificationWizard,
     expertSuggestion,
     awaitingClarification,

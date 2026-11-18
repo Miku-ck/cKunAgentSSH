@@ -3,6 +3,11 @@
 > 评估范围：cKunAgentSSH 当前主干已实现的全部 AI 功能。
 > 评估维度：核心用途、主要模块与调用链路、模型/服务依赖、实现完整度、局限与风险、优化建议。
 > 评估方式：基于对 `backend/agent/**`、`backend/bot/**`、`backend/routes/**`、`src/stores/**`、`src/api/**` 等代码的实读核实，非文档转述。
+>
+> **修订说明（2026-11-18）**：本报告原基线为 2026-11-14。以下四条结论已随代码演进失效，本次就地修正并标注「（已修复）」：
+> ① 多模态视觉输入（原 R8）已实现；② 密钥明文落库（原 R1/P0-1）已改 DPAPI+keyring 信封；
+> ③ 无故障回退链（原 R7/P1-6）已实现备用模型切换；④ `supports_tool_calling`（原 R9）已被 driver 真实消费。
+> 风险表（§5）保留原始条目并追加现状栏，以留存评估演进轨迹，勿据旧结论判断当前代码。
 
 ---
 
@@ -16,7 +21,7 @@
 | cKunBot（陪聊机器人） | 独立人格的陪伴聊天，多渠道接入，不执行任何运维操作 | backend/bot/ 22 文件约 5850 行 | 完整，含设计性局限 |
 | 前端集成与轻量端点 | 双 store 执行态管理 + 4 个无状态轻量推理端点 + 跨页 AI 入口 | ssh-ai.ts 965 行 + agent.ts 1067 行 | 完整，仅 1 处显式占位 |
 
-**整体结论（前置）**：核心 AI 链路工程化程度高——拦截器链纪律一致、fail-closed 原则贯穿审批/审计/桥接/记忆各层、测试密度大（backend/tests/ 238 个文件，权限安全类 20+）。达到可发布水平。主要风险不在功能缺失，而集中在两处：**密钥明文落库（安全）**与**对第三方 SDK/平台协议的运行期 hack（稳定性）**。
+**整体结论（前置）**：核心 AI 链路工程化程度高——拦截器链纪律一致、fail-closed 原则贯穿审批/审计/桥接/记忆各层、测试密度大（backend/tests/ 238 个文件，权限安全类 20+）。达到可发布水平。主要风险不在功能缺失，而集中在两处：**对第三方 SDK/平台协议的运行期 hack（稳定性）**与**远程命令中止语义不完整（安全边界）**；原列的「密钥明文落库」已于 2026-11-18 前修复（见修订说明）。
 
 ---
 
@@ -94,7 +99,7 @@ POST /agent/run (routes/agent.py:698, SSE)
 | 降级策略 | BadRequestError 三路重试：去 tools（纯文本）→ 去 extra_body → 抛出 |
 | embedding | 同一模型配置派生的 `/v1/embeddings` 客户端；不可用时静默降级 FTS-only |
 | 向量存储 | sqlite-vec 按连接加速，不可用回退 Python 余弦全量扫描 |
-| 视觉 | **无多模态视觉消费**（ReadImage 工具是远程图片查看，非多模态输入） |
+| 视觉 | **已支持多模态视觉输入**（已修复 R8）：`harness/llm_client.py::_attach_images_to_messages` 在 LLM 请求边界把 image_url 并入首条 user 消息，不污染持久态；不支持视觉的端点有降级提示 |
 
 ### 2.4 实现完整度
 
@@ -102,7 +107,7 @@ POST /agent/run (routes/agent.py:698, SSE)
 
 - 全库检索 TODO/FIXME/NotImplemented/占位 后确认：核心 AI 链路无未完成占位，命中的均为设计说明或 SQL 占位符绑定。
 - 真实缺口（代码内明示）：
-  1. `db/_secrets.py:8` —— 非 Windows 平台密钥明文落库，唯一真 TODO（接系统凭据库）。
+  1. ~~`db/_secrets.py:8` —— 非 Windows 平台密钥明文落库，唯一真 TODO（接系统凭据库）。~~ **（已修复）** 现为 DPAPI（Windows）/ keyring（POSIX）凭据信封，写入侧 fail-closed，见 `backend/db/_secrets.py`。
   2. `tools/builtin/ops_common.py:132` —— bridge 缺 kill 通道，取消运行时远程命令可能继续执行（注释明示待协议补齐）。
   3. `agent/plugins/manager.py:9` —— MCP 插件进程树兜底（Windows Job Object 式）未实现。
   4. `tools/builtin/ops_schedule.py` —— cron month 字段仅支持 `*`，按月指定显式拒绝（fail-fast 设计，非静默）。
@@ -213,7 +218,7 @@ POST /agent/run (routes/agent.py:698, SSE)
 **评级：完整，1 处显式占位。**
 
 - ＋菜单云端占位项（`HomeComposer.vue:1794`）渲染为禁用态并标注「未接入」，有配套测试——前端唯一显式未接线功能。
-- 模型能力三标记（supports_thinking/image/tool_calling）已退化为只读徽标：写侧勾选已撤、后端三列无消费者——属「半退役」状态而非占位。
+- 模型能力标记的消费者现状（修订 2026-11-18）：`supports_tool_calling` 已被 `harness/driver.py:93,338` 真实消费（无该能力时物理禁工具），原「三列均无消费者」结论失效；`supports_thinking` 经 thinking 预算链消费；`provider` 列作展示/回传字段保留于 ModelsPanel。
 - 全库 `src/**` 无散落 TODO/FIXME。
 
 ---
@@ -249,7 +254,7 @@ POST /agent/run (routes/agent.py:698, SSE)
 
 | # | 风险 | 位置 | 影响 |
 | --- | --- | --- | --- |
-| R1 | 非 Windows 平台 API 密钥明文落库 | `db/_secrets.py:8`（唯一真 TODO） | 密钥泄露面扩大；Windows 已有 DPAPI 保护，但发布目标含 POSIX 时为硬伤 |
+| ~~R1~~ | ~~非 Windows 平台 API 密钥明文落库~~ **（已修复 2026-11-18）** | `backend/db/_secrets.py`（DPAPI + keyring 信封，写入 fail-closed） | 原结论已失效：非 Windows 走系统凭据库，库文件不出现密钥明文 |
 | R2 | bridge 缺 kill/取消通道 | `ops_common.py:132` 注释明示 | 用户中止 run 后，已下发的远程命令可能继续执行——对「危险操作审批后执行」的场景，中止语义不完整 |
 | R3 | auto 审批模式的 LLM 代判误判面 | `reins/auto_approve.py` | 代审仅一次，误判放行中等风险不可逆操作的可能性存在；已用「裁不过照旧弹卡」兜底，但误放行方向无二次校验 |
 
@@ -260,14 +265,14 @@ POST /agent/run (routes/agent.py:698, SSE)
 | R4 | botpy 运行期 parser 补丁 + 绕 SDK 直调 | `qq_manager.py` | SDK 升级（改 parsers 结构 / payload 行为）会静默破坏群消息与主动消息 |
 | R5 | 主动消息失败分类靠异常文案匹配 | `qq_channel.classify_proactive_error()` | 平台改异常文案，寄存/重试分类失准，可能错发或漏寄存 |
 | R6 | ambient 群环境消息不落库 | `group_ambient.py` | 重启丢失上下文，群内连续性中断 |
-| R7 | 单模型依赖，无故障回退链 | `llm_adapter.py` / 默认模型回退链 | 默认端点宕机即整个 AI 不可用（明确拒绝而非静默换用是设计选择，但缺少可选的备用端点机制） |
+| ~~R7~~ | ~~单模型依赖，无故障回退链~~ **（已修复 2026-11-18）** | `harness/harness.py::_make_fallback_switch` + `stirrups.py::call_llm` | 原结论已失效：TRANSIENT 错误耗尽重试后自动切备用模型（每 run 一次），切前迁移 token/chunk 回调并告警；FATAL 不切 |
 
 ### 低（能力边界 / 遗留）
 
 | # | 风险 | 位置 | 影响 |
 | --- | --- | --- | --- |
-| R8 | 无视觉多模态消费 | llm_adapter / harness 无 image_url | ReadImage 拿到的远程图片无法作为模型输入，图片排障场景缺失 |
-| R9 | 能力三标记无消费者 | db 列 + ModelsPanel 只读徽标 | 半退役状态：占存储、误导配置预期 |
+| ~~R8~~ | ~~无视觉多模态消费~~ **（已修复 2026-11-18）** | `harness/llm_client.py::_attach_images_to_messages`（`harness.assemble` 注入 image_url） | 原结论已失效：图片在 LLM 请求边界并入首条 user 消息，不污染持久态；不支持的端点有中文降级提示 |
+| ~~R9~~ | 能力标记无消费者 **（部分修复 2026-11-18）** | `db 列 + ModelsPanel 徽标` + `harness/driver.py:93,338` | `supports_tool_calling` 已被 driver 真实消费（无该能力时物理禁工具），原结论对此项已失效；`provider` 列仍仅作展示/回传字段，`supports_image` 消费面待核 |
 | R10 | 七轴状态人格级而非会话级 | `bot/state.py` | 群聊场景 fatigue_care 直接跳过，状态对多会话场景表达力不足 |
 | R11 | QQ 主动消息 800 字截断 / 微信发图依赖公网 URL | bot 渠道层 | 长内容与富媒体体验受限（均有回落路径，非阻断） |
 | R12 | cron month 仅支持 `*` | `ops_schedule.py` | 按月计划任务无法表达（显式拒绝，无静默错误） |
@@ -278,19 +283,19 @@ POST /agent/run (routes/agent.py:698, SSE)
 
 ### P0（安全正确性，建议尽快）
 
-1. **密钥接系统凭据库**（修 R1）：Windows 用 DPAPI（已有），POSIX 接 libsecret/Keychain；不可用时显式拒绝保存而非明文落库，保持 fail-closed 纪律。改动面小（_secrets.py 单点），收益高。
+1. ~~**密钥接系统凭据库**（修 R1）~~ **（已完成 2026-11-18）**：Windows DPAPI + POSIX keyring 凭据信封已落地，写入侧 fail-closed。
 2. **bridge 协议补 kill/取消通道**（修 R2）：在 relay 协议中增加 cancel 帧，Electron 侧对在途 ssh 命令执行 `channel.close()`/进程终止；至少对 dangerous 命令保证中止语义完整。这是审批体系可信度的组成部分。
 
 ### P1（稳定性与体验，下一迭代）
 
 3. **主动消息错误分类改结构化**（修 R5）：QQ 返回体含业务码时解析业务码，文案匹配降级为兜底；为 R4 的 SDK 升级脆弱性补一组「升级前冒烟测试」。
 4. **ambient 落库持久化**（修 R6）：群环境消息按现有幂等键写入 bot_messages 或独立表，重启可续。
-5. **模型能力标记二选一**（修 R9）：要么让 provider/run 链真正消费三标记（如无 tool_calling 能力时预降级无工具模式），要么删列删徽标，消除半退役状态。
-6. **可选备用端点回退**（修 R7，需产品决策）：在模型配置中支持「备用模型」指针，主端点连通性失败且用户开启回退时自动切换并标注——保持「缺默认模型明确拒绝」的现有语义不变。
+5. **模型能力标记收敛**（修 R9 剩余部分）：`supports_tool_calling` 已消费（本条对该项已完成）；`provider` 列明确为展示字段可保留，`supports_image` 的消费面需核实后二选一——接入或删列，消除半退役状态。
+6. ~~**可选备用端点回退**（修 R7，需产品决策）~~ **（已完成 2026-11-18）**：`harness.py::_make_fallback_switch` 已实现按 run 配置的备用模型切换，仅 TRANSIENT 触发、每 run 一次，保留「缺默认模型明确拒绝」语义。
 
 ### P2（能力扩展，择机）
 
-7. **视觉多模态接入**（修 R8）：llm_adapter 增加 image_url 消息构造，ReadImage 结果在模型标记 supports_image 时作为多模态输入回传；无该能力的模型维持现状。
+7. ~~**视觉多模态接入**（修 R8）~~ **（已完成 2026-11-18）**：`harness/llm_client.py` 在请求边界构造 image_url 内容块，无视觉能力的模型给出降级提示。
 8. **＋菜单云端项接线决策**：接入真实功能或移除占位，避免长期禁用态积灰。
 9. **cron month 支持**（修 R12）：放宽 `ops_schedule.py` 校验并补 schedule_engine 对应解析。
 10. **七轴状态按会话维度细化**（修 R10）：将 last_event_kind 等短期轴下移到会话级，解除群聊 fatigue_care 的跳过逻辑。
@@ -301,9 +306,9 @@ POST /agent/run (routes/agent.py:698, SSE)
 
 - **成熟度**：三套 AI 子系统均已完整落地且无占位，核心链路（ReAct 循环 + 17 拦截器 + 审批/审计/记忆）工程化程度显著高于同类项目平均水平；238 个测试文件、fail-closed 纪律与单一事实源守卫是可信度的主要来源。
 - **最值得肯定的设计**：审批与交付分离、授权三范围 + 主机限域、记忆统一预算分账、bot 状态轴零模型调用的确定性推导。
-- **最大的两个风险**：密钥明文落库（R1）与远程命令中止语义不完整（R2）——均属安全边界，建议按 P0 处理。
+- **当前最大的两个风险**：远程命令中止语义不完整（R2）与 auto 代判误判面（R3）——均属安全边界，建议按 P0 处理。原列的「密钥明文落库」（R1）已修复。
 - **主要的外部脆弱点**：QQ SDK 运行期补丁与异常文案匹配（R4/R5），升级前需跑渠道冒烟测试。
 
 ---
 
-*评估基线：2026-11-14 主干代码。行号引用随代码演进可能漂移，函数名与文件为准。*
+*评估基线：2026-11-14 主干代码，2026-11-18 就地修订四条已失效结论（R1/R7/R8/R9，见文首修订说明）。行号引用随代码演进可能漂移，函数名与文件为准。*

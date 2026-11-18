@@ -290,10 +290,29 @@ export async function streamBotChat(
     else if (event.type === 'error') failure = event.detail || '回复生成失败'
     else if (event.type === 'done' && event.message) result = event.message
   }
+  // 连接停滞看门狗：后端每 15s 推一行 ': heartbeat'（routes/bot.py 与 /agent/run 同构）。
+  // 休眠唤醒 / NAT 静默丢流时挂起的 read 永不返回，纯循环判定无法自救 —— 独立定时器
+  // 巡检，90s 收不到任何字节就 cancel 把 read 以 done 解开，把决定权交还给用户。
+  // 与 createConnectTimeout 分工：后者只管 fetch 返回 headers 之前，返回后已 clear。
+  const STALL_TIMEOUT_MS = 90_000
+  const STALL_CHECK_INTERVAL_MS = 5_000
+  let lastActivityAt = Date.now()
+  let stalled = false
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastActivityAt < STALL_TIMEOUT_MS) return
+    clearInterval(watchdog)
+    stalled = true
+    reader.cancel().catch(() => { /* already closed */ })
+  }, STALL_CHECK_INTERVAL_MS)
   try {
     while (true) {
       const { done, value } = await reader.read()
+      // 看门狗 cancel 会把挂起 read 以 done 解开：必须先识别停滞，否则落进
+      // 下方「回复中断」分支，专属文案被吞。
+      if (stalled) throw new Error('连接停滞，请检查网络后重试')
       if (done) break
+      // 任何字节到达都算活动，': heartbeat' 注释行同样刷新（后端存活信号）。
+      lastActivityAt = Date.now()
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
@@ -301,6 +320,7 @@ export async function streamBotChat(
     }
     buffer.split('\n').forEach(consume)
   } finally {
+    clearInterval(watchdog)
     reader.releaseLock()
   }
   if (failure) throw new Error(failure)

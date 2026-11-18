@@ -6,7 +6,27 @@ QQ 与微信都不渲染 Markdown，也有各自的单条长度上限；差异�
 
 import re
 
-from bot.voice import MAX_REPLY_BUBBLES, split_reply_bubbles
+from bot import stickers as stickers_mod
+from bot.character import strip_sensitive_lines
+from bot.expression_dna import (
+    MAX_REPLY_BUBBLES,
+    split_reply_bubbles,
+    strip_ai_smell,
+)
+
+
+def sanitize_outbound(
+    text: str, *, sticker_enabled: bool = True, fallback: str = "……"
+) -> str:
+    """所有出站文本必经的兜底清洗：去 AI 味 → 敏感行兜底 → 表情包收口。
+
+    被动回复（chat_service）与主动消息（proactive）共用这一份，避免主动路径
+    绕过敏感行兜底，把用户口述的证件号/密钥原样推到 QQ/微信。状态相关的
+    strip_exclaim / probe_line 与群聊 shape_group_reply 由调用方按需追加。
+    """
+    reply = strip_ai_smell(text)
+    reply = strip_sensitive_lines(reply)
+    return stickers_mod.normalize(reply, enabled=sticker_enabled) or fallback
 
 _MARKDOWN_PATTERNS = (
     (re.compile(r"\*\*([^*\n]+)\*\*"), r"\1"),

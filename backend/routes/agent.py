@@ -573,6 +573,39 @@ class AgentRunRequest(BaseModel):
 _in_flight_runs: dict[str, str] = {}
 _in_flight_lock = asyncio.Lock()
 
+# O1：全局并发闸 —— 上面的 _in_flight_runs 只保证「同会话单 run」，多会话并发
+# 仍能同时打爆一个 LLM 端点。这里加进程级并发上限：拿不到槽位立即 429（不排队），
+# 因为 SSE 排队期间前端停滞看门狗（90s）会误判黑洞连接；单用户桌面场景 4 个
+# 并发已很宽裕，触发即明确告知重试，比静默排队更可预期。
+_MAX_CONCURRENT_AGENT_RUNS_DEFAULT = 4
+_global_run_count = 0
+
+
+def _agent_run_concurrency_limit() -> int:
+    """并发上限：app_settings 可配，脏值/越界回默认 4。"""
+    try:
+        raw = db.get_app_setting("agent.max_concurrent_runs")
+        value = int(raw) if raw is not None and str(raw).strip() else _MAX_CONCURRENT_AGENT_RUNS_DEFAULT
+    except Exception:
+        return _MAX_CONCURRENT_AGENT_RUNS_DEFAULT
+    return value if 1 <= value <= 32 else _MAX_CONCURRENT_AGENT_RUNS_DEFAULT
+
+
+async def _acquire_global_run_slot() -> bool:
+    """原子抢占一个全局 run 槽位；满则返回 False（调用方回 429）。"""
+    global _global_run_count
+    async with _in_flight_lock:
+        if _global_run_count >= _agent_run_concurrency_limit():
+            return False
+        _global_run_count += 1
+        return True
+
+
+def _release_global_run_slot_sync() -> None:
+    """释放全局 run 槽位（同步，供取消免疫的清理段调用）。"""
+    global _global_run_count
+    _global_run_count = max(0, _global_run_count - 1)
+
 
 async def _acquire_run_slot(conversation_id: str, run_id: str) -> Optional[str]:
     """原子地为 conversation 占位。返回 None 表示成功占位；返回已有 run_id 表示冲突。
@@ -1175,10 +1208,19 @@ async def agent_run(req: AgentRunRequest, request: Request):
     if not await asyncio.to_thread(db.get_conversation, req.conversation_id):
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    # O1：全局并发闸 —— 拿不到槽位立即 429（不排队，避免前端 90s 看门狗误判
+    # 黑洞连接）。前端 sse.ts 对非 200 走 onError(detail)，显示这条中文提示。
+    if not await _acquire_global_run_slot():
+        raise HTTPException(
+            status_code=429,
+            detail="同时运行的 Agent 任务过多，请等待当前任务结束后重试",
+        )
+
     # C-review MINOR-12：同会话并发防护 — 原子 check-and-set，冲突返回 409
     # （前端 streamAgentRun 对非 200 走 onError(detail)，用户可见提示）
     _conflict = await _acquire_run_slot(req.conversation_id, run_id)
     if _conflict:
+        _release_global_run_slot_sync()
         raise HTTPException(
             status_code=409,
             detail=f"该会话已有运行中的 Agent 任务（run_id={_conflict}），请等待其结束或终止后再试",
@@ -1202,6 +1244,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
         video_note = await _load_run_video_note(req.videos, req.conversation_id)
     except BaseException:
         _release_run_slot_sync(req.conversation_id, run_id)
+        _release_global_run_slot_sync()
         _forget_run_environment(run_id)
         raise
     effective_task = req.task + video_note
@@ -1262,6 +1305,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
     except Exception:
         # 占位已得但落库失败 → 释放占位，避免该会话被永久锁死
         _release_run_slot_sync(req.conversation_id, run_id)
+        _release_global_run_slot_sync()
         _forget_run_environment(run_id)
         raise
 
@@ -1774,6 +1818,9 @@ async def agent_run(req: AgentRunRequest, request: Request):
             # 占位最先释放（取消也丢不掉）：否则 run 在 DB 里已 completed，
             # 内存占位残留会让新请求永远报"已有运行中的 Agent 任务"。
             _release_run_slot_sync(req.conversation_id, run_id)
+            # O1：全局并发槽与会话槽同生命周期，二者必须在同一取消免疫段释放，
+            # 否则槽位泄漏会让后续所有 run 永远吃 429。
+            _release_global_run_slot_sync()
             # 环境判定登记与 once 授权池同生命周期：run 结束后不再被授权端点读到，
             # 不清理就会随每次 run 无界增长（与环境无关的旧 run 永远查不到）
             _forget_run_environment(run_id)

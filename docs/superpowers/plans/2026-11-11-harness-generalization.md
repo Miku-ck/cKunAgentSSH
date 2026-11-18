@@ -1,5 +1,9 @@
 # 通用 Harness 化（第一刀：身份通用化）Implementation Plan
 
+> **执行状态（2026-11-18 核对）**：本刀主体已落地并进入主干，但下方 60 个过程复选框未逐项勾选——它们含大量「跑守卫确认红 / commit」等一次性过程步骤，事后无法逐一举证，故保留未勾选原样以免伪造执行记录。
+> 已核实落地的关键成果：`build_identity_section` 身份段注入、general/general_ops/research/copywriting 四内置专家、`expert_suggestion` SSE 事件（含测试）、`SCHEMA_VERSION` 升级与 DB 迁移、headless/schedule/runbook 的 `resolve_expert` 接线。
+> 若需逐项验收，以 spec §10 对照表和现存测试为准，而非复选框状态。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把产品默认身份从「运维智能体」改为「通用 harness 助手」，运维降级为四个内置专家之一（general / general_ops / research / copywriting），运维零回归。

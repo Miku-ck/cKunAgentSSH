@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from bot.replies import FAILURE_REPLY, TIMEOUT_REPLY
 from bot.text_format import split_bubbles_to_parts, strip_markdown
-from bot.voice import MAX_REPLY_BUBBLES
+from bot.expression_dna import MAX_REPLY_BUBBLES
 
 logger = logging.getLogger(__name__)
 

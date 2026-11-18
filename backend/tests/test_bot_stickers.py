@@ -8,7 +8,7 @@ import fastapi
 from fastapi.testclient import TestClient
 
 from bot import stickers
-from bot.voice import DEFAULT_DNA, DNA_OPTIONS, compile_dna, normalize_dna, split_reply_bubbles
+from bot.expression_dna import DEFAULT_DNA, DNA_OPTIONS, compile_dna, normalize_dna, split_reply_bubbles
 
 
 def test_manifest_files_exist_and_keys_are_unique():

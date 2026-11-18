@@ -17,6 +17,8 @@ from bot import memory as memory_mod
 from bot import relation as relation_mod
 from bot import state as state_mod
 from bot import stickers as stickers_mod
+from bot.cost_log import record_bot_llm_usage
+from bot.text_format import sanitize_outbound
 from bot.timeutil import parse_ts
 from bot.character import (
     REFUSAL_STYLES,
@@ -24,19 +26,33 @@ from bot.character import (
     detect_situation,
     reaction_for,
     stage_guide,
-    strip_sensitive_lines,
 )
-from bot.voice import (
+from bot.expression_dna import (
     compile_dna,
     delivery_hint,
     normalize_dna,
     shape_group_reply,
     split_reply_bubbles,
-    strip_ai_smell,
 )
 from safe_tokens import safe_max_tokens
 
 logger = logging.getLogger(__name__)
+
+
+def _memory_search_timeout_s() -> float:
+    """陪聊记忆召回超时：默认 1.5s（首字前不能干等），可由 app_settings 覆盖。
+
+    键名与 Agent 侧 memory.search_timeout_s 分开 —— 两者场景不同（运维可等 8s，
+    陪聊等不起），共用一个键会让一边调值是另一边事故。脏值/越界回默认。
+    """
+    raw = db.get_app_setting("bot.memory_search_timeout_s")
+    if raw is None or not str(raw).strip():
+        return 1.5
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 1.5
+    return value if 0.1 <= value <= 30.0 else 1.5
 
 
 class BotChatService:
@@ -394,6 +410,8 @@ class BotChatService:
         parts: list[str] = []
         reasoning_parts: list[str] = []
         finish_reason = ""
+        prompt_tokens = 0
+        completion_tokens = 0
         async for chunk in chat_stream(
             base_url=model["base_url"],
             api_key=model.get("api_key") or "EMPTY",
@@ -416,6 +434,9 @@ class BotChatService:
             # getattr 兜底：第三方/测试 chunk 对象未必带该字段。
             if getattr(chunk, "finish_reason", ""):
                 finish_reason = chunk.finish_reason
+            # O2：usage 只在最后一个 chunk 到达，此前被整段丢弃 —— 接住并记账
+            prompt_tokens = getattr(chunk, "prompt_tokens", 0) or prompt_tokens
+            completion_tokens = getattr(chunk, "completion_tokens", 0) or completion_tokens
             if enable_thinking and channel == "local" and chunk.reasoning:
                 reasoning_parts.append(chunk.reasoning)
                 yield "reasoning", chunk.reasoning
@@ -434,12 +455,7 @@ class BotChatService:
         # 去 AI 味只在落库前做一次：流式阶段按块清洗会切断跨块的模板句正则，
         # 反而把半句套话留在中间。前端在 done 之后用落库消息替换临时气泡，
         # 所以用户最终看到的就是清洗后的版本。
-        reply = strip_ai_smell(reply)
-        # 输出侧兜底：命中敏感口径的句子不出口（复读密钥比说教难看得多）。
-        reply = strip_sensitive_lines(reply)
-        # 表情包收口放在清洗之后：未知键、行内标记、一轮多张都在这里收敛，
-        # 落库的就是渠道能直接投递的形态（本地渲染与 QQ/微信读同一份文本）。
-        reply = stickers_mod.normalize(reply, enabled=sticker_enabled) or "……"
+        reply = sanitize_outbound(reply, sticker_enabled=sticker_enabled)
         # 有疙瘩且通篇没有问句 → 补一句试探性收尾（在清洗之后追加，避免被清掉）。
         if (new_state and float(new_state.get("tension") or 0.0) >= 60.0
                 and "？" not in reply and "?" not in reply):
@@ -451,6 +467,10 @@ class BotChatService:
         await asyncio.to_thread(
             db.add_bot_message, conversation_id, "assistant", reply,
             None, "".join(reasoning_parts) or None,
+        )
+        record_bot_llm_usage(
+            persona_id, model.get("model_id") or model["id"],
+            prompt_tokens, completion_tokens, scene="chat",
         )
         # 这一轮说完之后才记事实：模型失败的话，用户那句还没被承认过
         await self._remember_turn(persona_id, conversation_id, content, embed_client)
@@ -477,7 +497,9 @@ class BotChatService:
             return ""
         try:
             # 记忆召回卡在首字生成之前：慢（而非抛错）会让用户干等，
-            # 所以除异常兜底外再加一道 1.5s 硬超时，慢了就当没有记忆。
+            # 所以除异常兜底外再加一道硬超时，慢了就当没有记忆。
+            # 超时值走 app_settings（bot.memory_search_timeout_s），默认 1.5s。
+            timeout_s = _memory_search_timeout_s()
             contents = await asyncio.wait_for(
                 memory_mod.recall(
                     persona_id, query,
@@ -487,10 +509,10 @@ class BotChatService:
                     conversation_id=conversation_id,
                     group=group,
                 ),
-                timeout=1.5,
+                timeout=timeout_s,
             )
         except asyncio.TimeoutError:
-            logger.warning("陪聊记忆召回超时(1.5s)，本轮跳过记忆注入")
+            logger.warning("陪聊记忆召回超时(%.1fs)，本轮跳过记忆注入", _memory_search_timeout_s())
             return ""
         except Exception as exc:  # noqa: BLE001 —— 记忆层任何异常都不该影响回复
             logger.warning("陪聊记忆召回失败: %s", exc)
@@ -610,6 +632,8 @@ class BotChatService:
 
         parts: list[str] = []
         finish_reason = ""
+        prompt_tokens = 0
+        completion_tokens = 0
         async for chunk in chat_stream(
             base_url=model["base_url"],
             api_key=model.get("api_key") or "EMPTY",
@@ -625,18 +649,22 @@ class BotChatService:
             # getattr 兜底：第三方/测试 chunk 对象未必带该字段。
             if getattr(chunk, "finish_reason", ""):
                 finish_reason = chunk.finish_reason
+            prompt_tokens = getattr(chunk, "prompt_tokens", 0) or prompt_tokens
+            completion_tokens = getattr(chunk, "completion_tokens", 0) or completion_tokens
             if chunk.content:
                 parts.append(chunk.content)
         reply = "".join(parts).strip()
         if not reply:
             raise self._no_content_error(finish_reason)
 
-        # 清洗链路与正常回复一致，只是省掉记账：发出去的必须是渠道能直接投递的形态。
-        reply = strip_ai_smell(reply)
-        reply = strip_sensitive_lines(reply)
-        reply = stickers_mod.normalize(reply, enabled=sticker_enabled) or "……"
+        # 清洗链路与正常回复一致；记账只记 usage，不做 run 级的成本累计。
+        reply = sanitize_outbound(reply, sticker_enabled=sticker_enabled)
         reply = shape_group_reply(reply)
         await asyncio.to_thread(db.add_bot_message, conversation_id, "assistant", reply)
+        record_bot_llm_usage(
+            persona_id, model.get("model_id") or model["id"],
+            prompt_tokens, completion_tokens, scene="ambient",
+        )
         return reply
 
     @staticmethod

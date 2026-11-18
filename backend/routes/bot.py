@@ -5,6 +5,7 @@
 口径在 bot/chat_service.py，这里不拼 prompt，免得出现第二套装配。
 """
 
+import asyncio
 import logging
 import re
 from typing import Literal, Optional
@@ -19,7 +20,7 @@ from bot import relation as relation_mod
 from bot import stickers as sticker_mod
 from bot.character import persona_options, persona_text_risk
 from bot.chat_service import BotChatService
-from bot.voice import DNA_OPTIONS, normalize_dna
+from bot.expression_dna import DNA_OPTIONS, normalize_dna
 from sse_utils import sse_event
 
 router = APIRouter(tags=["bot"])
@@ -428,20 +429,54 @@ async def chat(req: BotChatRequest):
         raise HTTPException(status_code=404, detail="会话不存在")
 
     async def events():
-        try:
-            async for kind, text in chat_service.stream_reply(
-                req.conversation_id, req.content, channel="local", images=req.images or None
-            ):
-                # kind 直接映射事件类型：reasoning 供前端折叠展示，content 是正文。
-                yield sse_event({"type": kind, "content": text})
-            message = db.get_bot_messages(req.conversation_id, 1)[-1]
-            yield sse_event({"type": "done", "message": message})
-        except Exception as exc:
-            import netconfig
+        # SSE 心跳与内容走同一个 Queue 多路复用（与 /agent/run 同构）：模型长思考
+        # 或休眠唤醒/NAT 静默期间没有 content，若无心跳，连接会被中间层掐断且前端
+        # 无法区分「还在生成」与「流已死」。心跳marker不进事件体，只发注释行。
+        queue: asyncio.Queue = asyncio.Queue()
+        _HEARTBEAT = {"__heartbeat__": True}
+        _END = None
 
-            logger.warning("cKunBot 回复失败: %s", exc, exc_info=True)
-            detail = netconfig.redact_urls_in_text(str(exc)) or "回复生成失败"
-            yield sse_event({"type": "error", "detail": detail})
+        async def heartbeat_producer():
+            try:
+                while True:
+                    await asyncio.sleep(15)
+                    await queue.put(_HEARTBEAT)
+            except asyncio.CancelledError:
+                pass
+
+        async def content_producer():
+            try:
+                async for kind, text in chat_service.stream_reply(
+                    req.conversation_id, req.content, channel="local",
+                    images=req.images or None
+                ):
+                    # kind 直接映射事件类型：reasoning 供前端折叠展示，content 是正文。
+                    await queue.put({"type": kind, "content": text})
+                message = db.get_bot_messages(req.conversation_id, 1)[-1]
+                await queue.put({"type": "done", "message": message})
+            except Exception as exc:
+                import netconfig
+
+                logger.warning("cKunBot 回复失败: %s", exc, exc_info=True)
+                detail = netconfig.redact_urls_in_text(str(exc)) or "回复生成失败"
+                await queue.put({"type": "error", "detail": detail})
+            finally:
+                await queue.put(_END)
+
+        hb_task = asyncio.create_task(heartbeat_producer())
+        producer_task = asyncio.create_task(content_producer())
+        try:
+            while True:
+                event = await queue.get()
+                if event is _END:
+                    break
+                if event.get("__heartbeat__"):
+                    yield ": heartbeat\n\n"
+                    continue
+                yield sse_event(event)
+        finally:
+            hb_task.cancel()
+            producer_task.cancel()
 
     return StreamingResponse(events(), media_type="text/event-stream")
 

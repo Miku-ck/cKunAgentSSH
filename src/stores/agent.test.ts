@@ -718,30 +718,6 @@ describe('整程计时与每步耗时', () => {
     nowSpy.mockRestore()
   })
 
-  it('lastTask/lastSshSessionId 记的是本次 run 的入参，新一轮覆写', () => {
-    const store = useAgentStore()
-    store.runAgent({ task: '看看 web-01 内存', conversationId: 'c1', modelId: 'm1', sshSessionId: 's1' })
-    expect(store.lastTask).toBe('看看 web-01 内存')
-    expect(store.lastSshSessionId).toBe('s1')
-    // run-head 的指令原文与目标主机都读这两格，不去捞"当前会话最后一条消息 /
-    // 此刻的活动会话"—— 那两种捞法在运行中切了会话就指向另一个 run（M-19 同因）
-    store.runAgent({ task: '换一条：清磁盘', conversationId: 'c1', modelId: 'm1' })
-    expect(store.lastTask).toBe('换一条：清磁盘')
-    expect(store.lastSshSessionId).toBe('')
-  })
-
-  it('模型与审批档在发起那一刻记下，运行中改设置不改写这一轮', () => {
-    const store = useAgentStore()
-    store.runAgent({ task: 't', conversationId: 'c1', modelId: 'm-a', permissionMode: 'auto' })
-    expect(store.lastModelId).toBe('m-a')
-    expect(store.lastPermissionMode).toBe('auto')
-    // 未表态时记的是请求体实际发出去的那一档（PERMISSION_MODE_DEFAULT），不是空：
-    // run-head 因此能诚实说「手动审批」，而不是这一格干脆不显示
-    store.runAgent({ task: 't2', conversationId: 'c1', modelId: 'm-b' })
-    expect(store.lastModelId).toBe('m-b')
-    expect(store.lastPermissionMode).toBe('normal')
-  })
-
   it('tool_call_result 带的 duration_ms 落到该次调用上', () => {
     const { store, push } = startRun()
     push({ type: 'state', state: 'acting', iteration: 0, run_id: 'r1' })
@@ -1028,5 +1004,73 @@ describe('expert_suggestion 事件', () => {
     const { store, push } = startRun()
     push({ type: 'expert_suggestion', name: '运维专家' })
     expect(store.expertSuggestion).toBeNull()
+  })
+})
+
+describe('三种此前被静默丢弃的 SSE 事件', () => {
+  beforeEach(() => {
+    runs.length = 0
+    setActivePinia(createPinia())
+  })
+
+  it('budget_extended 同步步数上限并给出说明', () => {
+    const { store, push } = startRun()
+    push({ type: 'budget_extended', initial: 20, extended_to: 30, added: 10, run_id: 'r1' })
+    expect(store.totalIterations).toBe(30)
+    expect(store.budgetExtension).toMatchObject({ initial: 20, extendedTo: 30, added: 10 })
+    expect(store.warnings.some((w: string) => w.includes('扩展到 30 步'))).toBe(true)
+  })
+
+  it('plan_mode_block 转成可见 warning（带工具名与原因）', () => {
+    const { store, push } = startRun()
+    push({ type: 'plan_mode_block', tool: 'shell_exec', block_reason: '计划模式禁止写入', run_id: 'r1' })
+    expect(store.warnings.some((w: string) => w.includes('shell_exec') && w.includes('计划模式'))).toBe(true)
+  })
+
+  it('reflection_request 留档但不弹提示', () => {
+    const { store, push } = startRun()
+    push({ type: 'reflection_request', final_state: 'completed', iterations: 5, tool_calls_count: 3, run_id: 'r1' })
+    expect(store.lastReflection).toMatchObject({ finalState: 'completed', iterations: 5, toolCalls: 3 })
+    expect(store.warnings).toHaveLength(0)
+  })
+
+  it('新 run 清空预算扩展与反思留档（_reset）', () => {
+    const h = startRun()
+    h.push({ type: 'budget_extended', initial: 20, extended_to: 30, added: 10 })
+    h.push({ type: 'reflection_request', final_state: 'completed' })
+    h.store.runAgent({ task: 't2', conversationId: 'c2', modelId: 'm1' })
+    expect(h.store.budgetExtension).toBeNull()
+    expect(h.store.lastReflection).toBeNull()
+  })
+})
+
+describe('O5 运行中成本可见', () => {
+  beforeEach(() => {
+    runs.length = 0
+    setActivePinia(createPinia())
+  })
+
+  it('state 事件带 cost 时实时更新 costInfo', () => {
+    const { store, push } = startRun()
+    expect(store.costInfo).toBeNull()
+    const cost = {
+      prompt_tokens: 120, completion_tokens: 30, total_tokens: 150,
+      cost_usd: 0.0012, tool_call_count: 1, llm_call_count: 1,
+      duration_ms: 500, tool_duration_ms: 100, iterations: 2,
+    }
+    push({ type: 'state', state: 'thinking', iteration: 2, run_id: 'r1', cost })
+    expect(store.costInfo).toMatchObject({ total_tokens: 150, cost_usd: 0.0012 })
+  })
+
+  it('无 cost 的 state 事件不覆盖已有读数', () => {
+    const { store, push } = startRun()
+    const cost = {
+      prompt_tokens: 120, completion_tokens: 30, total_tokens: 150,
+      cost_usd: 0.0012, tool_call_count: 1, llm_call_count: 1,
+      duration_ms: 500, tool_duration_ms: 100, iterations: 2,
+    }
+    push({ type: 'state', state: 'thinking', run_id: 'r1', cost })
+    push({ type: 'state', state: 'acting', run_id: 'r1' })
+    expect(store.costInfo).toMatchObject({ total_tokens: 150 })
   })
 })

@@ -4,8 +4,9 @@
  * 与 bot.test.ts 分开：这里要用 fake timers 把 28s 连接超时推到点，而 bot.test.ts
  * 的流式用例跑在真实 timer / 原生 Response 流上，混在一起会互相干扰。
  *
- * 口径：只覆盖 fetch 返回 headers 之前，不限制长流时长。后端 /bot/chat 不发心跳，
- * 所以这里刻意没有「读取循环停滞看门狗」—— 模型思考期长时间无字节是正常态。
+ * 口径：本文件只覆盖 fetch 返回 headers 之前的连接/首字节超时，不限制长流时长。
+ * 读取阶段的停滞看门狗另见 bot-stall-watchdog.test.ts：后端 /bot/chat 现每 15s
+ * 推一行 ': heartbeat'，90s 无字节判停滞——模型思考期正常心跳不会被误判。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 

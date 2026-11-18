@@ -225,3 +225,43 @@ def test_guard_actually_catches_renamed_event_type():
     assert "tool_deliver" not in mutated, "改名没命中 type 联合行，这条自检是摆设"
     assert declared - mutated == {"tool_deliver"} and mutated - declared == {"deliver_cmd"}, (
         f"改名后的联合没被判为漂移: {mutated ^ declared}")
+
+
+def test_state_event_carries_live_cost():
+    """O5：运行中 state 事件带成本快照，前端才能实时显示 token/费用。"""
+    cost = {
+        "prompt_tokens": 120,
+        "completion_tokens": 30,
+        "total_tokens": 150,
+        "cost_usd": 0.0012,
+    }
+    out = SSEAdapter.to_sse_dict(
+        TraceEvent(
+            kind="state", source="driver", run_id="r1", iteration=2,
+            payload={"state": "thinking", "cost": cost},
+        )
+    )
+    assert out["type"] == "state"
+    assert out["state"] == "thinking"
+    assert out["cost"] == cost, "state 事件必须把成本快照投到 Wire 上"
+
+
+def test_state_event_without_cost_stays_silent():
+    """无成本快照的 state 事件（如初始化）不得凭空造一个 cost 字段。"""
+    out = SSEAdapter.to_sse_dict(
+        TraceEvent(kind="state", source="driver", run_id="r1", payload={"state": "thinking"})
+    )
+    assert "cost" not in out
+
+
+def test_plan_mode_block_projects_tool_and_reason():
+    """plan_mode_block 此前只映射事件名不投影 payload，前端 warning 拿不到工具名和原因。"""
+    out = SSEAdapter.to_sse_dict(
+        TraceEvent(
+            kind="plan_mode_block", source="reins.plan_mode", run_id="r1",
+            payload={"tool": "shell_exec", "reason": "计划模式禁止写入"},
+        )
+    )
+    assert out["type"] == "plan_mode_block"
+    assert out["tool"] == "shell_exec"
+    assert out["block_reason"] == "计划模式禁止写入"

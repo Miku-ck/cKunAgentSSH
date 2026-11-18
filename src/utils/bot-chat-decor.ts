@@ -112,7 +112,7 @@ const MAX_REPLY_BUBBLES = 3
 const MIN_BUBBLE_CHARS = 24
 
 /**
- * 按空行把一轮回复切成多条气泡。规则与服务端 `bot/voice.py` 的 `split_reply_bubbles`
+ * 按空行把一轮回复切成多条气泡。规则与服务端 `bot/expression_dna.py` 的 `split_reply_bubbles`
  * 一致：三段以上且每段都薄得只剩半句时先并回一条；超出条数不丢字，余下的并回最后一条；
  * 单条内部的换行原样保留（那是列表或引文，不算分条）。
  * 表情包标记自成一条：既不能被「太短」规则并回句子，也不能被并进收尾那条。

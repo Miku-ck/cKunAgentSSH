@@ -20,7 +20,7 @@ from bot.character import (
     strip_sensitive_lines,
 )
 from bot.chat_service import BotChatService
-from bot.voice import (
+from bot.expression_dna import (
     DEFAULT_DNA,
     compile_dna,
     delivery_hint,

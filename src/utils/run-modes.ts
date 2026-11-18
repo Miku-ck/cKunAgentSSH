@@ -42,8 +42,8 @@ export const APPROVAL_LABELS: Record<ApprovalKey, string> = { normal: '手动审
  */
 export type PermissionModeKey = 'normal' | 'auto' | 'plan'
 
-/** 未表态时后端实际跑的档位。run 归因与请求体共用这一个常量，
- *  免得"发出去的档位"和"头部显示的档位"各写一遍默认值后对不上。 */
+/** 未表态时后端实际跑的档位。请求体缺省与这里共用同一常量，
+ *  免得"发出去的档位"和"UI 显示的档位"各写一遍默认值后对不上。 */
 export const PERMISSION_MODE_DEFAULT: PermissionModeKey = 'normal'
 
 /** run-head 上那一格审批方式的名字。两档文案复用 APPROVAL_LABELS，

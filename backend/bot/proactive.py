@@ -36,9 +36,12 @@ import database as db
 from bot import memory as memory_mod
 from bot import relation as relation_mod
 from bot import state as state_mod
+from bot.cost_log import record_bot_llm_usage
 from bot.memory import deterministic_uniform
 from bot.plan import PLAN_FOLLOWUP_H
+from bot.text_format import sanitize_outbound
 from bot.timeutil import fmt_ts as _fmt_ts, parse_ts as _parse
+from bot.expression_dna import normalize_dna
 
 logger = logging.getLogger(__name__)
 
@@ -278,7 +281,7 @@ def _state_snapshot(persona_id: str, speed: str) -> "tuple[dict, float, bool, st
 
 async def _compose(
     persona: dict, state_desc: str, topic: "tuple[str, str] | None" = None, *,
-    channel: str = "local",
+    channel: str = "local", stage: str = "",
 ) -> str:
     """让模型替她说一句「心里话」。极小预算、无工具、禁思考。"""
     from bot.character import SAFETY_CHARTER  # noqa: F401 —— 确保人格口径一致
@@ -290,7 +293,12 @@ async def _compose(
     # 渠道要传对：QQ 发出去是纯文本，Markdown 会原样显示成符号。
     # 必须走实例而不是类：拿 `BotChatService._system_prompt(...)` 调时，persona 会被
     # 当成 self、channel 当成 persona，下一行就在字符串上 .get() 当场炸。
-    system = svc._system_prompt(persona, channel, state_desc=state_desc)
+    # relation=stage 让主动开口也带「关系阶段」的分寸指导（与被动回复同源）——
+    # 缺少它时，陌生阶段的人格会用亲近口吻主动搭话。
+    system = svc._system_prompt(
+        persona, channel, state_desc=state_desc,
+        relation={"stage": stage} if stage else None,
+    )
     # 有选题时把「说什么」钉住：别报菜名、别一字不差背原话，让她用自己的口气接
     if topic:
         ask = (
@@ -309,13 +317,22 @@ async def _compose(
         {"role": "user", "content": ask},
     ]
     parts: list[str] = []
+    prompt_tokens = 0
+    completion_tokens = 0
     async for chunk in chat_stream(
         model.get("base_url"), model.get("api_key"), model.get("model_id"),
         messages, temperature=1.0, max_tokens=PROACTIVE_MAX_TOKENS,
         enable_thinking=False, disable_thinking=True,
     ):
+        prompt_tokens = getattr(chunk, "prompt_tokens", 0) or prompt_tokens
+        completion_tokens = getattr(chunk, "completion_tokens", 0) or completion_tokens
         if chunk.content:
             parts.append(chunk.content)
+    # O2：后台主动消息是唯一无人监督的自动出话路径，usage 必须可观测。
+    record_bot_llm_usage(
+        persona.get("id", ""), model.get("model_id") or "",
+        prompt_tokens, completion_tokens, scene="proactive",
+    )
     return "".join(parts).strip()
 
 
@@ -563,7 +580,9 @@ class ProactiveScheduler:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("主动消息选题失败: %s", exc)
                 topic = None
-            text = await _compose(persona, state_desc, topic=topic, channel=channel)
+            text = await _compose(
+                persona, state_desc, topic=topic, channel=channel, stage=stage
+            )
             if not text:
                 continue
             if await self._deliver(
@@ -636,7 +655,9 @@ class ProactiveScheduler:
         except Exception as exc:  # noqa: BLE001
             logger.warning("主动消息选题失败: %s", exc)
             topic = None
-        text = await _compose(persona, state_desc, topic=topic, channel=channel)
+        text = await _compose(
+            persona, state_desc, topic=topic, channel=channel, stage=stage
+        )
         if not text:
             return {
                 "conversation_id": conversation_id, "action": "skip",
@@ -644,6 +665,12 @@ class ProactiveScheduler:
                 "text": "", "detail": "模型没生成出一句话",
             }
 
+        # 清洗后回显：屏幕上的这句话要与 _deliver 落库/投递的是同一份。
+        # strip_sensitive_lines 幂等，重复过一遍不会二次改变文本。
+        text = sanitize_outbound(
+            text,
+            sticker_enabled=normalize_dna(persona.get("expression_dna"))["sticker"] != "none",
+        )
         await self._deliver(
             target, persona, text, desire_value=d, topic=topic,
             now=now, manual=True,
@@ -676,6 +703,14 @@ class ProactiveScheduler:
         pfx = MANUAL_REASON if manual else ""
         # 选题来源供调 θ（ok:fresh_fact / ok:fatigue_care / ok:old_memory / ok:plan_due / ok:free）
         src = topic[1] if topic else "free"
+
+        # 主动消息与被动回复同源清洗：这条路径是用户不在场时发出去的，若绕过
+        # strip_sensitive_lines，用户口述的证件号/密钥会被原样推到 QQ/微信。
+        # 表情包开关沿用人格设定，与 chat_service 的出站口径一致。
+        text = sanitize_outbound(
+            text,
+            sticker_enabled=normalize_dna(persona.get("expression_dna"))["sticker"] != "none",
+        )
 
         async def _mark_spoken() -> None:
             # 用 getattr 而不是 topic.plan_id：既有用例（如

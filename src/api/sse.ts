@@ -67,6 +67,22 @@ export interface AgentSSEEvent {
   run_id?: string
   // H14: intention 事件携带的意图识别结果
   intention?: AgentIntentionInfo
+  // budget_extended 事件：动态预算扩展（telemetry.py budget_extended 分支）
+  initial?: number
+  extended_to?: number
+  added?: number
+  cap?: number
+  files_edited?: number
+  files_read?: number
+  total_tool_calls?: number
+  // reflection_request 事件：完成/失败后触发反思的信号（lifecycle.py）
+  final_state?: string
+  tool_calls_count?: number
+  unique_tools?: string[]
+  failed_tools?: string[]
+  has_warnings?: boolean
+  // plan_mode_block 事件：计划模式下写操作被拦（reins/plan_mode.py）
+  block_reason?: string
   // tool_deliver 事件专用字段：可见终端执行模式待交付命令
   tool_id?: string
   command?: string

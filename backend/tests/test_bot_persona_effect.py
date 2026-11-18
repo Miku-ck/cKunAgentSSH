@@ -13,7 +13,7 @@ import pytest
 import database as db
 from bot.character import REFUSAL_STYLES, SAFETY_CHARTER, REACTION_LIBRARY
 from bot.chat_service import BotChatService
-from bot.voice import EMOJI, PARTICLES, PUNCTUATION, SENTENCE
+from bot.expression_dna import EMOJI, PARTICLES, PUNCTUATION, SENTENCE
 
 
 @pytest.fixture

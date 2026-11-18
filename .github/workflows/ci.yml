@@ -1,8 +1,9 @@
 # CI — cKunAgentSSH
 #
-# 说明：当前仓库托管在 Gitee。本文件是标准 GitHub Actions 配置，
-# 推送到 GitHub（或 fork）即自动生效；在 Gitee 上可用 Gitee Go 等价配置，
-# 或直接在本地跑 `bash scripts/ci-check.sh` 执行完全相同的检查项。
+# 说明：当前主远端是 GitCode（另有 gitee/github 镜像）。本文件是标准 GitHub Actions
+# 配置，推送到 GitHub（或 fork）即自动生效；GitCode/Gitee 需在对应平台另行配置流水线。
+# 不依赖平台的本地闸门已挂在 .git/hooks/pre-push（调 scripts/ci-check.sh），
+# 任何一次 push 前都执行与本文件完全相同的检查项；也可手动跑 `bash scripts/ci-check.sh`。
 #
 # 检查项（与 scripts/ci-check.sh 一致）：
 #   1. 后端 pytest（backend/tests/，含跨端白名单契约测试）

@@ -23,16 +23,14 @@ from typing import Any, Optional, Protocol, runtime_checkable
 class State(str, Enum):
     """Agent 运行状态 — Driver 内部表达，替代原 state_machine.py
 
-    C-review NIT：PLANNING / REFLECTING 是保留态 — 当前 Driver 从不进入
-    （保留枚举成员以兼容 state_history 消费方与潜在后续规划/反思阶段）。
-    state_history 消费者不应假定这两个状态会出现。
+    历史 state_history 可能含 planning/reflect（旧状态机写入），但当前 Driver
+    不再进入，故不作为枚举成员保留。消费方按字符串比较历史数据即可
+    （如 reflection.py 的 planning 中间态检测），不依赖本枚举。
     """
     INIT = "init"
-    PLANNING = "planning"  # 保留态：Driver 从不进入（C-review NIT）
     THINKING = "thinking"
     ACTING = "acting"
     OBSERVING = "observing"
-    REFLECTING = "reflecting"  # 保留态：Driver 从不进入（C-review NIT）
     COMPLETED = "completed"
     FAILED = "failed"
     MAX_REACHED = "max_reached"
