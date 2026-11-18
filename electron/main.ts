@@ -158,13 +158,12 @@ function isSSHError(e: unknown): e is SSHError {
 /** consumePending 只跑一次：ready-to-show 在 macOS 窗口重建时会再触发。 */
 let pendingConsume = false
 
-// ─── 启动加载加固（2026-11-10 黑屏归因）──────────
-// 现象：窗口 show:false 等 ready-to-show，而渲染层首次加载一旦失败（dev server
-// 未就绪、首连被安全软件/沙箱过滤拖超时），用户面对的就是 20s+ 的无窗或深色
-// 空窗，没有任何自救。三层加固：
-//   1) dev URL 先从主进程探活（Node 栈）再 loadURL —— vite 未就绪不再抢跑失败；
+// ─── 启动加载加固 ───────────
+// 窗口 show:false 等 ready-to-show；dev 冷启动下探活 + Vite transform 可达 15s+，
+// 曾让用户面对无窗/深色空窗。三层加固（2026-11-18 调整为先亮窗）：
+//   1) dev 先 loadURL(data:loading 页) 亮窗，探活移后台并行 —— 点开即有反馈；
 //   2) did-fail-load 指数退避自动重载 —— 首连超时/抖动自愈，错误页不再被当终态；
-//   3) 6s 兜底 show —— 极端挂起时宁可露出深色窗，也不让用户对「点了没反应」干等。
+//   3) 6s 兜底 show —— loading 页万一也加载失败，极端挂起时强制亮窗。
 // 生产走 loadFile 不涉网络，只吃到 3) 的兜底。
 const DEV_LOAD_MAX_RETRIES = 5
 /** 兜底亮窗时限。
@@ -202,6 +201,29 @@ async function waitForDevUrl(url: string, timeoutMs = 15000): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 200))
   }
   return false
+}
+
+/** dev 冷启动的即时 loading 页（data: URL，零磁盘 IO、零网络）。
+ *
+ * 背景：探活 dev server 在冷盘/杀软扫描下实测可达 15s，此前窗口 show:false 干等，
+ * 6s 兜底也只是露出深色空窗 —— 用户以为点开没反应。这里先用 data: URL 把窗口
+ * 亮出来并显示"正在启动"，探活移到后台并行；探活完成再 loadURL 到真界面。
+ * data: URL 不触发 will-navigate 守卫（那只对用户/页面导航生效），也不过 CSP 的
+ * onHeadersReceived（data: 无响应头），故内联样式安全。
+ */
+export function devLoadingUrl(): string {
+  const html = [
+    '<!doctype html><html><head><meta charset="utf-8">',
+    '<style>html,body{margin:0;height:100%;background:#0d1117;color:#8b949e;',
+    'font-family:system-ui,-apple-system,"Segoe UI",sans-serif;',
+    'display:flex;align-items:center;justify-content:center}',
+    '.t{font-size:16px;color:#c9d1d9;margin-bottom:10px}',
+    '.s{font-size:13px}</style></head><body><div style="text-align:center">',
+    '<div class="t">正在启动 cKunAgent…</div>',
+    '<div class="s">首次启动需准备运行环境，请稍候</div>',
+    '</div></body></html>',
+  ].join('')
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
 }
 
 /** 背景图存放目录：userData/backgrounds。背景图的保存/清理/加载/删除逻辑已迁往
@@ -355,9 +377,14 @@ function createWindow(): void {
 
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {
     const devUrl = process.env['ELECTRON_RENDERER_URL']
-    // 启动顺序加固：主进程（Node 栈）探活通过才发起渲染层加载 —— 后端健康检查
-    // 走的就是这条 Node 连接路径（实测 1.4s 就绪），它说通了，Chromium 才不会
-    // 对着没起完的 vite 抢跑。探活超预算也照样 loadURL：did-fail-load 重试兜底。
+    // 启动体验优化：先亮 loading 页（data: URL，零 IO），窗口立即显示"正在启动"；
+    // dev server 探活移到后台并行，不再把 15s 冷启动全挡在显示之前。探活完成后
+    // 再 loadURL 到真界面 —— 探活"防抢跑"的语义未变，只是不再让用户干等。
+    // 注：ready-to-show 会由 loading 页触发（clear 兜底定时器 + show + consumePending），
+    // 真界面 loadURL 时窗口已可见，不会再触发一次，行为与旧版一致。
+    void mainWindow.loadURL(devLoadingUrl()).catch((e) => {
+      logWarn('startup', `loading 页加载失败（不影响后续探活）：${e instanceof Error ? e.message : String(e)}`)
+    })
     void (async () => {
       const ready = await waitForDevUrl(devUrl)
       if (!ready) logWarn('startup', `dev server 15s 未探活成功，仍尝试加载：${devUrl}`)
