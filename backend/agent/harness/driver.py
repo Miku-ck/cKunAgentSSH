@@ -114,8 +114,14 @@ class Driver:
         except Exception as e:
             logger.warning("cleanup_run_once 失败: %s", e)
 
+        # ── 挂起恢复：重放信息（harness.run 从快照回填）──
+        # 恢复路径跳过 AGENT_START（技能注入）与意图识别：那些在挂起前已
+        # 发生过且留在快照 messages 里，重放会重复注入。
+        resume_round = ctx.metadata.get("resume_round") or None
+
         # ── agent_start ──
-        await harness.reins.check(ReinPoint.AGENT_START, ctx)
+        if resume_round is None:
+            await harness.reins.check(ReinPoint.AGENT_START, ctx)
 
         # ── 意图识别（在 agent_start 后、主循环前）──
         # 根据 task 文本推断复杂度等级，设置 max_reasoning_tokens + allow_planning_phase
@@ -123,7 +129,7 @@ class Driver:
         # 模型配置的 reasoning_tokens 作为上限，意图识别的预算不能超过该值
         intention = None
         model_max_reasoning = ctx.config.max_reasoning_tokens  # 保存模型配置的上限
-        if ctx.config.enable_intention_guide:
+        if ctx.config.enable_intention_guide and resume_round is None:
             try:
                 # Phase 1 意图级联：规则分类 → 低置信 LLM 校准 → 任务级澄清。
                 # 高置信路径（绝大多数 run）内部直接返回规则结果，零额外开销；
@@ -176,6 +182,52 @@ class Driver:
         # 墙钟打点：WallClockRein（POST_ITERATION）按此计算 run 累计时长。
         # monotonic 不受系统时钟跳变影响；setdefault 防御续跑场景已带值。
         ctx.metadata.setdefault("run_started_mono", time.monotonic())
+
+        # ── 挂起恢复：重放待确认轮 ──
+        # 只重放 start_index 起的调用（此前调用的结果已在快照 messages 里，
+        # 重放 = 双重执行）。重放经完整 PRE_TOOL_CALL 链：答案已回填内存态，
+        # ClarificationInterceptor 的 consume_answer_decision 作废原调用，
+        # abandoned 分支补齐「未执行」结果与剩余调用配对 —— 与在线路径逐字一致。
+        if resume_round:
+            _replay_calls = [
+                ToolCall(
+                    id=str(c.get("tool_call_id") or ""),
+                    name=str(c.get("tool") or ""),
+                    args=c.get("args") or {},
+                )
+                for c in (resume_round.get("calls") or [])[
+                    max(0, int(resume_round.get("start_index") or 0)):
+                ]
+                if c.get("tool_call_id") and c.get("tool")
+            ]
+            if _replay_calls:
+                await ctx.transition(State.THINKING, event="resume_replay")
+                await telemetry.emit(TraceEvent(
+                    kind="state", source="driver", run_id=ctx.run_id,
+                    iteration=ctx.iteration,
+                    payload={"state": "thinking", "resumed": True},
+                ))
+                async for ev in self._execute_tool_calls(
+                    LLMOutput(content="", tool_calls=_replay_calls),
+                    ctx, harness, telemetry, ctx.iteration,
+                ):
+                    yield ev
+                # 重放中再次触发澄清（模型重发同一条模糊命令且题目仍 pending）
+                # → 再次挂起收流；否则迭代号接续快照，进入正常 THINK 循环。
+                iteration = ctx.iteration
+                if ctx.metadata.get("run_suspended"):
+                    await ctx.transition(State.WAITING_CONFIRMATION,
+                                         event="waiting_confirmation")
+                    yield TraceEvent(
+                        kind="state", source="driver", run_id=ctx.run_id,
+                        iteration=max(0, iteration),
+                        payload={
+                            "state": "waiting_confirmation",
+                            "pending": dict(ctx.metadata.get(
+                                "clarification_pending_payload") or {}),
+                        },
+                    )
+                    return
 
         # while 循环（而非 for range）以支持运行时动态调整 max_iterations
         while iteration + 1 < ctx.config.max_iterations:
@@ -453,6 +505,25 @@ class Driver:
             async for ev in self._execute_tool_calls(llm_out, ctx, harness, telemetry, iteration):
                 yield ev
 
+            # ── 挂起：澄清待确认点 ──
+            # 永久等待语义：run 未结束 —— 不判 MAX_REACHED（return 跳过 while-else）、
+            # 不发 done、不触发反思。转 WAITING_CONFIRMATION（非终态，不写
+            # completed_at）后结束生成器；SSE 由路由层收尾，恢复由
+            # POST /runs/{id}/resume 开新流重放本轮剩余调用。
+            if ctx.metadata.get("run_suspended"):
+                await ctx.transition(State.WAITING_CONFIRMATION,
+                                     event="waiting_confirmation")
+                yield TraceEvent(
+                    kind="state", source="driver", run_id=ctx.run_id,
+                    iteration=max(0, iteration),
+                    payload={
+                        "state": "waiting_confirmation",
+                        "pending": dict(
+                            ctx.metadata.get("clarification_pending_payload") or {}),
+                    },
+                )
+                return
+
             # C-review M6：工具阶段拦截器要求终止（force_terminated）→ 退出主循环，
             # 走下方 _emit_done（ctx.state 已是 FAILED）
             if ctx.metadata.pop("force_terminated", False):
@@ -626,6 +697,42 @@ class Driver:
                 calls[i], ctx, harness, telemetry, iteration,
             ):
                 yield ev
+
+            # ── 挂起：澄清待确认点 ──
+            # _execute_serial_call 内部已把待确认题写进 ctx.metadata，这里
+            # 统一落库（挂起点当场写，硬退出时 finally 跑不到）并置位
+            # run_suspended。本轮剩余调用不执行、不写「未执行」结果 ——
+            # 原调用是否作废由恢复路径的答案消费决定（与在线路径共用分支）。
+            if ctx.metadata.pop("clarification_suspended", False):
+                await self._write_suspension_checkpoint(
+                    calls, i, ctx, harness, iteration)
+                ctx.metadata["run_suspended"] = True
+                ctx.current_tool_call = None
+                return
+
+            abandoned = ctx.metadata.get("clarification_abandoned_turn")
+            if abandoned:
+                async for ev in self._abandon_remaining(
+                    calls[i + 1:], ctx, harness, telemetry, iteration,
+                ):
+                    yield ev
+                for msg in abandoned.get("inject_messages") or []:
+                    ctx.messages.append(msg)
+                ctx.metadata.pop("deferred_turn_injects", None)
+                ctx.metadata.pop("clarification_abandoned_turn", None)
+                if abandoned.get("policy") == "blocked":
+                    await ctx.transition(State.FAILED, event="clarification_blocked")
+                    await harness.reins.check(ReinPoint.AGENT_FAILED, ctx)
+                    yield TraceEvent(
+                        kind="error", source="driver", run_id=ctx.run_id,
+                        iteration=iteration,
+                        payload={"message": "高风险澄清被跳过或超时，已停止执行"},
+                    )
+                    ctx.metadata["force_terminated"] = True
+                    break
+                i += 1
+                continue
+
             i += 1
             if ctx.metadata.get("force_terminated"):
                 break
@@ -658,6 +765,38 @@ class Driver:
             payload={"state": "thinking", "cost": _live_cost},
         )
 
+    async def _abandon_remaining(
+        self, calls, ctx: RunContext, harness: "Harness",
+        telemetry: TelemetryBus, iteration: int,
+    ) -> AsyncIterator[TraceEvent]:
+        """同轮剩余 tool_calls 全部作废，保证 assistant.tool_calls 有配对 result。"""
+        for tc in calls:
+            entry = {
+                "tool": tc.name, "args": tc.args, "iteration": iteration,
+                "success": False, "skipped": True,
+                "skip_reason": "clarification_replan",
+                "tool_call_id": tc.id,
+            }
+            ctx.tool_calls_log.append(entry)
+            reason = "未执行：本轮已进入澄清重规划，剩余调用作废"
+            ctx.messages.append(
+                harness.bridle.build_tool_result_message(tc.id, reason, priority="high"))
+            yield TraceEvent(
+                kind="tool_call_start", source="driver", run_id=ctx.run_id,
+                iteration=iteration,
+                payload={"tool": tc.name, "args": tc.args, "tool_call_id": tc.id},
+            )
+            yield TraceEvent(
+                kind="tool_call_result", source="reins", run_id=ctx.run_id,
+                iteration=iteration,
+                payload={
+                    "tool": tc.name, "tool_call_id": tc.id,
+                    "result": reason, "success": False,
+                    "skipped": True,
+                    "skip_reason": "clarification_replan",
+                },
+            )
+
     async def _execute_serial_call(
         self,
         tc: ToolCall,
@@ -680,6 +819,7 @@ class Driver:
             "args": tc.args,
             "iteration": iteration,
             "success": None,  # 待执行
+            "tool_call_id": tc.id,
         }
         ctx.tool_calls_log.append(entry)
         ctx.current_tool_call = entry
@@ -711,29 +851,59 @@ class Driver:
                 for ev in approval_events:
                     await telemetry.emit(ev)
                     yield ev
-            # 澄清等待闸（二）：等答案 → 重判 PRE_TOOL_CALL。
-            # 重判可能落到权限门（澄清放行后才发现命令 dangerous）：必须先登记
-            # 审批等待项、再发卡、再等，否则新弹出的审批卡又只是「物理存在」。
+            # 澄清等待闸（二）：挂起整个 run（永久等待由「无协程在等」实现）。
+            # 挂起失败（题目已被回收/消费的竞态）才落回旧阻塞路径兜底。
             if clar_sig is not None:
+                if await self._suspend_for_clarification(
+                        ctx, harness, pre_tool_decision, clar_sig):
+                    # 挂起标记交由 _execute_tool_calls 落库并收尾；本轮剩余
+                    # 调用随恢复重放处理，这里不写「未执行」结果。
+                    return
                 pre_tool_decision = await self._finish_clarification(
                     ctx, harness, pre_tool_decision, clar_sig)
-                approval_handle = self._register_approval(ctx, pre_tool_decision)
-                if pre_tool_decision.intercepted:
-                    for ev in pre_tool_decision.events:
-                        await telemetry.emit(ev)
-                        yield ev
-                    pre_tool_decision.events = []
-                if approval_handle is not None:
-                    pre_tool_decision, approval_events = await self._finish_approval(
-                        ctx, harness, pre_tool_decision, approval_handle)
-                    for ev in approval_events:
-                        await telemetry.emit(ev)
-                        yield ev
+                # 澄清后绝不重判/重发审批：原调用已作废，授权只属于下一轮新调用。
         finally:
             # 发卡期间抛异常，或客户端断连导致生成器在 yield 处被关闭，都会绕开
             # wait_registered 的清理 —— 这里兜一层（正常路径是 no-op）。
             if approval_handle is not None:
                 approval_wait.discard(approval_handle[0])
+
+        abandoned = ctx.metadata.get("clarification_abandoned_turn")
+        if abandoned:
+            from agent.clarification_mode import apply_clarification_mode
+            changed = apply_clarification_mode(ctx, abandoned.get("policy", "none"))
+            if changed:
+                for ev in pre_tool_decision.events:
+                    if ev.kind == "clarification_done":
+                        ev.payload["mode_changed"] = True
+            for ev in pre_tool_decision.events:
+                await telemetry.emit(ev)
+                yield ev
+            ctx.metadata["deferred_turn_injects"] = list(
+                pre_tool_decision.inject_messages or [])
+            reason = f"未执行：{abandoned.get('skip_reason') or '澄清后重新规划'}"
+            entry["success"] = False
+            entry["skipped"] = True
+            entry["skip_reason"] = abandoned.get("skip_reason") or "clarification_replan"
+            ctx.messages.append(
+                harness.bridle.build_tool_result_message(tc.id, reason, priority="high"))
+            yield TraceEvent(
+                kind="tool_call_start", source="driver", run_id=ctx.run_id,
+                iteration=iteration,
+                payload={"tool": tc.name, "args": tc.args, "tool_call_id": tc.id},
+            )
+            yield TraceEvent(
+                kind="tool_call_result", source="reins", run_id=ctx.run_id,
+                iteration=iteration,
+                payload={
+                    "tool": tc.name, "tool_call_id": tc.id,
+                    "result": reason, "success": False,
+                    "skipped": True,
+                    "skip_reason": entry["skip_reason"],
+                },
+            )
+            ctx.current_tool_call = None
+            return
         if pre_tool_decision.intercepted:
             result_text = f"工具调用被拦截: {pre_tool_decision.intercept_reason}"
             entry["success"] = False
@@ -946,6 +1116,7 @@ class Driver:
                 "args": tc.args,
                 "iteration": iteration,
                 "success": None,
+                "tool_call_id": tc.id,
             }
             ctx.tool_calls_log.append(entry)
             ctx.current_tool_call = entry
@@ -1348,29 +1519,15 @@ class Driver:
         """
         answers = await wait_for_clarification_answer(ctx.run_id)
         if answers is None:
-            # 等满 TTL / pending 被回收：run 不再等这张向导。先收掉后端状态 ——
-            # 否则用户迟到的作答会写进一张已无人等待的题，再被下一条无关调用
-            # 当成自己的澄清结论消费掉（注入上下文 + 吃掉答案）。前端同时收到
-            # expired 事件，知道向导是被超时关闭的，而不是答案已生效。
-            release_clarification_run(ctx.run_id)
-            owner = str((ctx.active_tool_call or {}).get("tool") or "")
-            decision.events = list(decision.events or []) + [TraceEvent(
-                kind="clarification_done",
-                source="reins.clarification",
-                run_id=ctx.run_id,
-                iteration=ctx.iteration,
-                payload={
-                    "run_id": ctx.run_id,
-                    "tool": owner,
-                    "answers": {},
-                    "summary": "",
-                    "expired": True,
-                },
-            )]
-            decision.intercept_reason = (
-                "clarification_timeout：等待用户澄清超时（或题目已被回收），"
-                "本次调用未执行；请勿重试同一命令，改用目标明确的命令或先向用户说明")
-            logger.info("澄清等待超时 run=%s，已回收待答状态并记录 expired 事件", ctx.run_id)
+            # 超时/回收：用同一 risk 快照生成 expired 决策，原调用不执行。
+            from agent.harness.reins.clarification import consume_answer_decision
+            decision = consume_answer_decision(ctx, "expired")
+            if decision is None:
+                release_clarification_run(ctx.run_id)
+                decision.intercept_reason = (
+                    "clarification_timeout：等待用户澄清超时（或题目已被回收），"
+                    "本次调用未执行；请勿重试同一命令，改用目标明确的命令或先向用户说明")
+            logger.info("澄清等待超时 run=%s，已生成 expired 决策", ctx.run_id)
             return decision
         entry = ctx.active_tool_call
         if entry is not None:
@@ -1378,8 +1535,106 @@ class Driver:
         waited = ctx.metadata.get("clarification_waited")
         if isinstance(waited, set):
             waited.discard(sig)
-        logger.info("澄清答案到达 run=%s，重判一次 PRE_TOOL_CALL", ctx.run_id)
-        return await harness.reins.check(ReinPoint.PRE_TOOL_CALL, ctx)
+        logger.info("澄清答案到达 run=%s，作废原调用并进入重规划", ctx.run_id)
+        from agent.harness.reins.clarification import consume_answer_decision
+        decision = consume_answer_decision(ctx)
+        if decision is None:
+            # fail-closed：有答案却无法归属，绝不回落到原工具执行
+            decision = ReinDecision(
+                intercepted=True,
+                intercept_reason="clarification_failclosed：答案无法归属当前调用，已阻止执行",
+            )
+            ctx.metadata["clarification_failed_closed"] = True
+        return decision
+
+    async def _suspend_for_clarification(
+        self,
+        ctx: RunContext,
+        harness: "Harness",
+        decision: ReinDecision,
+        sig: str,
+    ) -> bool:
+        """澄清等待闸（二·挂起版）：把待确认点登记进 ctx，run 整体暂停。
+
+        永久等待不是「协程无限 sleep」——等待期间协程占死全局/会话并发槽
+        （全局默认 4，两张挂起的卡就吃掉一半容量），进程重启后更无处可等。
+        挂起模型：题目序列化进 ctx.metadata（落库由 _write_suspension_checkpoint
+        统一做），置位 clarification_suspended，由上层收尾转
+        WAITING_CONFIRMATION 并结束 SSE；用户提交答案后 POST /runs/{id}/resume
+        重放本轮 tool_calls，答案经 consume_answer_decision 作废原调用
+        （与在线路径逐字一致）。
+
+        Returns: True = 已挂起（调用方必须立刻返回）；False = 题目已不存在，
+        落回旧阻塞路径。
+        """
+        if not ctx.metadata.get(AWAIT_APPROVAL_KEY):
+            return False
+        from agent.harness.reins.clarification import build_clarification_pending
+        pending = build_clarification_pending(ctx.run_id)
+        if not pending:
+            return False
+        ctx.metadata["clarification_pending_payload"] = pending
+        ctx.metadata["clarification_suspended"] = True
+        logger.info(
+            "澄清挂起 run=%s ticket=%s，等待用户恢复",
+            ctx.run_id, pending.get("tool_call_id"),
+        )
+        return True
+
+    async def _write_suspension_checkpoint(
+        self, calls, start_index: int, ctx: RunContext,
+        harness: "Harness", iteration: int,
+    ) -> None:
+        """待确认点 + 上下文快照同步落库（必须先于 waiting_confirmation 事件）。
+
+        硬退出（taskkill / 崩溃）时 finally 跑不到，所以落库只能在挂起点当场
+        完成。写入失败不吞 —— 抛回上层按普通错误终止，绝不留下「前端有卡、
+        DB 无快照」的孤儿卡片（那种卡片用户答了也没有任何效果）。
+        """
+        from db.run_checkpoints import save_checkpoint
+        pending = dict(ctx.metadata.get("clarification_pending_payload") or {})
+        pending["state"] = "pending"
+        # 重放所需：整轮 tool_calls + 起始下标。恢复时不清洗 messages、
+        # 不预写 tool result —— 原调用是否作废由恢复时的答案消费决定。
+        pending["round_calls"] = [
+            {"tool_call_id": c.id, "tool": c.name, "args": c.args}
+            for c in (calls or [])
+        ]
+        pending["start_index"] = int(start_index)
+        # partial：挂起前最后一段 assistant 正文（前端恢复时回填气泡用）
+        last_content = ""
+        for _m in reversed(ctx.messages or []):
+            if isinstance(_m, dict) and _m.get("role") == "assistant":
+                _c = _m.get("content")
+                if isinstance(_c, str) and _c.strip():
+                    last_content = _c[-4000:]
+                    break
+        recent_calls = [
+            {k: entry.get(k) for k in
+             ("tool", "args", "success", "tool_call_id")}
+            for entry in (ctx.tool_calls_log or [])[-20:]
+        ]
+        harness_spec = {
+            "task": str(getattr(ctx, "task", "") or ""),
+            "conversation_id": str(getattr(ctx, "conversation_id", "") or ""),
+            "system_prompt": str(getattr(ctx, "system_prompt", "") or ""),
+            "max_iterations": int(getattr(ctx.config, "max_iterations", 100) or 100),
+            "permission_mode": str(ctx.metadata.get("permission_mode") or "normal"),
+            "environment": str(getattr(ctx, "environment", "") or ""),
+            "target_host": str(getattr(ctx, "target_host", "") or ""),
+            "ssh_session_id": str(getattr(ctx, "ssh_session_id", "") or ""),
+            "model": str(getattr(ctx, "model", "") or ""),
+        }
+        await asyncio.to_thread(
+            save_checkpoint,
+            ctx.run_id,
+            conv_id=harness_spec["conversation_id"],
+            messages=list(ctx.messages or []),
+            harness=harness_spec,
+            pending=pending,
+            partial={"content": last_content, "tool_calls": recent_calls},
+            iteration=int(iteration),
+        )
 
     def _register_approval(
         self,

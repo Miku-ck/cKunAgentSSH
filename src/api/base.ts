@@ -220,6 +220,27 @@ export function backendErrorDetail(err: unknown): string {
   return typeof detail === 'string' ? detail : ''
 }
 
+/**
+ * 带 HTTP 状态与响应体的错误。extends Error：现有 instanceof Error 调用方
+ * （toast、重试判定）无需改动。
+ * 用途：409 {code:"pending_clarification", run_id} 这类结构化错误 ——
+ * 纯字符串会把 code/run_id 丢失，前端无法据此引导「取消旧任务→重发」。
+ */
+export class ApiError extends Error {
+  status: number
+  body: unknown
+  code: string
+  constructor(message: string, status: number, body: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.body = body
+    this.code = (body && typeof body === 'object' && 'code' in (body as Record<string, unknown>))
+      ? String((body as Record<string, unknown>).code ?? '')
+      : ''
+  }
+}
+
 export async function request<T>(path: string, options?: RequestInit, _retrying = false): Promise<T> {
   const { headers: customHeaders, ...restOptions } = options || {}
   // FormData 请求由浏览器自动设置 Content-Type（含 multipart boundary），不要手动覆盖
@@ -240,7 +261,11 @@ export async function request<T>(path: string, options?: RequestInit, _retrying 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
       // 非 JSON 错误体（如反向代理 502 HTML 页）statusText 可能为空，补上状态码前缀保住语义
-      throw new Error(backendErrorDetail(err) || `HTTP ${res.status} ${res.statusText}`.trim())
+      throw new ApiError(
+        backendErrorDetail(err) || `HTTP ${res.status} ${res.statusText}`.trim(),
+        res.status,
+        err,
+      )
     }
     if (res.status === 204) return {} as T
     return res.json()

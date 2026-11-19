@@ -15,18 +15,24 @@
  * 顺带当筛选下拉的枚举源（少列一个状态就有一类 run 筛不出来）。
  * 未认识的串一律原样显示、配色走中性：绝不把「新终态」猜成「失败」。
  */
-export const RUN_TERMINAL_STATES = ['completed', 'failed', 'human_help', 'max_reached'] as const
+// cancelled 与后端 TERMINAL_RUN_STATES 对齐（contracts.py）：用户主动终止是
+// 独立终态，不是 failed —— 显示「已取消」，不触发「不可恢复」类提示。
+// waiting_confirmation 是**暂停态**（非终态）：等待用户澄清/批准时 run 并未
+// 结束，绝不能进本集合（否则前端会清卡片、固化空回复）。
+export const RUN_TERMINAL_STATES = ['completed', 'failed', 'human_help', 'max_reached', 'cancelled'] as const
 
 export type RunTerminalState = typeof RUN_TERMINAL_STATES[number]
 
-/** 后端 run 表的全部可见状态：终态 + 两个在途值。键序即筛选下拉的展示顺序。 */
+/** 后端 run 表的全部可见状态：终态 + 在途值。键序即筛选下拉的展示顺序。 */
 export const RUN_STATE_LABELS: Record<string, string> = {
   init: '初始化',
   running: '运行中',
+  waiting_confirmation: '等待确认',
   completed: '完成',
   failed: '失败',
   human_help: '请求人工介入',
   max_reached: '达到迭代上限',
+  cancelled: '已取消',
 }
 
 export function isRunTerminalState(value: unknown): value is RunTerminalState {

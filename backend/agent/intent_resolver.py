@@ -48,7 +48,6 @@ from agent.harness.contracts import (
 from agent.harness.reins.clarification import (
     _CLARIFICATION_CONTEXT,
     _CLARIFICATION_DONE,
-    _CLARIFICATION_TTL_SEC,
     TASK_CLARIFICATION_TOOL,
     _build_clarification_needed,
     _format_answers,
@@ -215,23 +214,31 @@ def _merge_calibration(
     )
 
 
-async def _wait_task_answers(run_id: str) -> Optional[dict]:
-    """轮询等待任务级澄清答案。
+_TASK_CANCEL_SENTINEL = "__task_cancelled__"
+
+
+async def _wait_task_answers(run_id: str) -> Any:
+    """轮询等待任务级澄清答案（永久等待 —— 无 TTL）。
 
     返回值三态：
-    - dict：用户答案（可能为空 dict = 用户点了跳过）
-    - None：TTL 到期 / pending 被回收（用户停止 run、断连、release-run）
+    - dict：用户答案（可能为空 dict = 旧数据里的跳过，新语义下不会产生）
+    - None：pending 被回收（run 被外部释放）—— 不再等
+    - _TASK_CANCEL_SENTINEL：用户取消整个任务（POST /runs/{id}/cancel）
     取消（CancelledError）原样上抛，由 driver 的取消链收尾。
+
+    2026-11 语义修正：任务级澄清与工具级同口径 —— 智能体询问用户时
+    不设超时、不主动跳过；唯一终止路径是用户作答或显式取消。
     """
-    deadline = time.monotonic() + _CLARIFICATION_TTL_SEC
-    while time.monotonic() < deadline:
+    from agent.harness.reins.clarification import _CLARIFICATION_CANCEL
+    while True:
+        if run_id in _CLARIFICATION_CANCEL:
+            return _TASK_CANCEL_SENTINEL
         if run_id in _CLARIFICATION_DONE:
             return _CLARIFICATION_DONE[run_id]
         if run_id not in _CLARIFICATION_CONTEXT:
-            # release_clarification_run / TTL 清扫已回收 → 不会有人再答题
+            # release_clarification_run 已回收 → 不会有人再答题
             return None
         await asyncio.sleep(0.5)
-    return None
 
 
 async def _run_task_clarification(
@@ -267,9 +274,25 @@ async def _run_task_clarification(
             reason=_TASK_CLARIFICATION_REASON,
         ))
         # 阻塞等待任务级澄清答案（结果由下方 pop_task_clarification 取回）
-        await _wait_task_answers(ctx.run_id)
+        wait_result = await _wait_task_answers(ctx.run_id)
+        if wait_result == _TASK_CANCEL_SENTINEL:
+            # 用户在任务级澄清上点了「取消任务」：路由层已写 cancelled 终态。
+            # 这里以 CancelledError 终止 driver（意图阶段还没有任何工具执行，
+            # 直接退出最安全），发出关闭事件让前端卡片收场。
+            pop_task_clarification(ctx.run_id)
+            try:
+                await emit_event(TraceEvent(
+                    kind="clarification_done",
+                    source="intent_resolver",
+                    run_id=ctx.run_id,
+                    payload={"run_id": ctx.run_id, "tool": TASK_CLARIFICATION_TOOL,
+                             "answers": {}, "summary": "", "cancelled": True},
+                ))
+            except Exception:
+                pass
+            raise asyncio.CancelledError("task_clarification_cancelled")
     except asyncio.CancelledError:
-        # run 被取消：清掉 pending 再上抛，别让孤儿题等 TTL
+        # run 被取消：清掉 pending 再上抛，别让孤儿题无人回收
         pop_task_clarification(ctx.run_id)
         raise
 

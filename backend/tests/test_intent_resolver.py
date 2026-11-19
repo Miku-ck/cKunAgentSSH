@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import asyncio
+
 import pytest
 
 from agent.intention import (
@@ -209,11 +211,19 @@ async def test_task_clarification_roundtrip(monkeypatch):
     monkeypatch.setattr(intent_resolver, "_calibrate_via_llm", fake_cal)
 
     ctx = _fake_ctx(_AMBIGUOUS_TASK, await_approval=True)
-    # 预录答案（register 发生在 resolve 内部，DONE 先就位 → wait 立即返回）
-    record_clarification_answers(ctx.run_id, {"0": {"choice": "B"}})
+    # 题目在 resolve 内部注册后**异步补录**答案：配对桩已删除（挂起语义下
+    # 孤儿答案一律拒绝），预录不再可行；wait 轮询 0.5s，10ms 补录必先到达。
+    async def _answer_later():
+        for _ in range(500):
+            if ctx.run_id in _CLARIFICATION_CONTEXT:
+                record_clarification_answers(ctx.run_id, {"0": {"choice": "B"}})
+                return
+            await asyncio.sleep(0.01)
+    _answer_task = asyncio.create_task(_answer_later())
     try:
         r = await resolve_intention(ctx, max_budget=None)
     finally:
+        _answer_task.cancel()
         release_clarification_run(ctx.run_id)
 
     kinds = [e.kind for e in ctx.events]
@@ -243,10 +253,19 @@ async def test_task_clarification_skip_falls_back_to_rules(monkeypatch):
     monkeypatch.setattr(intent_resolver, "_calibrate_via_llm", fake_cal)
 
     ctx = _fake_ctx(_AMBIGUOUS_TASK, await_approval=True)
-    record_clarification_answers(ctx.run_id, {})  # skip = 空 dict
+    # 挂起语义下不存在「用户跳过」——本测试改为验证「答案为空 dict 的历史
+    # 数据」的兼容路径：注册后异步补录空答案（wait 立即返回空 dict）。
+    async def _answer_later():
+        for _ in range(500):
+            if ctx.run_id in _CLARIFICATION_CONTEXT:
+                record_clarification_answers(ctx.run_id, {})  # 空 dict = 历史跳过数据
+                return
+            await asyncio.sleep(0.01)
+    _answer_task = asyncio.create_task(_answer_later())
     try:
         r = await resolve_intention(ctx, max_budget=None)
     finally:
+        _answer_task.cancel()
         release_clarification_run(ctx.run_id)
     assert r.source == "rules"
     assert ctx.messages == []

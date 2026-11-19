@@ -73,9 +73,9 @@ class TestShellDetectVague:
         assert reason is not None
         assert "rm" in reason
 
-    def test_recursive_rm_triggers(self):
-        reason = _shell_detect_vague({"command": "rm -rf /tmp/build"})
-        assert reason is not None
+    def test_recursive_exact_path_no_longer_triggers(self):
+        """精确路径的 rm -rf 是明确命令，不再触发澄清（2026-11 收窄误报）。"""
+        assert _shell_detect_vague({"command": "rm -rf /tmp/build"}) is None
 
     def test_find_xargs_triggers(self):
         reason = _shell_detect_vague({"command": "find . -name '*.log' | xargs rm"})
@@ -97,9 +97,10 @@ class TestShellDetectVague:
 # ── _shell_build_steps ──
 
 class TestShellBuildSteps:
-    def test_builds_three_steps(self):
+    def test_builds_single_scope_step(self):
+        """shell 只问一个阻塞问题（影响范围）；处置与汇报用安全默认。"""
         steps = _shell_build_steps({"command": "rm -rf *"})
-        assert len(steps) == 3
+        assert len(steps) == 1
         for s in steps:
             assert isinstance(s, ClarificationStep)
             assert s.options  # 非空
@@ -139,13 +140,13 @@ class TestBuildClarificationNeeded:
         steps = _shell_build_steps({"command": "rm -rf *"})
         ev = _build_clarification_needed(
             run_id="r1", tool="shell_exec", args={"command": "rm -rf *"},
-            steps=steps, step=0, total=3, tool_call_id="tc1",
+            steps=steps, step=0, total=len(steps), tool_call_id="tc1",
         )
         assert isinstance(ev, TraceEvent)
         assert ev.kind == "clarification_needed"
         assert ev.payload["tool"] == "shell_exec"
-        assert ev.payload["total"] == 3
-        assert len(ev.payload["steps"]) == 3
+        assert ev.payload["total"] == len(steps)
+        assert len(ev.payload["steps"]) == len(steps)
 
 
 # ── _format_answers ──
@@ -337,7 +338,11 @@ class TestClarificationInterceptor:
 
     @pytest.mark.asyncio
     async def test_done_answers_inject_context_and_release(self):
-        """链路 3：答案就绪后 → 注入上下文 + clarification_done + 放行"""
+        """链路 3（挂起语义）：答案就绪 → 消费后作废原调用 + clarification_done。
+
+        答案不是执行许可：consume_answer_decision 恒 intercepted=True，
+        原调用写「未执行」结果，模型按澄清结果重新规划。
+        """
         interceptor = ClarificationInterceptor()
         ctx = _make_ctx(args={"command": "rm -rf *"})
 
@@ -354,12 +359,13 @@ class TestClarificationInterceptor:
         # 第 2 步：框架再次调用 check
         decision = await interceptor.check(ctx)
 
-        assert decision.intercepted is False
-        assert len(decision.events) == 1
-        assert decision.events[0].kind == "clarification_done"
+        assert decision.intercepted is True, "答案只作废原调用，不是放行许可"
+        assert any(ev.kind == "clarification_done" for ev in decision.events)
 
-        # inject_messages 包含用户答案摘要
+        # inject_messages 包含用户答案摘要（重规划指令）
         assert any("[用户澄清结果]" in (m.get("content", "") or "") for m in decision.inject_messages)
+        abandoned = ctx.metadata.get("clarification_abandoned_turn")
+        assert abandoned, "作废标记必须落进 metadata（driver 据此写「未执行」并作废同轮剩余调用）"
 
 
 # ── P1-2: find 只读误判修复 ──
@@ -476,31 +482,36 @@ class TestRouteValidation:
             })
 
 
-# ── P1-6: TTL 过期 + run 终态回收 + 运维语境题目 ──
+# ── 挂起语义：无 TTL、无配对桩、孤儿回收 ──
 
-def test_record_clarification_answers_creates_stub_context():
-    """孤儿答案（无既有 context）也会被配对桩捕获，供 TTL 回收"""
+def test_record_clarification_answers_rejects_orphan_without_stub():
+    """孤儿答案不再被配对桩捕获：没有 context 的答案一律 rejected。
+
+    挂起语义下 stub 会造出「有答案、没人等、无处消费」的幽灵题 ——
+    永久等待模型里这是内存泄漏 + 答案误投递的来源，必须拒绝。
+    """
     reins_mod._CLARIFICATION_DONE.pop("run-orphan", None)
     reins_mod._CLARIFICATION_CONTEXT.pop("run-orphan", None)
-    reins_mod.record_clarification_answers("run-orphan", {"0": {"choice": "A"}})
-    assert "run-orphan" in reins_mod._CLARIFICATION_DONE
-    ci = reins_mod._CLARIFICATION_CONTEXT["run-orphan"]
-    assert ci["_done"] is True and "ts" in ci
-    reins_mod.release_clarification_run("run-orphan")
+    assert reins_mod.record_clarification_answers(
+        "run-orphan", {"0": {"choice": "A"}}) == "gone"
     assert "run-orphan" not in reins_mod._CLARIFICATION_DONE
     assert "run-orphan" not in reins_mod._CLARIFICATION_CONTEXT
 
 
-def test_purge_expired_clarifications_removes_old_entries(monkeypatch):
+def test_purge_expired_clarifications_only_reclaims_orphans():
+    """TTL 已删除：老题不许被清理；只回收 done 有、context 无的孤儿。"""
+    import time as _t
     done, ctx = reins_mod._CLARIFICATION_DONE, reins_mod._CLARIFICATION_CONTEXT
     done.pop("run-ttl", None)
     ctx.pop("run-ttl", None)
     ctx["run-ttl"] = {"tool": "shell_exec", "steps": [], "_done": False,
-                      "ts": 0.0}  # 远早于 TTL
-    done["run-ttl"] = {"0": {"choice": "B"}}
+                      "ts": 0.0}  # 远早于任何旧 TTL
+    done["run-ttl-orphan"] = {"0": {"choice": "B"}}  # 孤儿：无 context
     removed = reins_mod._purge_expired_clarifications()
-    assert "run-ttl" not in ctx and "run-ttl" not in done
-    assert removed >= 1  # expired 计数按 context 条目（done 配对回收不单计）
+    assert "run-ttl" in ctx, "未答题（即便极老）不得按时间清理 —— 永久等待"
+    assert "run-ttl-orphan" not in done, "孤儿答案必须回收"
+    assert removed >= 1
+    reins_mod.release_clarification_run("run-ttl")
 
 
 def test_purge_keeps_fresh_entries():
@@ -515,30 +526,31 @@ def test_purge_keeps_fresh_entries():
     reins_mod.release_clarification_run("run-fresh")
 
 
-def test_interceptor_releases_after_ttl(monkeypatch):
-    """过期未答题不再无限拦截：TTL 后同 run 的模糊命令应重建新题而非重发旧题"""
+def test_interceptor_reissued_pending_not_rebuilt():
+    """未答题重试同一条命令：重发当前题（pending），不重建新题。
+
+    挂起语义下不存在「TTL 到点重建」—— 题一直有效，直到用户作答或取消。
+    """
     import time as _t
     done, ctx = reins_mod._CLARIFICATION_DONE, reins_mod._CLARIFICATION_CONTEXT
     done.pop("run-exp", None)
     ctx.pop("run-exp", None)
     ctx["run-exp"] = {"tool": "shell_exec", "args": {"command": "rm -rf /var/log/*"},
                       "tool_call_id": "x", "steps": [], "current_step": 0,
-                      "total": 0, "reason": "r", "_done": False, "ts": 0.0}
+                      "total": 0, "reason": "r", "_done": False, "ts": _t.time()}
     d = ClarificationInterceptor()
     rctx = _make_ctx()
     rctx.run_id = "run-exp"
     decision = asyncio.run(d.check(rctx))
     assert decision.intercepted is True
-    assert decision.intercept_reason.startswith("clarification_needed")  # 重建新题而非 pending 重发
-    new_ci = ctx["run-exp"]
-    assert new_ci["ts"] > _t.time() - 5  # 新时间戳
+    assert decision.intercept_reason.startswith("clarification_pending")  # 重发旧题
     reins_mod.release_clarification_run("run-exp")
 
 
 def test_shell_steps_use_ops_semantics_not_git():
-    """澄清题不得出现本地 git 工作区话术（作用范围=目标机/递归/复核）"""
+    """澄清题不得出现本地 git 工作区话术（单题=影响范围，目标机语境）"""
     steps = _shell_build_steps({"command": "rm -rf /var/log/*.gz"})
-    assert len(steps) == 3
+    assert len(steps) == 1
     parts = [s.question for s in steps]
     for step in steps:
         for opt in step.options:
@@ -547,14 +559,13 @@ def test_shell_steps_use_ops_semantics_not_git():
     for forbidden in ("git", "commit", "工作区", "仓库"):
         assert forbidden not in all_text
     assert "目标机" in steps[0].question
-    assert "undo" in steps[1].options[2].label
 
 
 # ── 扩注册表（2026-09 演进）：job_run / file_write / service_manage ──
 
 class TestRegistryExtension:
-    def _steps_shape(self, steps):
-        assert len(steps) == 3
+    def _steps_shape(self, steps, expected_len=3):
+        assert len(steps) == expected_len
         for s in steps:
             assert isinstance(s, ClarificationStep)
             assert [o.id for o in s.options] == ["A", "B", "C"]
@@ -585,7 +596,9 @@ class TestRegistryExtension:
         assert _file_write_detect_vague({"path": "/srv/app/config.ini", "content": "x"}) is None
 
     def test_file_write_steps_shape(self):
-        self._steps_shape(_file_write_build_steps({"path": "/etc/foo.conf"}))
+        # file_write 只问两个阻塞问题：备份策略 + 配置生效方式
+        self._steps_shape(_file_write_build_steps({"path": "/etc/foo.conf"}),
+                          expected_len=2)
 
     def test_file_write_steps_ask_backup_and_reload(self):
         steps = _file_write_build_steps({"path": "/etc/ssh/sshd_config"})
@@ -695,7 +708,7 @@ class TestInterceptorExtendedTools:
         ev = d.events[0]
         assert ev.kind == "clarification_needed"
         assert ev.payload["tool"] == "file_write"
-        assert len(ev.payload["steps"]) == 3
+        assert len(ev.payload["steps"]) == 2
 
     @pytest.mark.asyncio
     async def test_service_manage_sshd_stop_emits_clarification(self):
@@ -707,6 +720,7 @@ class TestInterceptorExtendedTools:
 
     @pytest.mark.asyncio
     async def test_extended_tool_release_after_answer(self):
+        """挂起语义：答案消费后作废原调用（intercepted），不是放行。"""
         it = ClarificationInterceptor()
         ctx = _make_ctx(tool="file_write", args={"path": "/etc/foo.conf", "content": "x"})
         d1 = await it.check(ctx)
@@ -715,5 +729,7 @@ class TestInterceptorExtendedTools:
         ctx2 = _make_ctx(tool="file_write", args={"path": "/etc/foo.conf", "content": "x"})
         ctx2.run_id = ctx.run_id
         d2 = await it.check(ctx2)
-        assert not d2.intercepted
+        assert d2.intercepted, "答案 = 作废原调用并重规划，不是放行"
+        assert any(ev.kind == "clarification_done" for ev in d2.events)
+        assert ctx2.metadata.get("clarification_abandoned_turn")
         assert any(e.kind == "clarification_done" for e in d2.events)

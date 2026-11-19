@@ -43,9 +43,13 @@ AWAIT_APPROVAL_KEY = "await_approval"
 # （跨层 key 漂移家族，钉在 test_gate_兜底时长过期判定走getter）。
 # 0 = 禁用兜底（永久等待）。上限 86400s：再大的值与"永久"在使用上没区别。
 APPROVAL_FALLBACK_MAX_S = 86400.0
-_APPROVAL_FALLBACK_DEFAULT_S = 600.0
+# 永久等待语义（2026-11 用户拍板）：审批卡弹出后**不设超时** —— 不主动跳过、
+# 不超时关闭，一直等到用户批准/拒绝/取消任务。旧默认 600s 会在用户离席时
+# 自动拒绝并继续跑，与"不要主动跳过"的要求相反。需要旧行为时用环境变量
+# CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S 显式设置（如 600）。
+_APPROVAL_FALLBACK_DEFAULT_S = 0.0
 _approval_fallback_s = float(os.getenv(
-    "CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S", "600.0"))
+    "CKUNAGENTIC_PERMISSION_APPROVAL_FALLBACK_S", "0.0"))
 
 
 def approval_fallback_seconds() -> float:

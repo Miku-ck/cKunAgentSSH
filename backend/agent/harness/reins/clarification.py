@@ -23,6 +23,20 @@ from ..contracts import (
     RunContext,
     TraceEvent,
 )
+from ...clarification_policy import (
+    KIND_INTENT,
+    KIND_RISK,
+    KIND_SCOPE,
+    OUTCOME_ANSWERED,
+    OUTCOME_EXPIRED,
+    OUTCOME_SKIPPED,
+    POLICY_BLOCKED,
+    POLICY_NONE,
+    RISK_HIGH,
+    classify_tool_risk,
+    decide_policy,
+    skip_policy_for_tool,
+)
 from ..safety import classify_command, classify_constructed_command
 from .core import (
     AWAIT_APPROVAL_KEY,
@@ -71,40 +85,160 @@ _CLARIFICATION_TTL_SEC = 600
 
 
 def _purge_expired_clarifications() -> int:
-    """清理超过 TTL 的澄清条目（context 与配对的 done），返回清理条数"""
-    now = time.time()
-    expired = [
-        rid for rid, ci in _CLARIFICATION_CONTEXT.items()
-        if now - float(ci.get("ts", now)) > _CLARIFICATION_TTL_SEC
-    ]
-    for rid in expired:
-        _CLARIFICATION_CONTEXT.pop(rid, None)
-        _CLARIFICATION_DONE.pop(rid, None)
-    # done 必与 context 配对（record_clarification_answers 保证桩），孤儿一并回收
+    """只回收孤儿（done 有、context 无），绝不按 ts 删 context。
+
+    永久等待语义（2026-11）：澄清题没有 TTL —— 用户什么时候答都算数。
+    原实现按 600s 清 context，会把用户还没答的题删掉；现在唯一允许的
+    清理是「答案条目没有对应 context」的孤儿回收（消费完成后的残留）。
+    """
     orphans = [rid for rid in _CLARIFICATION_DONE
                if rid not in _CLARIFICATION_CONTEXT]
     for rid in orphans:
         _CLARIFICATION_DONE.pop(rid, None)
-    return len(expired) + len(orphans)
+    return len(orphans)
 
 
-def record_clarification_answers(run_id: str, answers: dict) -> None:
-    """路由层写入答案/跳过结果。
+# run_id → 已被用户取消的 run（挂起后用户点了「取消任务」）。
+# 挂起模型下 run task 已返回，内存态通常已被释放；这个集合只服务
+# 「取消发生在答案消费之前的竞态窗口」，DB 的 pending_json.state 才是权威。
+_CLARIFICATION_CANCEL: set[str] = set()
 
-    统一维护 done + context 配对与时间戳：无既有 context（run 已换新/题已清）
-    时补最小桩，保证 TTL 清扫能找到并回收孤儿答案。
+
+def cancel_clarification(run_id: str) -> bool:
+    """用户取消整个任务：登记取消哨兵 + 回收本题内存态。
+
+    返回是否存在过未完成/未消费的题。DB 侧（pending_json.state=cancelled、
+    run 置 CANCELLED 终态）由路由层负责，这里只管内存。
     """
-    _CLARIFICATION_DONE[run_id] = answers
+    _CLARIFICATION_CANCEL.add(run_id)
+    had = _CLARIFICATION_CONTEXT.pop(run_id, None) is not None
+    had = _CLARIFICATION_DONE.pop(run_id, None) is not None or had
+    return had
+
+
+def build_clarification_pending(run_id: str) -> Optional[dict]:
+    """把当前待确认题序列化为可落库的 payload（挂起快照用）。
+
+    字段与 clarification_needed 事件 payload 对齐（前端恢复卡片直接复用），
+    另带重放所需的重放索引信息由 driver 在 checkpoint 层补写。
+    risk = safe|moderate|dangerous（前端只读这个）；澄清矩阵的
+    low|medium|high 放 policy_risk，前端不要读。
+    """
     ctx_info = _CLARIFICATION_CONTEXT.get(run_id)
-    if ctx_info is None:
-        _CLARIFICATION_CONTEXT[run_id] = {
-            "tool": "", "args": {}, "steps": [], "current_step": 0,
-            "total": 0, "reason": "", "_done": True, "ts": time.time(),
-        }
-    else:
-        ctx_info["_done"] = True
-        ctx_info.setdefault("ts", time.time())
+    if not ctx_info or ctx_info.get("_done"):
+        return None
+    policy_risk = str(ctx_info.get("risk") or RISK_HIGH)
+    # 前端权限卡口径：low→safe / medium→moderate / high→dangerous
+    card_risk = {"low": "safe", "medium": "moderate"}.get(policy_risk, "dangerous")
+    steps = ctx_info.get("steps") or []
+    return {
+        "kind": str(ctx_info.get("kind") or KIND_SCOPE),
+        "tool": str(ctx_info.get("tool") or ""),
+        "tool_call_id": str(ctx_info.get("tool_call_id") or ""),
+        "owner_tool_call_id": str(ctx_info.get("owner_tool_call_id") or ""),
+        "args": ctx_info.get("args") or {},
+        "command": str((ctx_info.get("args") or {}).get("command") or ""),
+        "risk": card_risk,
+        "policy_risk": policy_risk,
+        "steps": [_step_to_dict(s) for s in steps],
+        "step": int(ctx_info.get("current_step") or 0),
+        "total": int(ctx_info.get("total") or len(steps)),
+        "reason": str(ctx_info.get("reason") or ""),
+        "created_at": time.time(),
+    }
+
+
+def reinject_pending(run_id: str, pending: dict) -> bool:
+    """把落库的待确认题回填进内存态（resume 用），已存在则覆盖。
+
+    恢复路径的答案消费依赖 _CLARIFICATION_CONTEXT 存在；进程重启后内存
+    为空，必须先回填。answers 为空 dict 是合法输入（等价跳过）—— 但
+    永久等待语义下跳过按钮已删，空 answers 只在「用户明确取消」时出现。
+    """
+    if not isinstance(pending, dict) or not pending.get("tool_call_id"):
+        return False
+    steps_raw = pending.get("steps") or []
+    steps: list = []
+    for s in steps_raw:
+        if isinstance(s, dict):
+            steps.append(ClarificationStep(
+                question=str(s.get("question") or ""),
+                options=[ClarificationOption(
+                    id=str(o.get("id") or ""), label=str(o.get("label") or ""),
+                ) for o in (s.get("options") or [])],
+                allow_custom=bool(s.get("allow_custom", True)),
+            ))
+        else:
+            steps.append(s)
+    _CLARIFICATION_CONTEXT[run_id] = {
+        "tool": str(pending.get("tool") or ""),
+        "args": pending.get("args") or {},
+        "tool_call_id": str(pending.get("tool_call_id") or ""),
+        "owner_tool_call_id": str(pending.get("owner_tool_call_id") or ""),
+        "kind": str(pending.get("kind") or KIND_SCOPE),
+        "risk": str(pending.get("policy_risk") or RISK_HIGH),
+        "policy": str(pending.get("skip_policy") or ""),
+        "skip_policy": str(pending.get("skip_policy") or ""),
+        "steps": steps,
+        "current_step": int(pending.get("step") or 0),
+        "total": int(pending.get("total") or len(steps)),
+        "reason": str(pending.get("reason") or ""),
+        "_done": False,
+        "ts": time.time(),
+    }
     _enforce_clarification_cap()
+    return True
+
+
+def record_clarification_answers(
+    run_id: str, answers: dict, tool_call_id: str = "",
+) -> str:
+    """写入答案；票据必须与当前 pending 匹配。
+
+    返回 "recorded" | "rejected"。不补桩、不创建孤儿答案。
+    """
+    ctx_info = _CLARIFICATION_CONTEXT.get(run_id)
+    if not ctx_info:
+        # 挂起模型下：题随 run 挂起而离开内存（或 run 已取消/已恢复），
+        # 对调用方这是一张已失效的卡，与「票据不匹配」的参数错误区分开。
+        return "gone"
+    ticket = str(ctx_info.get("tool_call_id") or "")
+    if tool_call_id and str(tool_call_id or "") != ticket:
+        return "rejected"
+
+    steps = ctx_info.get("steps") or []
+    if not isinstance(answers, dict):
+        return "rejected"
+    for key, item in answers.items():
+        try:
+            idx = int(key)
+        except (TypeError, ValueError):
+            return "rejected"
+        if idx < 0 or idx >= len(steps) or not isinstance(item, dict):
+            return "rejected"
+        choice = item.get("choice", "")
+        if choice == "custom":
+            continue
+        step = steps[idx]
+        options = step.get("options") if isinstance(step, dict) else getattr(step, "options", None)
+        ids = {
+            (o.get("id") if isinstance(o, dict) else getattr(o, "id", ""))
+            for o in (options or [])
+        }
+        if choice not in ids:
+            return "rejected"
+
+    _CLARIFICATION_DONE[run_id] = answers
+    ctx_info["_done"] = True
+    ctx_info["ts"] = time.time()
+    _enforce_clarification_cap()
+    return "recorded"
+
+
+def peek_clarification_context(run_id: str) -> Optional[dict]:
+    """只读查看 pending，供 timeout 分支计算同一份 risk/policy。"""
+    ctx_info = _CLARIFICATION_CONTEXT.get(run_id)
+    return dict(ctx_info) if ctx_info else None
 
 
 def release_clarification_run(run_id: str) -> bool:
@@ -166,16 +300,22 @@ def register_task_clarification(
     steps: list,
     reason: str,
     task_preview: str,
+    *,
+    kind: str = KIND_INTENT,
+    risk: str = "medium",
+    skip_policy: str = "",
 ) -> str:
-    """登记任务级澄清题，返回 tool_call_id（uuid 防并发碰撞）。
-
-    args 塞 {"command": task_preview}：前端向导的命令预览行读 args.command。
-    """
+    """登记任务级澄清题，返回 tool_call_id（uuid 防并发碰撞）。"""
     tool_call_id = f"clarify_{_uuid.uuid4().hex[:12]}"
     _CLARIFICATION_CONTEXT[run_id] = {
         "tool": TASK_CLARIFICATION_TOOL,
         "args": {"command": task_preview},
         "tool_call_id": tool_call_id,
+        "owner_tool_call_id": "",
+        "kind": kind,
+        "risk": risk,
+        "policy": skip_policy,
+        "skip_policy": skip_policy,
         "steps": steps,
         "current_step": 0,
         "total": len(steps),
@@ -219,51 +359,27 @@ def _shell_detect_vague(args: dict) -> Optional[str]:
             pass  # find ... | xargs → 继续走后续递归/通配符判断
         else:
             return None
-    # 2) 含通配符或递归标记（-rR 可能以 -rf/-fr/-rR 组合形式出现，做宽松匹配）
+    # 2) 含通配符才视为范围不明；精确路径的 rm -rf 是明确命令，不拦。
+    #    find ... | xargs 没有通配符但目标来自管道，仍视为范围不明。
     has_wildcard = any(c in cmd for c in ("*", "?"))
-    # 匹配 -r / -R / -rf / -fr / -rR 等任何含 r/R 的短选项 token
-    has_recurs = bool(_re.search(r'(?:^|\s)-[a-zA-Z]*[rR][a-zA-Z]*\b', lower))
-    if not has_wildcard and not has_recurs:
+    if not has_wildcard:
+        if "find " in lower and "| xargs" in lower:
+            return f"命令 {cmd!r} 通过管道批量处理，影响范围不确定"
         return None
-    # 3) 走到这里必然同时满足「含破坏性动词」与「含通配符/递归」，才报影响范围不确定。
-    #    精准单文件的 rm 是在第 2 步 return None；`mv` 根本不在第 1 步的 _DESTRUCTIVE 表里
-    #    （只有 rm/rmdir/xargs/chmod/chown），它在第 1 步就退出 —— 两条不是同一个出口。
-    return f"命令 {cmd!r} 使用通配符/递归操作但未指定具体目标文件，影响范围不确定"
+    return f"命令 {cmd!r} 使用通配符操作但未指定具体目标文件，影响范围不确定"
 
 
 def _shell_build_steps(args: dict) -> list[ClarificationStep]:
-    """为模糊 shell 命令构建 3 步澄清题（范围 / 处置方式 / 完成后）。
-
-    面向 SSH 远程运维语境：目标是远端主机上的文件，措辞不得假设本地
-    git 工作区（原实现选项为"仅 git 已修改文件/自动 commit"，与场景错位）。
-    """
+    """shell/job 只问一个阻塞问题：影响范围。处置与汇报使用安全默认。"""
     cmd = command_from_args(args)
     cmd_display = (cmd[:40] + "…") if len(str(cmd)) > 40 else str(cmd)
     return [
         ClarificationStep(
             question=f"\"{cmd_display}\" 在目标机上的作用范围是？",
             options=[
-                ClarificationOption(id="A", label="仅通配符所在目录一层，不递归子目录（影响最小）"),
-                ClarificationOption(id="B", label="含全部子目录（按命令中的递归语义执行）"),
+                ClarificationOption(id="A", label="仅当前目录一层，不递归子目录"),
+                ClarificationOption(id="B", label="包含全部子目录（按命令中的递归语义执行）"),
                 ClarificationOption(id="C", label="我指定确切路径（在自定义输入中列出）"),
-            ],
-            allow_custom=True,
-        ),
-        ClarificationStep(
-            question="对匹配项的处理方式？",
-            options=[
-                ClarificationOption(id="A", label="仅报告，列出匹配项但不做任何修改"),
-                ClarificationOption(id="B", label="直接执行删除/清理"),
-                ClarificationOption(id="C", label="执行但生成 undo 脚本（可回滚）"),
-            ],
-            allow_custom=True,
-        ),
-        ClarificationStep(
-            question="执行完成后？",
-            options=[
-                ClarificationOption(id="A", label="直接结束，无需汇报"),
-                ClarificationOption(id="B", label="用只读命令（ls/du 等）复核结果并给出前后对比"),
-                ClarificationOption(id="C", label="汇总受影响文件清单与释放空间报告供我审查"),
             ],
             allow_custom=True,
         ),
@@ -272,8 +388,8 @@ def _shell_build_steps(args: dict) -> list[ClarificationStep]:
 
 # ── file_write：覆写系统配置文件 ──
 
-_SYSTEM_CONFIG_PREFIXES = ("/etc/", "/boot/", "/usr/lib/systemd/", "/lib/systemd/",
-                           "/usr/share/", "/proc/", "/sys/")
+_SENSITIVE_WRITE_ROOTS = ("/etc/", "/boot/", "/usr/lib/systemd/", "/lib/systemd/",
+                          "/usr/share/", "/proc/", "/sys/")
 
 
 def _file_write_detect_vague(args: dict) -> Optional[str]:
@@ -287,7 +403,7 @@ def _file_write_detect_vague(args: dict) -> Optional[str]:
     path = str(args.get("path") or "")
     if not path:
         return None
-    if path.startswith(_SYSTEM_CONFIG_PREFIXES) or path in ("/etc", "/boot"):
+    if path.startswith(_SENSITIVE_WRITE_ROOTS) or path in ("/etc", "/boot"):
         return f"即将整体覆写系统配置文件 {path!r}，备份策略与配置生效方式未明确"
     return None
 
@@ -313,15 +429,6 @@ def _file_write_build_steps(args: dict) -> list[ClarificationStep]:
                 ClarificationOption(id="A", label="仅写入，服务重载/重启由用户手动执行"),
                 ClarificationOption(id="B", label="写入后执行对应的低影响 reload（如 systemctl reload）"),
                 ClarificationOption(id="C", label="写入后先用只读命令校验语法（如 nginx -t / sshd -t）再决定是否 reload"),
-            ],
-            allow_custom=True,
-        ),
-        ClarificationStep(
-            question="完成后需要什么形式的结果汇报？",
-            options=[
-                ClarificationOption(id="A", label="直接结束，无需汇报"),
-                ClarificationOption(id="B", label="给出修改前后 diff 摘要"),
-                ClarificationOption(id="C", label="diff 摘要 + 相关服务运行状态核验"),
             ],
             allow_custom=True,
         ),
@@ -416,7 +523,9 @@ def _step_to_dict(s: ClarificationStep) -> dict:
 def _build_clarification_needed(run_id: str, tool: str, args: dict,
                                 steps: list[ClarificationStep], step: int,
                                 total: int, tool_call_id: str,
-                                reason: str = "") -> TraceEvent:
+                                reason: str = "", *, kind: str = KIND_SCOPE,
+                                risk: str = "", skip_policy: str = "",
+                                owner_tool_call_id: str = "") -> TraceEvent:
     return TraceEvent(
         kind="clarification_needed",
         source="reins.clarification",
@@ -425,11 +534,15 @@ def _build_clarification_needed(run_id: str, tool: str, args: dict,
             "run_id": run_id,
             "tool": tool,
             "tool_call_id": tool_call_id,
+            "owner_tool_call_id": owner_tool_call_id,
             "args": args,
             "step": step,
             "total": total,
+            "kind": kind,
+            "risk": risk,
+            "skip_policy": skip_policy,
             "reason": reason,
-            "steps": [_step_to_dict(s) for s in steps],   # 全量步，前端本地推进
+            "steps": [_step_to_dict(s) for s in steps],
         },
     )
 
@@ -471,7 +584,7 @@ def _format_answers(answers: dict, steps: Optional[list] = None) -> str:
     也能读懂「A」是什么。字母保留在前面，与 UI 上的选择一一对应。
     """
     if not answers:
-        return "用户选择跳过澄清，未指定具体范围。"
+        return "用户选择跳过，原操作不执行。"
     steps = steps or []
     lines = ["用户已回答澄清问题："]
     for step_idx in sorted(answers.keys(), key=lambda x: int(x)):
@@ -487,6 +600,82 @@ def _format_answers(answers: dict, steps: Optional[list] = None) -> str:
         if custom_text:
             lines[-1] += f"（用户补充：{custom_text}）"
     return "\n".join(lines)
+
+
+def consume_answer_decision(ctx: RunContext, outcome_override: str = "") -> Optional[ReinDecision]:
+    """消费答案并生成“作废原调用”的决策。
+
+    恒 intercepted=True：答案只决定原调用作废及重规划，不是执行许可；执行许可
+    必须由下一轮新 tool call 重新经过完整 reins/权限链。outcome_override="expired"
+    由 driver 超时路径使用。
+    """
+    run_id = ctx.run_id
+    ctx_info = _CLARIFICATION_CONTEXT.get(run_id)
+    if not ctx_info:
+        return None
+    if not outcome_override and not ctx_info.get("_done"):
+        return None
+    if not outcome_override and run_id not in _CLARIFICATION_DONE:
+        return None
+
+    answers = _CLARIFICATION_DONE.pop(run_id, {}) or {}
+    ctx_info = _CLARIFICATION_CONTEXT.pop(run_id, {}) or ctx_info
+    outcome = outcome_override or (OUTCOME_ANSWERED if answers else OUTCOME_SKIPPED)
+    risk = str(ctx_info.get("risk") or RISK_HIGH)
+    policy = decide_policy(risk, outcome)
+    ticket = str(ctx_info.get("tool_call_id") or "")
+    owner = str(ctx_info.get("owner_tool_call_id") or "")
+    summary = _format_answers(answers, (ctx_info.get("steps") or []))
+    if outcome == OUTCOME_EXPIRED:
+        summary = "等待澄清超时，原操作不执行。"
+    skip_reason = {
+        OUTCOME_SKIPPED: "clarification_skipped",
+        OUTCOME_EXPIRED: "clarification_timeout",
+    }.get(outcome, "")
+    if outcome == OUTCOME_ANSWERED:
+        content = f"[用户澄清结果]\n{summary}\n请按上述澄清范围重新规划；不要重试原始工具调用。"
+    elif outcome == OUTCOME_EXPIRED:
+        content = "[用户澄清结果]\n等待用户回答超时，原操作不执行。请重新规划安全替代方案。"
+    else:
+        content = "[用户澄清结果]\n用户选择跳过，原操作不执行。请重新规划安全替代方案。"
+    inject = [{"role": "user", "content": content}]
+    ctx.metadata["clarification_abandoned_turn"] = {
+        "tool_call_id": ticket,
+        "owner_tool_call_id": owner,
+        "outcome": outcome,
+        "policy": policy,
+        "skip_reason": skip_reason,
+        "inject_messages": inject,
+    }
+    ctx.metadata.pop("clarification_pending", None)
+    # 取消哨兵已消费完毕（无论本题最终走向哪个 outcome），清掉防泄漏；
+    # 真正的 run 终止由路由层写 DB 终态，这里只管内存回收。
+    _CLARIFICATION_CANCEL.discard(run_id)
+    ev = TraceEvent(
+        kind="clarification_done",
+        source="reins.clarification",
+        run_id=run_id,
+        iteration=ctx.iteration,
+        payload={
+            "run_id": run_id,
+            "tool": ctx_info.get("tool", ""),
+            "tool_call_id": ticket,
+            "owner_tool_call_id": owner,
+            "outcome": outcome,
+            "policy": policy,
+            "answers": answers,
+            "summary": summary,
+            "steps_total": len(ctx_info.get("steps") or []),
+            "expired": outcome == OUTCOME_EXPIRED,
+        },
+    )
+    return ReinDecision(
+        intercepted=True,
+        intercept_reason=f"clarification_abandoned: {outcome}",
+        events=[ev],
+        inject_messages=inject,
+    )
+
 
 
 @dataclass
@@ -522,6 +711,8 @@ class ClarificationInterceptor:
         · 有效风险 safe —— 不需要授权就会执行，不该先拦下来问 3 个问题。
         """
         if not ctx.metadata.get(AWAIT_APPROVAL_KEY):
+            return True
+        if str(ctx.metadata.get("permission_mode") or "").lower() == "plan":
             return True
         if (getattr(ctx, "environment", "") or "") == "prod":
             return True
@@ -559,45 +750,10 @@ class ClarificationInterceptor:
                 and run_id not in _CLARIFICATION_DONE):
             ctx.metadata.pop("clarification_pending", None)
 
-        # ── 答案就绪 → 注入上下文 + 放行 ──
-        if run_id in _CLARIFICATION_DONE:
-            # 答案是针对哪一次调用问的就还给谁。原先只看 run_id：答完之后紧接着的
-            # 第一次 PRE_TOOL_CALL（不管是不是同一个工具）都把答案消费掉。而等待期
-            # 注入的文案明写「请不要重试调用同一工具」，模型转去调别的工具是常态路径，
-            # 于是 ① 澄清被花在无关操作上（注入文本还接着说"请按上述澄清范围重新执行
-            # 操作"），② 向导上下文被 pop，真正触发澄清的那次调用再进来时无据可依。
-            pending_ctx = _CLARIFICATION_CONTEXT.get(run_id)
-            owner = str((pending_ctx or {}).get("tool") or "")
-            if not owner:
-                # 迟到答案：题目已被 TTL 清扫 / release_clarification_run 回收，
-                # 路由层补的桩没有归属工具。它不属于任何一次在途调用，若照旧消费
-                # 就会把一段无关的澄清结论注入给当前调用，并把答案吃掉。
-                _CLARIFICATION_DONE.pop(run_id, None)
-                _CLARIFICATION_CONTEXT.pop(run_id, None)
-                return ReinDecision()
-            if owner != tool:
-                return ReinDecision()
-            answers = _CLARIFICATION_DONE.pop(run_id)
-            ctx.metadata.pop("clarification_pending", None)
-            ctx_info = _CLARIFICATION_CONTEXT.pop(run_id, None)
-            summary = _format_answers(answers, (ctx_info or {}).get("steps") or [])
-            done_ev = TraceEvent(
-                kind="clarification_done",
-                source="reins.clarification",
-                run_id=run_id,
-                iteration=ctx.iteration,
-                payload={"run_id": run_id, "answers": answers,
-                         "summary": summary,
-                         "tool": (ctx_info or {}).get("tool", tool)},
-            )
-            return ReinDecision(
-                intercepted=False,
-                events=[done_ev],
-                inject_messages=[{
-                    "role": "user",
-                    "content": f"[用户澄清结果]\n{summary}\n请按上述澄清范围重新执行操作。",
-                }],
-            )
+        # ── 答案就绪 → 作废原调用，回到规划层 ──
+        consumed = consume_answer_decision(ctx)
+        if consumed is not None:
+            return consumed
 
         # ── 整治中（未完成）── ─ 重发当前步事件 + 拦截 ──
         ctx_info = _CLARIFICATION_CONTEXT.get(run_id)
@@ -626,6 +782,10 @@ class ClarificationInterceptor:
                 steps, step, ctx_info.get("total", len(steps)),
                 ctx_info.get("tool_call_id", ""),
                 reason=ctx_info.get("reason", ""),
+                kind=ctx_info.get("kind", KIND_SCOPE),
+                risk=ctx_info.get("risk", ""),
+                skip_policy=ctx_info.get("skip_policy", ""),
+                owner_tool_call_id=ctx_info.get("owner_tool_call_id", ""),
             )
             _mark_pending_sig(ctx)
             return ReinDecision(
@@ -682,8 +842,34 @@ class ClarificationInterceptor:
         # 创建 Pending 题元 + 发首步事件 + 拦截
         # P1-3: 使用 uuid 防止 tool_call_id 在多个工具调用时碰撞
         tool_call_id = f"clarify_{_uuid.uuid4().hex[:12]}"
+        owner_tool_call_id = str(tc.get("tool_call_id") or "")
+        kind = KIND_RISK if tool in ("file_write", "service_manage") else KIND_SCOPE
+        if kind == KIND_RISK:
+            risk = RISK_HIGH
+        else:
+            command_level = ""
+            try:
+                command_level = classify_command(command_from_args(args))[0]
+            except Exception:
+                pass
+            risk = classify_tool_risk(
+                environment=getattr(ctx, "environment", "") or "",
+                command_level=command_level,
+                is_write=tool not in READONLY_TOOLS,
+                tool=tool,
+            )
+        skip_policy = skip_policy_for_tool(
+            environment=getattr(ctx, "environment", "") or "",
+            command_level=(classify_command(command_from_args(args))[0]
+                           if tool in ("shell_exec", "job_run") else ""),
+            is_write=tool not in READONLY_TOOLS,
+            tool=tool,
+        )
         ctx_info = {
             "tool": tool, "args": args, "tool_call_id": tool_call_id,
+            "owner_tool_call_id": owner_tool_call_id,
+            "kind": kind, "risk": risk, "policy": skip_policy,
+            "skip_policy": skip_policy,
             "steps": steps, "current_step": 0, "total": len(steps),
             "reason": reason, "_done": False, "ts": time.time(),
         }
@@ -691,7 +877,8 @@ class ClarificationInterceptor:
         _enforce_clarification_cap()
         ev = _build_clarification_needed(
             run_id, tool, args, steps, 0, len(steps), tool_call_id,
-            reason=reason,
+            reason=reason, kind=kind, risk=risk, skip_policy=skip_policy,
+            owner_tool_call_id=owner_tool_call_id,
         )
         _mark_pending_sig(ctx)
         return ReinDecision(

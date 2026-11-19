@@ -61,7 +61,7 @@
       </div>
     </div>
 
-    <!-- 底部动作：复用审批卡按钮 —— 绿=完成放行，靠右否决位=跳过 -->
+    <!-- 底部动作：复用审批卡按钮 —— 绿=完成放行，靠右否决位=取消任务 -->
     <div class="ap-actions">
       <button
         class="ap-btn ap-btn-grant"
@@ -74,9 +74,9 @@
       <button
         class="ap-btn ap-btn-deny"
         :disabled="submitting"
-        title="跳过澄清，AI 将按原始指令自行判断"
-        @click="handleSkip"
-      >跳过</button>
+        title="取消整个任务（跳过已下线：任务要么按你的答案继续，要么终止）"
+        @click="handleCancelTask"
+      >取消任务</button>
     </div>
   </div>
 </template>
@@ -91,7 +91,7 @@
  *   1. 渲染当前题 + 收集选择（本地累加 answers）
  *   2. 点"完成"后若非末步 → 前进到下一题（清空选择状态）
  *   3. 若是末步 → POST /agent/clarification/answer 提交全部 answers
- *   4. "跳过" → POST /agent/clarification/skip 并关闭
+ *   4. "取消任务" → POST /agent/runs/{run_id}/cancel（跳过已下线，见 handleCancelTask）
  *
  * 呈现：与审批卡同风格的非模态决策卡（骨架走全局 approval-card.css 的 .ap-*）。
  * 曾是全屏遮罩的居中弹窗，2026-10-23 并入 ApprovalDock —— 澄清与审批都是"要你
@@ -104,6 +104,7 @@
 import { ref, computed, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useToastStore } from '@/stores/toast'
+import { agentApi } from '@/api/agent'
 
 const agentStore = useAgentStore()
 
@@ -218,7 +219,7 @@ async function handleAdvance() {
 async function submitAnswers() {
   const w = wizard.value
   if (!w || submitting.value) return
-  // P0-6 校验：仅允许当前活跃 run 提交
+  // P0-6 校验：仅允许当前活跃 run 提交（恢复场景 lastRunId 可能为空 → 以 wizard.runId 为准）
   if (w.runId && agentStore.lastRunId && w.runId !== agentStore.lastRunId) {
     console.warn('[ClarifyingWizard] run_id 不匹配当前活跃 run，忽略:', w.runId)
     return
@@ -236,23 +237,30 @@ async function submitAnswers() {
   }
 }
 
-async function handleSkip() {
+/**
+ * 取消整个任务（原「跳过」已下线）：
+ * 永久等待语义下，用户面对待确认卡只有两条路 —— 提交答案（继续），
+ * 或显式终止整个任务。二次确认防止误触。
+ */
+async function handleCancelTask() {
   if (submitting.value) return
   const w = wizard.value
   if (!w) return
-  // P0-6 校验：仅允许当前活跃 run 跳过
   if (w.runId && agentStore.lastRunId && w.runId !== agentStore.lastRunId) {
     console.warn('[ClarifyingWizard] run_id 不匹配当前活跃 run，忽略:', w.runId)
     return
   }
+  const confirmed = window.confirm('确定取消整个任务？未完成的执行将终止（不是失败，可重新发起）。')
+  if (!confirmed) return
   submitting.value = true
   try {
-    await agentStore.skipClarification(w.runId)
-    // P0-2 修复：跳过成功后立即自行关闭
+    const res = await agentApi.cancelRun(w.runId)
+    // 取消没有流可收事件：本地立即关卡片 + 固化「已取消」
     agentStore.clearClarification()
+    useToastStore().info(res.cancelled ? '任务已取消' : '任务此前已结束')
   } catch (err) {
-    console.error('[ClarifyingWizard] skip failed:', err)
-    useToastStore().error('跳过失败，请重试')
+    console.error('[ClarifyingWizard] cancel failed:', err)
+    useToastStore().error('取消失败，请重试')
   } finally {
     submitting.value = false
   }

@@ -175,6 +175,9 @@ export const useAgentStore = defineStore('agent', () => {
   const _contentScrubber = new StreamingThinkScrubber()
   const _reasoningScrubber = new StreamingThinkScrubber()
   const lastRunId = ref<string>('')
+  // 挂起（waiting_confirmation）时的待确认点快照：后端 done(state=waiting_confirmation)
+  // 携带 pending，前端据此恢复卡片渲染（RunRecoveryBar / wizard hydrate 用）。
+  const suspendedPending = ref<Record<string, unknown> | null>(null)
   // 审查 M-19：记录本次运行发起时的【源会话 ID】。
   // Agent 运行期间用户可能切换会话 — 完成固化必须落回源会话（临时占位消息
   // 推在哪个会话就固化哪个），不能按"完成时刻的当前会话"决定
@@ -1009,6 +1012,18 @@ export const useAgentStore = defineStore('agent', () => {
         break
 
       case 'done':
+        // 挂起不是结束：done(state=waiting_confirmation) 表示 run 停在待确认点
+        // （澄清/批准）。此时**绝不能**按 completed 处理 —— 下面的分支会清
+        // 卡片（clarificationWizard=null）、清授权按钮、abortRun 固化空回复，
+        // 用户刚要答的题就被前端自己抹掉了。保留一切现场，等用户提交答案
+        // （resume 流）或取消任务。
+        if (event.state === 'waiting_confirmation') {
+          status.value = 'idle'
+          currentState.value = 'waiting_confirmation'
+          if (event.run_id) lastRunId.value = event.run_id
+          if (event.pending) suspendedPending.value = event.pending
+          break
+        }
         // Q-F2：迟到事件守卫 —— 同 error 分支，abort 后（idle+aborted）或已
         // completed/failed 的 run 不再接受迟到的 done 事件翻转状态
         if (runSettled()) {
@@ -1063,6 +1078,7 @@ export const useAgentStore = defineStore('agent', () => {
     permissionRequests,
     costInfo,
     lastRunId,
+    suspendedPending,
     currentConversationId,
     intentionInfo,
     budgetExtension,
@@ -1093,8 +1109,9 @@ export const useAgentStore = defineStore('agent', () => {
     // P1-4 fix: 显式返回 Promise 让前端 await 有效（防止重复提交）
     submitClarification: (runId: string, answers: Record<string, { choice: string; custom_text?: string }>): Promise<{ run_id: string; status: string; steps: number }> =>
       agentApi.submitClarification(runId, answers),
-    skipClarification: (runId: string): Promise<{ run_id: string; status: string }> =>
-      agentApi.skipClarification(runId),
+    // skipClarification 已下线（跳过按钮删除）：取消任务请用 agentApi.cancelRun
+    cancelRun: (runId: string): Promise<{ run_id: string; status: string; cancelled: boolean }> =>
+      agentApi.cancelRun(runId),
     // P0-2 fix: 前端提交成功后立即关闭的清理动作（不依赖 SSE 兜底）
     clearClarification: () => {
       clarificationWizard.value = null

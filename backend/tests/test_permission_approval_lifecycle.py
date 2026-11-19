@@ -120,7 +120,21 @@ def test_resend_within_window_no_duplicate_card():
 
 
 def test_approval_fallback_keeps_pending_and_reuses_todo():
-    """兜底到期：保留等待集、发 permission_expired、不重复建卡；循环检测豁免仍生效"""
+    """兜底到期：保留等待集、发 permission_expired、不重复建卡；循环检测豁免仍生效。
+
+    默认兜底已是 0（永久等待，2026-11 用户拍板）。过期机制本身保留给显式
+    开启的用户 —— 本测试显式设有限兜底，测的就是过期分支。
+    """
+    old = reins_mod.approval_fallback_seconds()
+    from agent.harness.reins.core import set_approval_fallback_seconds
+    set_approval_fallback_seconds(600)
+    try:
+        _run_fallback_expiry_body()
+    finally:
+        set_approval_fallback_seconds(old)
+
+
+def _run_fallback_expiry_body():
     ctx = _ctx()
     _log(ctx)
     asyncio.run(_guard().check(ctx))
@@ -397,7 +411,19 @@ def test_兜底到期两条分支都落审计链(monkeypatch):
     PermissionGate 的同一分支发了 permission_expired 却不落链 —— 于是
     `service_manage` 这类**工具级**危险工具的一次过期审批在审计页里查不到任何痕迹，
     与它自己的 prod 分支（同函数内就有一次 append_record_async）也不一致。
+
+    默认兜底已是 0（永久等待）：显式设有限兜底以测过期分支。
     """
+    old = reins_mod.approval_fallback_seconds()
+    from agent.harness.reins.core import set_approval_fallback_seconds
+    set_approval_fallback_seconds(600)
+    try:
+        _run_expiry_audit_body(monkeypatch)
+    finally:
+        set_approval_fallback_seconds(old)
+
+
+def _run_expiry_audit_body(monkeypatch):
     captured = {"gate": [], "guard": []}
 
     def _cap(bucket: str):

@@ -320,6 +320,11 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
         signal: abortController.signal,
       })
 
+      // 连接阶段已结束（headers 到手）：立刻撤掉连接超时。
+      // 原实现只在最外层 finally 清，>28s 的长流（含 resume 恢复流）会被
+      // 自己的连接超时 abort —— 用户看到的是"连接超时"但 run 还在后端跑。
+      clearConnectTimer()
+
       if (!res.ok) {
         // 审查修复：onError 回调包 try/catch — 原实现回调自身抛异常时
         // 变成 unhandled rejection

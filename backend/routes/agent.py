@@ -820,6 +820,16 @@ async def _reconcile_stale_runs_once() -> None:
         return
     _startup_reconciled = True
     try:
+        # 第一步：崩溃在「快照落库 → 状态改写」之间的 run 救回 waiting_confirmation
+        # （先于 mark_stale —— 顺序反了会把这些 run 标成 failed）
+        from db.run_checkpoints import promote_waiting_checkpoint_runs
+        promoted = await asyncio.to_thread(promote_waiting_checkpoint_runs)
+        if promoted:
+            logger.warning(
+                "启动对账: %d 条持待确认快照的滞留 run 已恢复为 waiting_confirmation",
+                promoted)
+        # 第二步：剩余滞留 running/init（无快照 = 真崩溃）标记 failed。
+        # mark_stale 内部自带排除：持有待确认快照的 run 不会被误杀。
         n = await asyncio.to_thread(db.mark_stale_agent_runs_failed)
         if n:
             logger.warning("启动对账: %d 条滞留 running 的 agent_runs 已标记 failed", n)
@@ -1226,6 +1236,35 @@ async def agent_run(req: AgentRunRequest, request: Request):
             detail=f"该会话已有运行中的 Agent 任务（run_id={_conflict}），请等待其结束或终止后再试",
         )
 
+    # 挂起语义配套守卫：挂起会释放内存占位（run task 已返回），DB 状态才是
+    # 权威 —— 同会话存在 running/init/waiting_confirmation 的 run 时必须 409，
+    # 否则新 run 会和「等待用户确认的旧 run」在同一会话里并发执行。
+    # 不自动取消旧卡（用户没答的题不许被悄悄丢弃），前端引导先处理卡片或取消。
+    try:
+        _db_conflict = await asyncio.to_thread(
+            db.get_agent_runs, conversation_id=req.conversation_id, limit=5,
+        )
+        _waiting = [
+            r for r in (_db_conflict or [])
+            if str(r.get("status") or "") in ("running", "init", "waiting_confirmation")
+        ]
+        if _waiting:
+            _release_run_slot_sync(req.conversation_id, run_id)
+            _release_global_run_slot_sync()
+            _old = _waiting[0]
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"该会话有一个等待确认/运行中的任务（run_id={_old.get('id')}，"
+                    f"status={_old.get('status')}）。请先提交该任务的澄清答案或取消它，再发起新任务。"
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 对账查询失败不拦 run（降级为只靠内存占位），但要留痕
+        logger.warning("同会话 DB 级并发守卫查询失败（放行）: %s", e)
+
     # P0-1：环境标签由服务端判定（见 agent.environment_policy）。
     # req.environment 只算一个「上限请求」：主机连接配置标了 prod 就不允许降级成
     # test —— 否则一次请求就能把生产强化的「危险命令仅预登记 allowlist」整条绕开。
@@ -1421,6 +1460,13 @@ async def agent_run(req: AgentRunRequest, request: Request):
         assistant_persisted = False
         # S1-01 兜底段的 iterations 来源：done 事件带不到断连路径，取最后观测到的迭代号
         last_iteration = 0
+        # ── 挂起（waiting_confirmation）闸门 ──
+        # 永久等待语义：澄清待确认点会让 driver 结束生成器而不发 done。
+        # 挂起不是结束 —— 不清卡片、不写终稿、不触发反思、finally 的六类
+        # 危险收尾（杀远程任务/写中断消息/标 failed/复位会话状态等）全部跳过；
+        # 恢复由 POST /agent/runs/{run_id}/resume 以同一 run_id 开新流。
+        run_suspended = False
+        suspended_pending: dict = {}
 
         # ── Q-B4③：tool_call 落库挪到单写者后台任务 ──
         # SSE 消费循环每次 yield 前不再被逐条 sqlite 写阻塞（add/update 各一次
@@ -1740,6 +1786,26 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     )
                     reflect_task.add_done_callback(_task_exception_logger("reflection_evolution"))
 
+                elif (event.get("type") == "state"
+                        and event.get("state") == "waiting_confirmation"):
+                    # 挂起事件（driver 在澄清待确认点结束生成器时发出）。
+                    # 刻意不走 done 分支：done 会清卡片、固化 assistant 终稿、
+                    # 触发反思 —— 全是「run 已结束」的语义，与挂起相反。
+                    run_suspended = True
+                    final_state = "waiting_confirmation"
+                    suspended_pending = dict(event.get("pending") or {})
+                    try:
+                        await asyncio.to_thread(
+                            db.update_agent_run,
+                            run_id=run_id,
+                            status="waiting_confirmation",
+                            iteration=int(event.get("iteration", 0) or 0),
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "waiting_confirmation 状态落库失败 run_id=%s: %s",
+                            run_id, e)
+
                 elif event.get("type") == "error":
                     # driver 出错时先 yield error、紧接着 _emit_done（driver.py:236-250），
                     # done 分支带完整的 iteration/cost 统计并已落终态。final_state 非 None
@@ -1757,6 +1823,18 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             logger.warning("error 分支更新 run 状态失败 run_id=%s: %s", run_id, e)
 
                 yield sse_event(event)
+
+                # 挂起收流：发终帧 done(state=waiting_confirmation) 后结束。
+                # 前端契约：pending/state=waiting_confirmation 不清卡片、不固化，
+                # 用 GET /runs/{id}/pending 重建卡片、用 resume 开新流。
+                if run_suspended:
+                    yield sse_event({
+                        "type": "done",
+                        "state": "waiting_confirmation",
+                        "run_id": run_id,
+                        "pending": suspended_pending,
+                    })
+                    break
 
             # H13 修复 C1：失败运行不应错过反思。engine_producer 异常等「只有 error、
             # 没有 done」的 run 在这里补一次调度；done 分支已按完整统计调度过，
@@ -1821,9 +1899,12 @@ async def agent_run(req: AgentRunRequest, request: Request):
             # O1：全局并发槽与会话槽同生命周期，二者必须在同一取消免疫段释放，
             # 否则槽位泄漏会让后续所有 run 永远吃 429。
             _release_global_run_slot_sync()
-            # 环境判定登记与 once 授权池同生命周期：run 结束后不再被授权端点读到，
-            # 不清理就会随每次 run 无界增长（与环境无关的旧 run 永远查不到）
-            _forget_run_environment(run_id)
+            # 挂起的 run 不清环境登记与交互态（澄清内存态被 release 会把
+            # 恢复所需的题目删掉；环境登记在恢复时由快照回填，不依赖墓碑）。
+            if not run_suspended:
+                # 环境判定登记与 once 授权池同生命周期：run 结束后不再被授权端点读到，
+                # 不清理就会随每次 run 无界增长（与环境无关的旧 run 永远查不到）
+                _forget_run_environment(run_id)
             try:
                 heartbeat_task.cancel()
                 engine_task.cancel()
@@ -1854,11 +1935,14 @@ async def agent_run(req: AgentRunRequest, request: Request):
             except BaseException:
                 pass
             # run 级授权/拒绝/澄清池同样在这里兜底回收：driver 被 cancel 时
-            # ReflectionRein 不触发，而客户端断连也不会走 release-run 接口
-            try:
-                _release_run_interaction_state(run_id)
-            except BaseException:
-                logger.warning("run 交互状态回收失败 (run_id=%s)", run_id, exc_info=True)
+            # ReflectionRein 不触发，而客户端断连也不会走 release-run 接口。
+            # 挂起路径绝不能进：release_clarification_run 会把恢复所需的
+            # 待确认题内存态删掉（DB 快照仍在，但同进程恢复会落空）。
+            if not run_suspended:
+                try:
+                    _release_run_interaction_state(run_id)
+                except BaseException:
+                    logger.warning("run 交互状态回收失败 (run_id=%s)", run_id, exc_info=True)
 
             # ── 异步段（独立 task，真正按序跑完）───────────────────────
             async def _final_cleanup():
@@ -1873,16 +1957,19 @@ async def agent_run(req: AgentRunRequest, request: Request):
                         pass
                 # P2 修复：run 取消/断连时清理该 run 名下的远程后台任务
                 # （job_run target=remote 的进程脱离会话运行，不杀会永久残留）
-                try:
-                    from agent.tools.builtin.ops_job import kill_remote_jobs_for_run
-                    await kill_remote_jobs_for_run(run_id)
-                except BaseException:
-                    logger.warning("取消联动清理远程任务失败 (run_id=%s)", run_id, exc_info=True)
+                # 挂起路径跳过：挂起不是取消，用户之前起的远端作业必须保留
+                if not run_suspended:
+                    try:
+                        from agent.tools.builtin.ops_job import kill_remote_jobs_for_run
+                        await kill_remote_jobs_for_run(run_id)
+                    except BaseException:
+                        logger.warning("取消联动清理远程任务失败 (run_id=%s)", run_id, exc_info=True)
                 # S1-01：done 分支没跑到时补落 assistant 痕迹（闸门 assistant_persisted）。
                 # 收尾点选 finally 而非循环尾：渲染层 abort() 会让消费循环卡在下一次 yield
                 # 上并收到 GeneratorExit，那条路既到不了循环尾、也不被 except Exception 接住，
                 # 只有这里是正常 break / event_stream 异常 / GeneratorExit 三条路的共同收口。
-                if not assistant_persisted:
+                # 挂起路径跳过：不写「AI 运行中断」，挂起有专属恢复语义。
+                if not assistant_persisted and not run_suspended:
                     try:
                         await persist_interrupted_run(
                             conversation_id=req.conversation_id,
@@ -1897,24 +1984,30 @@ async def agent_run(req: AgentRunRequest, request: Request):
                         logger.warning(
                             "断连 run 的 assistant 痕迹落库失败 (run_id=%s)", run_id, exc_info=True
                         )
-                # 客户端断开时将 agent_run 标记为 failed（若仍为 running/init）
-                try:
-                    run = await asyncio.to_thread(db.get_agent_run, run_id)
-                    if run and run.get("status") in ("running", "init"):
-                        await asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
-                except BaseException:
-                    pass
+                # 客户端断开时将 agent_run 标记为 failed（若仍为 running/init）。
+                # 挂起路径跳过：run 已是 waiting_confirmation（非终态），标 failed
+                # 会把「等待用户」变成「崩溃」，启动对账也会据此误判。
+                if not run_suspended:
+                    try:
+                        run = await asyncio.to_thread(db.get_agent_run, run_id)
+                        if run and run.get("status") in ("running", "init"):
+                            await asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
+                    except BaseException:
+                        pass
                 # 修复：Agent 启动时将会话状态设为 in_progress，结束时须重置回
                 # completed — 若不复位，会话永久滞留 in_progress。
                 # （占位释放已提到最前的同步操作；此步为对称的 DB 侧复位）
-                try:
-                    cur_status = await asyncio.to_thread(db.get_conversation, req.conversation_id)
-                    if cur_status and cur_status.get("status") == "in_progress":
-                        await asyncio.to_thread(
-                            db.update_conversation_status, req.conversation_id, "completed"
-                        )
-                except BaseException:
-                    pass
+                # 挂起路径跳过（最危险的一处）：复位成 completed 后，开启会话
+                # 保留清理时 prune_conversations 会把整个会话连同待确认点级联删掉。
+                if not run_suspended:
+                    try:
+                        cur_status = await asyncio.to_thread(db.get_conversation, req.conversation_id)
+                        if cur_status and cur_status.get("status") == "in_progress":
+                            await asyncio.to_thread(
+                                db.update_conversation_status, req.conversation_id, "completed"
+                            )
+                    except BaseException:
+                        pass
                 # 低频清理 agent_runs/tool_calls（每 6h 节流，best-effort）
                 try:
                     await _maybe_prune_agent_runs()
@@ -2805,25 +2898,299 @@ async def submit_clarification_answer(req: ClarificationAnswerRequest):
 
 @router.post("/agent/clarification/skip")
 async def skip_clarification(req: ClarificationAnswerRequest):
-    """用户跳过所有剩余澄清步 — 写入空答案（空 dict 表示无约束放行）
+    """已废弃（410 Gone）— 永久等待语义删除了「跳过」。
 
-    审查R2修复：改 async def，与 clarification/answer 端点同一姿态（循环内
-    写澄清状态、线程池写审计）。
-
-    ClarificationInterceptor 在格式化空答案时输出"用户选择跳过澄清"提示，
-    LLM 按原始命令执行，但仍在 PermissionGate 的权限控制之下。
+    用户现在只有两条路：提交答案（POST /agent/runs/{run_id}/resume），
+    或取消整个任务（POST /agent/runs/{run_id}/cancel）。保留端点壳是
+    为了让未升级的旧前端拿到明确的 410，而不是 404 静默失败。
     """
-    from agent.harness.reins import record_clarification_answers
-    record_clarification_answers(req.run_id, {})  # 空 answers → _format_answers 输出"跳过"
-    logger.info("clarification skip: run_id=%s", req.run_id)
-    await append_record_async(
-        action="clarification_skip",
-        conclusion="skipped",
-        run_id=req.run_id,
-        target_type="run",
-        target_id=req.run_id,
+    raise HTTPException(
+        status_code=410,
+        detail="跳过澄清已下线：请提交答案（resume）或取消任务（cancel）",
     )
-    return {"run_id": req.run_id, "status": "skipped"}
+
+
+class ResumeRunRequest(BaseModel):
+    """POST /agent/runs/{run_id}/resume 请求体（澄清恢复）"""
+    kind: Literal["clarification"] = "clarification"
+    tool_call_id: str = ""
+    answers: dict = Field(default_factory=dict)
+
+
+@router.post("/agent/runs/{run_id}/cancel")
+async def cancel_suspended_run(run_id: str):
+    """用户取消等待中的任务 — 幂等。
+
+    取消不是 failed：前端显示「已取消」，启动对账也不把它当崩溃残留。
+    待确认点 → cancelled 后清掉快照（取消的任务没有恢复意义）。
+    """
+    from agent.harness.reins.clarification import cancel_clarification
+    from db.run_checkpoints import load_checkpoint, set_pending, clear_checkpoint
+    from agent.harness.contracts import TERMINAL_RUN_STATES
+
+    row = await asyncio.to_thread(db.get_agent_run, run_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="run 记录不存在")
+    status = str(row.get("status") or "")
+    if status in TERMINAL_RUN_STATES:
+        # 幂等：已终态的任务再取消一次无害，直接报告现状
+        return {"run_id": run_id, "status": status, "cancelled": False}
+
+    # 取消哨兵 + 内存态回收（挂起路径 run task 已返回，这里通常是 no-op；
+    # 竞态窗口内 run 还在等答案时，哨兵能让等待方立刻退出）
+    cancel_clarification(run_id)
+
+    ck = await asyncio.to_thread(load_checkpoint, run_id)
+    if ck and ck.get("pending"):
+        await asyncio.to_thread(
+            set_pending, run_id, {**ck["pending"], "state": "cancelled"})
+    await asyncio.to_thread(db.update_agent_run, run_id=run_id, status="cancelled")
+    await asyncio.to_thread(clear_checkpoint, run_id)
+    await append_record_async(
+        action="run_cancel",
+        conclusion="cancelled",
+        run_id=run_id,
+        target_type="run",
+        target_id=run_id,
+    )
+    return {"run_id": run_id, "status": "cancelled", "cancelled": True}
+
+
+@router.get("/agent/runs/{run_id}/pending")
+async def get_run_pending(run_id: str):
+    """查询挂起任务的待确认点（前端重启后重建卡片用）。
+
+    形状与 clarification_needed 事件 payload 对齐；pending 为 null 表示
+    没有挂起的待确认项。
+    """
+    from db.run_checkpoints import load_checkpoint
+    ck = await asyncio.to_thread(load_checkpoint, run_id)
+    pending = (ck or {}).get("pending") or {}
+    if not pending or pending.get("state") != "pending":
+        return {"run_id": run_id, "pending": None}
+    row = await asyncio.to_thread(db.get_agent_run, run_id)
+    run_status = str((row or {}).get("status") or "")
+    if run_status != "waiting_confirmation":
+        # DB 状态与快照不一致（对账前的窗口）：不给卡片，避免误导
+        return {"run_id": run_id, "pending": None}
+    return {
+        "run_id": run_id,
+        "pending": {
+            "kind": "clarification",
+            "tool": pending.get("tool") or "",
+            "tool_call_id": pending.get("tool_call_id") or "",
+            "owner_tool_call_id": pending.get("owner_tool_call_id") or "",
+            "args": pending.get("args") or {},
+            "command": pending.get("command") or "",
+            # 前端权限卡口径：safe|moderate|dangerous（policy_risk 供后端/审计）
+            "risk": pending.get("risk") or "moderate",
+            "policy_risk": pending.get("policy_risk") or "",
+            "steps": pending.get("steps") or [],
+            "step": pending.get("step") or 0,
+            "total": pending.get("total") or 0,
+            "reason": pending.get("reason") or "",
+            "created_at": pending.get("created_at") or "",
+            "partial": (ck or {}).get("partial") or {},
+        },
+    }
+
+
+@router.post("/agent/runs/{run_id}/resume")
+async def resume_suspended_run(run_id: str, body: ResumeRunRequest):
+    """从待确认点恢复挂起的 run — 同一 run_id 开新 SSE 流。
+
+    语义（永久等待 + 跨重启恢复）：
+    - 澄清：答案只作废原调用并触发重规划，原调用绝不执行；
+    - 恢复 = 快照回填 → 重放待确认轮 → 进入正常 THINK 循环；
+    - CAS 防双恢复：pending state pending→resuming 抢占，失败即 409。
+    """
+    from db.run_checkpoints import load_checkpoint, set_pending, clear_checkpoint
+    from agent.harness.reins.clarification import (
+        reinject_pending, record_clarification_answers,
+    )
+    # 执行栈按需导入（同 /agent/run 的约定）：这些符号在模块层不存在，
+    # 不导入的话首次 resume 直接 NameError。
+    from agent.cost_tracker import CostTracker
+    from agent.harness import Harness, HarnessConfig
+    from agent.harness.contracts import AgentConfig as HarnessAgentConfig
+    from agent.harness.llm_client import StreamLLMClient
+    from agent.harness.telemetry import SSEAdapter
+    from agent.tools import create_registry
+
+    ck = await asyncio.to_thread(load_checkpoint, run_id)
+    if ck is None:
+        raise HTTPException(status_code=404, detail="该任务没有可恢复的待确认点")
+    pending = ck.get("pending") or {}
+    if not pending or pending.get("state") not in (None, "pending"):
+        raise HTTPException(
+            status_code=409, detail="该待确认点已处理（已恢复或已取消）")
+    if body.kind != "clarification":
+        raise HTTPException(
+            status_code=422, detail="当前版本仅支持澄清类待确认点的恢复")
+    if not body.answers:
+        raise HTTPException(
+            status_code=400, detail="澄清答案不能为空（跳过已下线，取消请用 cancel）")
+    ticket = str(pending.get("tool_call_id") or "")
+    if str(body.tool_call_id or "") and str(body.tool_call_id) != ticket:
+        raise HTTPException(status_code=409, detail="澄清票据不匹配（卡片已过期）")
+
+    row = await asyncio.to_thread(db.get_agent_run, run_id)
+    if not row:
+        await asyncio.to_thread(clear_checkpoint, run_id)
+        raise HTTPException(status_code=404, detail="run 记录不存在")
+    if str(row.get("status") or "") != "waiting_confirmation":
+        raise HTTPException(
+            status_code=409,
+            detail=f"任务状态为 {row.get('status')}，只有等待确认中的任务可以恢复")
+    model_id = str(row.get("model_used") or "")
+    model_cfg = await asyncio.to_thread(_get_model_config, model_id)
+    if not model_cfg:
+        raise HTTPException(status_code=409, detail="原模型配置已删除，无法恢复")
+
+    spec = ck.get("harness") or {}
+    conv_id = str(spec.get("conversation_id") or ck.get("conv_id") or "")
+    ssh_session_id = str(spec.get("ssh_session_id") or "")
+
+    # CAS 抢占：pending → resuming；DB waiting_confirmation → running。
+    # 任何一步失败都回滚，绝不留下「状态说在跑、快照说在恢复」的半截态。
+    await asyncio.to_thread(
+        set_pending, run_id, {**pending, "state": "resuming"})
+    await asyncio.to_thread(
+        db.update_agent_run, run_id=run_id, status="running",
+        iteration=int(ck.get("iteration") or 0))
+
+    # 回填澄清内存态 + 记录答案（重放的 PRE_TOOL_CALL 消费答案作废原调用）
+    core_pending = {
+        k: v for k, v in pending.items()
+        if k not in ("state", "round_calls", "start_index", "iteration")
+    }
+    if not reinject_pending(run_id, core_pending):
+        await asyncio.to_thread(
+            set_pending, run_id, {**pending, "state": "pending"})
+        await asyncio.to_thread(
+            db.update_agent_run, run_id=run_id, status="waiting_confirmation")
+        raise HTTPException(status_code=500, detail="待确认题回填失败，已回滚")
+    rec = record_clarification_answers(run_id, body.answers, tool_call_id=ticket)
+    if rec != "recorded":
+        await asyncio.to_thread(
+            set_pending, run_id, {**pending, "state": "pending"})
+        await asyncio.to_thread(
+            db.update_agent_run, run_id=run_id, status="waiting_confirmation")
+        raise HTTPException(
+            status_code=409, detail="澄清答案无法归属当前待确认题（票据或选项不合法）")
+
+    # 并发槽：恢复与普通 run 同待遇（拿不到就 429，保持 waiting 态可重试）
+    if not await _acquire_global_run_slot():
+        raise HTTPException(
+            status_code=429, detail="同时运行的 Agent 任务过多，请稍后重试")
+    _conflict = await _acquire_run_slot(conv_id, run_id)
+    if _conflict:
+        _release_global_run_slot_sync()
+        raise HTTPException(
+            status_code=409,
+            detail=f"该会话已有运行中的 Agent 任务（run_id={_conflict}）")
+
+    resumed = {"flag": False}
+    re_suspended = {"flag": False}
+
+    async def _resume_stream():
+        try:
+            harness = Harness(HarnessConfig(
+                base_url=model_cfg["base_url"],
+                api_key=model_cfg["api_key"],
+                model=model_cfg.get("model_id") or model_cfg["id"],
+                max_context_tokens=model_cfg.get("max_tokens", 16384) or 16384,
+            ))
+            harness.assemble(
+                llm_client=StreamLLMClient(
+                    base_url=model_cfg["base_url"],
+                    api_key=model_cfg["api_key"],
+                ),
+                tool_registry=create_registry(),
+                cost_tracker=CostTracker(
+                    model_id=model_cfg.get("model_id") or model_cfg["id"]),
+            )
+            async for ev in harness.run(
+                task=str(spec.get("task") or ""),
+                conversation_id=conv_id,
+                ssh_session_id=ssh_session_id or None,
+                environment=str(spec.get("environment") or "test"),
+                environment_source="resume",
+                target_host=str(spec.get("target_host") or ""),
+                system_prompt=str(spec.get("system_prompt") or ""),
+                history=[],
+                memories=[],
+                config=HarnessAgentConfig(
+                    # 恢复必须还有下一轮可用：挂起发生在最后一轮时，
+                    # 原预算耗尽会让恢复后的 run 立刻 MAX_REACHED
+                    max_iterations=max(
+                        int(spec.get("max_iterations") or 100),
+                        int(ck.get("iteration") or 0) + 2,
+                    ),
+                    enable_dynamic_budget=True,
+                ),
+                run_id=run_id,
+                permission_mode=str(spec.get("permission_mode") or "normal"),
+                await_approval=True,
+                resume_checkpoint=ck,
+            ):
+                sse_dict = SSEAdapter.to_sse_dict(ev)
+                sse_dict["run_id"] = run_id
+                if ev.kind == "done":
+                    resumed["flag"] = True
+                if (ev.kind == "state"
+                        and (ev.payload or {}).get("state") == "waiting_confirmation"):
+                    # 重放中再次触发澄清 → 新一轮挂起。恢复流是独立的压缩
+                    # 消费循环（没有 /agent/run 的 done 分支），DB 状态必须
+                    # 在这里落：running → waiting_confirmation。
+                    re_suspended["flag"] = True
+                    try:
+                        await asyncio.to_thread(
+                            db.update_agent_run, run_id=run_id,
+                            status="waiting_confirmation",
+                            iteration=int(ev.iteration or 0),
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "恢复流再次挂起落库失败 run_id=%s: %s", run_id, e)
+                yield sse_event(sse_dict)
+        except Exception as e:
+            logger.exception("恢复运行异常 (run_id=%s)", run_id)
+            yield sse_event({
+                "type": "error",
+                "message": f"恢复失败 {type(e).__name__}: {str(e) or '无错误信息'}",
+            })
+        finally:
+            if resumed["flag"]:
+                # 正常终态（completed/failed/...）：清快照（幂等 DELETE）。
+                # 若 run 在正常结束前又写过快照（不太可能），新行一并清掉 ——
+                # done 意味着没有未决的待确认项。
+                await asyncio.to_thread(clear_checkpoint, run_id)
+            elif re_suspended["flag"]:
+                # 重放中再次挂起：driver 已写入**新**快照（save 是整体覆盖），
+                # 新 pending 就是当前待确认项 —— 绝不能用本次 resume 消费的
+                # 旧 pending 覆盖它（会把新题换回旧题）。DB 状态已落。
+                pass
+            else:
+                # 恢复失败（引擎异常/流中断）：回滚到可重试的 pending 态。
+                # 只翻转 state 位，不整体覆盖 —— 保留磁盘上可能已更新的行。
+                ck2 = await asyncio.to_thread(load_checkpoint, run_id)
+                p2 = (ck2 or {}).get("pending") or {}
+                if p2.get("state") == "resuming":
+                    await asyncio.to_thread(
+                        set_pending, run_id, {**p2, "state": "pending"})
+                await asyncio.to_thread(
+                    db.update_agent_run, run_id=run_id,
+                    status="waiting_confirmation")
+            _release_run_slot_sync(conv_id, run_id)
+            _release_global_run_slot_sync()
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _resume_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Agent 记忆管理（v2：统一 memories 表 + jobs/audit/blocks）──

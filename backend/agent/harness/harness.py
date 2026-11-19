@@ -242,6 +242,9 @@ class Harness:
         memory_scopes: Optional[list[str]] = None,
         # 视觉多模态：image_url 内容块（路由层从上传副本构造好）。None = 纯文本。
         images: Optional[list] = None,
+        # 挂起恢复：run_checkpoints.load_checkpoint() 的返回值。提供时跳过首条
+        # 任务消息追加，messages/iteration 从快照回填，driver 从待确认轮重放。
+        resume_checkpoint: Optional[dict] = None,
     ) -> AsyncIterator[TraceEvent]:
         """
         主入口 — yield TraceEvent
@@ -388,8 +391,29 @@ class Harness:
         # 显式覆盖而非追加 —— 同一 harness 实例被复用时上一 run 的图片不得泄漏。
         self.stirrups.images = list(images) if images else None
 
-        # 首条消息：用户任务
-        ctx.messages.append({"role": "user", "content": task})
+        # ── 挂起恢复（waiting_confirmation → resume）──
+        # 快照回填：messages 原样塞回（绝不重新拼装 —— 重新拼装会拆散
+        # assistant.tool_calls 与 role=tool 的配对，vLLM 直接 400）；
+        # iteration 回填；待确认轮的重放信息交给 driver。
+        # 此时跳过首条任务消息追加 —— 快照 messages 已包含原始任务消息。
+        if resume_checkpoint is not None:
+            ck = resume_checkpoint
+            ctx.messages = list(ck.get("messages") or [])
+            ctx.iteration = int(ck.get("iteration") or 0)
+            _ck_pending = ck.get("pending") or {}
+            ctx.metadata["resume_round"] = {
+                "calls": list(_ck_pending.get("round_calls") or []),
+                "start_index": int(_ck_pending.get("start_index") or 0),
+                "tool_call_id": str(_ck_pending.get("tool_call_id") or ""),
+            }
+            logger.info(
+                "恢复挂起 run=%s iteration=%s 待重放调用=%d（起点 %d）",
+                ctx.run_id, ctx.iteration, len(ctx.metadata["resume_round"]["calls"]),
+                ctx.metadata["resume_round"]["start_index"],
+            )
+        else:
+            # 首条消息：用户任务
+            ctx.messages.append({"role": "user", "content": task})
 
         # 运行 Driver，并把 LLM 流式 chunk 事件与 Driver 事件合并后统一 yield
         self._chunk_queue = asyncio.Queue()

@@ -31,10 +31,18 @@ class State(str, Enum):
     THINKING = "thinking"
     ACTING = "acting"
     OBSERVING = "observing"
+    # WAITING_CONFIRMATION：非终态 —— 停下来等用户回答澄清 / 批准权限。
+    # 与 HUMAN_HELP 的区别：human_help 是「模型放弃、要人来接管」，终态；
+    # 这里只是「流程暂停在一个待确认点」，用户回答后从断点续跑（resume）。
+    WAITING_CONFIRMATION = "waiting_confirmation"
     COMPLETED = "completed"
     FAILED = "failed"
     MAX_REACHED = "max_reached"
     HUMAN_HELP = "human_help"  # H14 新增：人工介入状态（终止态）
+    # CANCELLED：用户主动终止（终止态）。刻意与 FAILED 分开：取消是用户的
+    # 正常意图，前端要显示「已取消」而不是「失败」，启动对账也不该把它报成
+    # 崩溃残留（failed 会触发「不可恢复」提示，对主动取消是误导）。
+    CANCELLED = "cancelled"
 
 
 # run 的终态集合：进入后不应再转移出去，同时是「这个会话还有没有在跑的 run」的判据。
@@ -44,7 +52,10 @@ class State(str, Enum):
 # 一条以人工介入结束的 run 在反思侧被视作仍可继续，转移异常一条都不报。
 # 用 .value 收进集合而不是直接放成员：str-Enum 的哈希语义不保证与裸字符串一致。
 TERMINAL_RUN_STATES: frozenset[str] = frozenset(
-    st.value for st in (State.COMPLETED, State.FAILED, State.MAX_REACHED, State.HUMAN_HELP)
+    st.value for st in (
+        State.COMPLETED, State.FAILED, State.MAX_REACHED,
+        State.HUMAN_HELP, State.CANCELLED,
+    )
 )
 
 

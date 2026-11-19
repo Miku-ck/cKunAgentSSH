@@ -1,6 +1,6 @@
 /** Agent 域：agentApi / scheduleApi / agentAdminApi 及各自类型（原 client.ts 1067-1589 行，ARCH-008 拆分） */
 
-import { request } from './base'
+import { request, ensureApiToken, getBaseUrl, withApiToken } from './base'
 import type { StructureResponse } from '@/utils/task-structure-core'
 
 // ── Agent API ──
@@ -112,12 +112,50 @@ export const agentApi = {
       { method: 'POST', body: JSON.stringify({ run_id: runId, answers }) },
     ),
 
-  /** 跳过所有剩余澄清步（前端"跳过"按钮调用） */
-  skipClarification: (runId: string) =>
-    request<{ run_id: string; status: string }>(
-      '/agent/clarification/skip',
-      { method: 'POST', body: JSON.stringify({ run_id: runId, answers: {} }) },
+  // 跳过（skip）已下线：永久等待语义里用户只有「提交答案（resume）」或
+  // 「取消任务（cancelRun）」两条路。skip 端点后端返回 410。
+
+  // ── 挂起恢复（waiting_confirmation）──
+  /** 查询挂起任务的待确认点（应用重启 / 切会话后重建卡片用） */
+  fetchRunPending: (runId: string) =>
+    request<{
+      run_id: string
+      pending: null | {
+        kind: 'clarification'
+        tool: string
+        tool_call_id: string
+        owner_tool_call_id?: string
+        args: Record<string, unknown>
+        command: string
+        risk: 'safe' | 'moderate' | 'dangerous'
+        policy_risk?: string
+        steps: Array<{ question: string; options: Array<{ id: string; label: string }>; allow_custom: boolean }>
+        step: number
+        total: number
+        reason: string
+        created_at?: string
+        partial?: { content?: string; tool_calls?: Array<Record<string, unknown>> }
+      }
+    }>(`/agent/runs/${encodeURIComponent(runId)}/pending`),
+
+  /** 取消等待中的任务（幂等；取消不是失败 —— run 终态为 cancelled） */
+  cancelRun: (runId: string) =>
+    request<{ run_id: string; status: string; cancelled: boolean }>(
+      `/agent/runs/${encodeURIComponent(runId)}/cancel`,
+      { method: 'POST', body: JSON.stringify({}) },
     ),
+
+  /**
+   * 从待确认点恢复挂起的 run —— 返回同一 run_id 的新 SSE 流。
+   * 返回原始 Response：恢复流由 sse.ts 的流式解析消费，不走 request() 的 JSON 通道。
+   * 首帧 data 内带 {type:"state",state:"thinking",resumed:true}。
+   */
+  resumeRun: (runId: string, answers: Record<string, { choice: string; custom_text?: string }>, toolCallId = '') =>
+    fetch(`${getBaseUrl()}/agent/runs/${encodeURIComponent(runId)}/resume`, {
+      method: 'POST',
+      headers: withApiToken({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
+      body: JSON.stringify({ kind: 'clarification', tool_call_id: toolCallId, answers }),
+    }),
 }
 
 // ── 定时任务调度 API ──

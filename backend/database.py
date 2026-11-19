@@ -4645,7 +4645,12 @@ def update_agent_run(run_id: str, status: str, iteration: Optional[int] = None,
     """
     # B-7 修复：max_reached 同为终态（contracts.State.MAX_REACHED / reflection /
     # 统计查询均视其为终态），completed_at 需一并写入
-    _TERMINAL_RUN_STATUSES = ("completed", "failed", "human_help", "max_reached")
+    # cancelled：用户主动终止，也是终态 —— 否则 canceled 的 run 永远没有
+    # completed_at，按耗时的统计查询会把它算成「仍在进行」。
+    # 注意 waiting_confirmation 是暂停态，不在本清单（写 completed_at = 提前结案）。
+    _TERMINAL_RUN_STATUSES = (
+        "completed", "failed", "human_help", "max_reached", "cancelled",
+    )
     conn = _get_conn()
     try:
         sets = ["status = ?"]
@@ -4700,12 +4705,31 @@ def mark_stale_agent_runs_failed() -> int:
     进程崩溃/重启后，进行中的 run 在 DB 里永远滞留 'running'（内存中的
     并发防护随进程丢失），前端会一直显示"运行中"。进程启动时调用一次。
     返回被标记的条数。
+
+    挂起恢复（waiting_confirmation）：持有待确认快照的 run 是「在等用户」，
+    不是崩溃残留 —— 必须排除，否则用户没答的卡会被标成 failed、启动对账
+    还会把它报成「不可恢复」。表不存在的精简测试库跳过排除子句（行为与
+    引入前一致）。
     """
     conn = _get_conn()
     try:
+        # 表存在性必须在**同一个连接**上检查：_get_conn 可能被测试替换成
+        # 只有 agent_runs 表的内存库 —— 用另一个连接查 sqlite_master 得到
+        # True，排除子句却在本连接上执行，直接 OperationalError。
+        exclude = ""
+        try:
+            has_ckpt = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_checkpoints'"
+            ).fetchone() is not None
+        except Exception:
+            has_ckpt = False
+        if has_ckpt:
+            exclude = (" AND id NOT IN (SELECT run_id FROM run_checkpoints"
+                       " WHERE pending_json IS NOT NULL"
+                       " AND TRIM(pending_json) NOT IN ('', '{}', 'null'))")
         cur = conn.execute(
             "UPDATE agent_runs SET status = 'failed', completed_at = ? "
-            "WHERE status IN ('running', 'init')",
+            "WHERE status IN ('running', 'init')" + exclude,
             (_now(),),
         )
         conn.commit()
@@ -5609,6 +5633,7 @@ def prune_agent_runs(max_count: int = 5000) -> int:
                                   ORDER BY started_at DESC
                               ) AS rn
                        FROM agent_runs
+                       WHERE status <> 'waiting_confirmation'
                    ) WHERE rn > ?
                )""",
             (max_count,),

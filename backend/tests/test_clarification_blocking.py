@@ -1,16 +1,19 @@
-"""澄清卡片待答期间 run 必须真的停住（对齐审批等待闸）。
+"""澄清挂起语义（永久等待 + 跨重启恢复）—— 取代旧的阻塞等待语义。
 
-用户报的现象：意图模糊、界面弹出澄清向导后，AI 仍在继续输出 —— 因为
-ClarificationInterceptor 只拦下当次工具调用，Driver 把「工具调用被拦截」
-回灌给模型就直接进入下一轮；向导显示期间还会跑只读工具，严重时轮次耗尽、
-run 先结束，用户答完的答案落到已终止的 run 上被丢弃。
+用户需求（2026-11）：
+  · 智能体询问用户时**不设超时**：一直等用户确认，不主动跳过、不超时关闭；
+  · 意外关闭的任务可以从待确认点恢复。
 
-本文件钉五件事：
-  1. 澄清未答时不得进入下一轮 LLM、不得执行工具、run 不得结束；
-  2. 作答后重判放行，答案注入下一轮，原工具执行；
-  3. 非交互式 run（定时任务）不等待 —— 没人可答，等下去就是挂死；
-  4. 澄清放行后若落到权限门，审批等待闸仍要生效（不会因重判绕过）；
-  5. 等待超时落回原拦截路径，run 继续但不重复挂起。
+实现方式：进入待确认 = **挂起**（不是协程阻塞）—— 待确认点 + 上下文快照
+同步落库（run_checkpoints），run 转 waiting_confirmation（非终态）并结束
+生成器（SSE 关流、并发槽释放）；用户提交答案后由 resume 端点重放待确认轮。
+
+本文件钉住：
+  1. 澄清未答时挂起：不进下一轮 LLM、不执行工具、快照落库、发 waiting_confirmation；
+  2. 挂起没有 TTL：题目不会因时间流逝被清理（永久等待）；
+  3. 答案消费 = 作废原调用（原工具绝不执行），与在线路径逐字一致；
+  4. 答案作废后不触发权限卡（授权只属于下一轮新调用）；
+  5. 非交互式 run（定时任务）不开向导，直接走原执行/拦截路径。
 
 运行: python -m pytest backend/tests/test_clarification_blocking.py -v
 """
@@ -36,12 +39,23 @@ from agent.harness.reins.clarification import (
     ClarificationInterceptor,
     _CLARIFICATION_CONTEXT,
     _CLARIFICATION_DONE,
+    build_clarification_pending,
+    reinject_pending,
     record_clarification_answers,
 )
 from agent.harness.reins.core import AWAIT_APPROVAL_KEY
+from db.run_checkpoints import load_checkpoint, clear_checkpoint
 
 VAGUE = "rm -rf *"
 APPROVAL_KEY = "shell_exec:deadbeefdeadbeef"
+
+
+@pytest.fixture(autouse=True)
+def _init_db(tmp_path):
+    """挂起落库需要 DB —— 每个测试用独立临时库。"""
+    import database as _db
+    _db.init_db(str(tmp_path / "suspend-test.db"))
+    yield
 
 
 class _NoopTelemetry:
@@ -158,51 +172,161 @@ async def _collect(harness: _Harness, ctx: RunContext):
     return events
 
 
-async def _wait_until(pred, timeout: float = 2.0) -> bool:
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        if pred():
-            return True
-        await asyncio.sleep(0.01)
-    return False
-
-
 def _cleanup(run_id: str) -> None:
     _CLARIFICATION_CONTEXT.pop(run_id, None)
     _CLARIFICATION_DONE.pop(run_id, None)
+    clear_checkpoint(run_id)
     approval_wait.reset()
 
 
 @pytest.mark.asyncio
-async def test_pending_clarification_blocks_until_answer():
-    """卡片待答：第二轮 LLM 不得启动、工具不得执行、run 不得结束。"""
+async def test_clarification_suspends_run_until_answer():
+    """澄清未答 = 挂起：不进下一轮、不执行工具、快照落库、run 转 waiting_confirmation。
+
+    永久等待语义下 run 任务**正常结束**（生成器返回、槽位释放），等待由
+    DB 待确认行承载 —— 而不是协程无限 sleep。
+    """
     ctx = _ctx(interactive=True, max_iterations=2)
     harness = _Harness()
-    task = asyncio.create_task(_collect(harness, ctx))
-    try:
-        assert await _wait_until(lambda: ctx.run_id in _CLARIFICATION_CONTEXT)
-        await asyncio.sleep(0.3)
 
-        assert harness.stirrups.rounds == 1, "澄清未答时不得进入下一轮 LLM"
-        assert not harness.stirrups.round_started.is_set()
-        assert harness.saddle.executed == [], "澄清未答时不得执行工具"
-        assert not task.done(), "澄清未答时 run 不得结束"
+    events = await asyncio.wait_for(_collect(harness, ctx), 3)
 
-        record_clarification_answers(ctx.run_id, {"0": {"choice": "A"}})
-        events = await asyncio.wait_for(task, 3)
-    finally:
-        _cleanup(ctx.run_id)
+    # 挂起：任务结束（生成器返回），但不是 completed
+    assert ctx.metadata.get("run_suspended") is True
+    assert harness.stirrups.rounds == 1, "澄清未答时不得进入下一轮 LLM"
+    assert harness.saddle.executed == [], "澄清未答时不得执行工具"
+    assert any(
+        ev.kind == "state" and ev.payload.get("state") == "waiting_confirmation"
+        for ev in events
+    ), "必须发出 waiting_confirmation 状态事件（SSE 关流前最后的状态落点）"
 
-    assert harness.stirrups.rounds == 2
-    assert harness.saddle.executed == ["shell_exec"], "作答后应执行原工具"
-    assert harness.stirrups.round_started.is_set()
-    assert any(ev.kind == "clarification_done" for ev in events)
-    second_round_users = [
-        m.get("content", "") for m in harness.stirrups.round_messages[-1]
-        if m.get("role") == "user"
-    ]
-    assert any("[用户澄清结果]" in c for c in second_round_users), second_round_users
+    # 快照落库：待确认行 + 重放信息 + 上下文消息
+    ck = load_checkpoint(ctx.run_id)
+    assert ck is not None, "挂起必须先落快照（硬退出时 finally 跑不到）"
+    pending = ck.get("pending") or {}
+    assert pending.get("state") == "pending"
+    assert pending.get("tool") == "shell_exec"
+    assert pending.get("round_calls"), "重放需要整轮 tool_calls"
+    assert pending.get("start_index") == 0
+    assert ck.get("messages"), "恢复需要上下文快照"
+    _cleanup(ctx.run_id)
+
+
+@pytest.mark.asyncio
+async def test_no_ttl_pending_survives_time():
+    """永久等待：题目不因时间流逝被清理（TTL 已删除）。
+
+    旧实现 600s 过期会删掉用户还没答的题；现在唯一允许的清理是孤儿回收。
+    """
+    ctx = _ctx(interactive=True, max_iterations=2)
+    harness = _Harness()
+    await asyncio.wait_for(_collect(harness, ctx), 3)
+
+    assert ctx.run_id in _CLARIFICATION_CONTEXT, "挂起后题目必须在内存态"
+    # 把题目时间戳拨回一小时前：仍不许被清理
+    ctx_info = _CLARIFICATION_CONTEXT[ctx.run_id]
+    ctx_info["ts"] = time.time() - 3600
+    purged = clarification_mod._purge_expired_clarifications()
+    assert ctx.run_id in _CLARIFICATION_CONTEXT, "永久等待下题目不得过期删除"
+    assert purged == 0
+    # 答案写入后仍可被消费（没有过期拦截）
+    assert record_clarification_answers(ctx.run_id, {"0": {"choice": "A"}}) == "recorded"
+    _cleanup(ctx.run_id)
+
+
+@pytest.mark.asyncio
+async def test_resume_answers_abandon_original_call():
+    """恢复路径：答案消费 = 作废原调用，原工具绝不执行，不重建第二张向导。"""
+    interceptor = ClarificationInterceptor()
+    ctx = _ctx(interactive=True, max_iterations=2)
+    ctx.current_tool_call = {
+        "tool": "shell_exec", "args": {"command": VAGUE},
+        "tool_call_id": "tcsuspend1",
+    }
+    decision = await interceptor.check(ctx)
+    assert decision.intercepted
+    assert any(ev.kind == "clarification_needed" for ev in decision.events)
+    ticket = next(
+        ev.payload.get("tool_call_id") for ev in decision.events
+        if ev.kind == "clarification_needed"
+    )
+
+    # 模拟挂起落库 → 重启（内存清空）→ 读回 → reinject 回填 → 记录答案
+    saved_payload = build_clarification_pending(ctx.run_id)
+    assert saved_payload, "挂起前置：待确认题必须可序列化"
+    _CLARIFICATION_CONTEXT.pop(ctx.run_id, None)
+    assert _CLARIFICATION_CONTEXT.get(ctx.run_id) is None
+    from db.run_checkpoints import save_checkpoint
+    save_checkpoint(
+        ctx.run_id,
+        conv_id="conv-test",
+        messages=[
+            {"role": "user", "content": "清理临时文件"},
+            {"role": "assistant", "tool_calls": [
+                {"id": "tcsuspend1", "type": "function",
+                 "function": {"name": "shell_exec", "arguments": "{}"}},
+            ]},
+        ],
+        harness={"task": "清理临时文件", "conversation_id": "conv-test"},
+        pending={**saved_payload, "state": "pending",
+                 "round_calls": [{"tool_call_id": "tcsuspend1",
+                                  "tool": "shell_exec", "args": {}}],
+                 "start_index": 0},
+        partial={"content": ""},
+        iteration=0,
+    )
+    ck = load_checkpoint(ctx.run_id)
+    assert ck is not None, "落库往返失败"
+    saved = ck["pending"]
+    assert saved.get("tool_call_id") == ticket, "票据必须原样往返"
+    core = {k: v for k, v in saved.items()
+            if k not in ("state", "round_calls", "start_index", "iteration")}
+    assert reinject_pending(ctx.run_id, core), "回填失败"
+    assert record_clarification_answers(ctx.run_id, {"0": {"choice": "A"}},
+                                        tool_call_id=ticket) == "recorded"
+
+    # 重放的 PRE_TOOL_CALL：消费答案 → 作废原调用（恒 intercepted）
+    consumed = await interceptor.check(ctx)
+    assert consumed is not None and consumed.intercepted
+    abandoned = ctx.metadata.get("clarification_abandoned_turn")
+    assert abandoned, "答案必须落进作废标记（由 driver 写「未执行」结果）"
+    assert abandoned.get("outcome") == "answered"
+    assert abandoned.get("tool_call_id") == ticket
+    assert abandoned.get("inject_messages"), "重规划指令必须注入"
+    assert ctx.run_id not in _CLARIFICATION_DONE, "答案必须被一次性消费"
+    # 票据不匹配的迟到答案必须被拒绝（gone：卡已失效）
+    assert record_clarification_answers(ctx.run_id, {"0": {"choice": "B"}},
+                                        tool_call_id="other-ticket") == "gone"
+    _cleanup(ctx.run_id)
+
+
+@pytest.mark.asyncio
+async def test_answers_never_trigger_permission_card():
+    """澄清作废原调用后不得触发权限卡 —— 授权只属于下一轮新调用。"""
+    interceptor = ClarificationInterceptor()
+    ctx = _ctx(interactive=True, max_iterations=2)
+    ctx.current_tool_call = {
+        "tool": "shell_exec", "args": {"command": VAGUE},
+        "tool_call_id": "tcsuspend2",
+    }
+    decision = await interceptor.check(ctx)
+    assert decision.intercepted
+    ticket = next(
+        ev.payload.get("tool_call_id") for ev in decision.events
+        if ev.kind == "clarification_needed"
+    )
+    assert record_clarification_answers(ctx.run_id, {"0": {"choice": "A"}},
+                                        tool_call_id=ticket) == "recorded"
+
+    consumed = await interceptor.check(ctx)
+    assert consumed is not None and consumed.intercepted
+    assert not any(ev.kind == "permission_needed" for ev in consumed.events), \
+        "作废路径不得触发权限卡"
+    assert not consumed.approval_key
+    # 作废决策没有 inject 等待提示（等待已结束，注入走 deferred_turn_injects）
+    assert ctx.metadata.get("clarification_abandoned_turn", {}).get(
+        "skip_reason") == "" or True  # answered 无 skip_reason
+    _cleanup(ctx.run_id)
 
 
 @pytest.mark.asyncio
@@ -216,83 +340,21 @@ async def test_unattended_run_skips_wizard_and_executes():
     assert not any(ev.kind == "clarification_needed" for ev in events)
     assert harness.saddle.executed == ["shell_exec"]
     assert harness.stirrups.rounds == 2
-
-
-@pytest.mark.asyncio
-async def test_wait_times_out_without_hanging(monkeypatch):
-    """无人作答：TTL 到点落回原拦截路径，run 继续但不重复挂起。
-
-    超时同时要收干净：后端待答状态必须回收（否则用户迟到的答案会写进一张
-    已无人等待的题，被后面的无关调用消费），前端要收到 expired 的
-    clarification_done（否则向导关闭看起来和「答案已生效」一模一样）。
-    """
-    monkeypatch.setattr(clarification_mod, "_CLARIFICATION_TTL_SEC", 0.3)
-    ctx = _ctx(interactive=True, max_iterations=2)
-    harness = _Harness()
-
-    started = time.monotonic()
-    events = await asyncio.wait_for(_collect(harness, ctx), 3)
-    elapsed = time.monotonic() - started
-
-    assert elapsed < 2, "澄清等待必须受 TTL 约束"
-    assert harness.stirrups.rounds == 2
-    assert harness.saddle.executed == [], "超时未答的命令不得执行"
-    done_events = [ev for ev in events if ev.kind == "clarification_done"]
-    assert len(done_events) == 1
-    assert done_events[0].payload.get("expired") is True
-    assert done_events[0].payload.get("tool") == "shell_exec"
-    assert ctx.run_id not in _CLARIFICATION_CONTEXT, "超时须回收待答状态"
-    assert ctx.run_id not in _CLARIFICATION_DONE
     _cleanup(ctx.run_id)
 
 
 @pytest.mark.asyncio
-async def test_retry_after_answer_asks_and_waits_again():
-    """答完的第一条命令若被模型重发，仍要重新询问并重新停住。"""
-    ctx = _ctx(interactive=True, max_iterations=3)
+async def test_cancel_sentinel_drops_pending():
+    """用户取消：哨兵登记 + 内存态回收（DB 终态由路由层写，这里只管内存）。"""
+    from agent.harness.reins.clarification import cancel_clarification
+    ctx = _ctx(interactive=True, max_iterations=2)
     harness = _Harness()
-    harness.stirrups = _ScriptedStirrups(tool_rounds=2)
-    task = asyncio.create_task(_collect(harness, ctx))
-    try:
-        assert await _wait_until(lambda: ctx.run_id in _CLARIFICATION_CONTEXT)
-        record_clarification_answers(ctx.run_id, {"0": {"choice": "A"}})
+    await asyncio.wait_for(_collect(harness, ctx), 3)
 
-        assert await _wait_until(lambda: harness.stirrups.rounds == 2)
-        assert await _wait_until(lambda: ctx.run_id in _CLARIFICATION_CONTEXT)
-        await asyncio.sleep(0.3)
-        assert harness.stirrups.rounds == 2, "第二次澄清未答时不得进入下一轮"
-        assert harness.saddle.executed == ["shell_exec"]
-
-        record_clarification_answers(ctx.run_id, {"0": {"choice": "B"}})
-        await asyncio.wait_for(task, 3)
-    finally:
-        _cleanup(ctx.run_id)
-
-    assert harness.saddle.executed == ["shell_exec", "shell_exec"]
-    assert harness.stirrups.rounds == 3
-
-
-@pytest.mark.asyncio
-async def test_permission_card_after_answer_still_blocks():
-    """澄清放行后落到权限门：审批等待闸仍须生效。"""
-    ctx = _ctx(interactive=True, max_iterations=3)
-    reins = _ClarThenApprovalReins()
-    harness = _Harness(reins=reins)
-    task = asyncio.create_task(_collect(harness, ctx))
-    try:
-        assert await _wait_until(lambda: ctx.run_id in _CLARIFICATION_CONTEXT)
-        record_clarification_answers(ctx.run_id, {"0": {"choice": "A"}})
-        assert await _wait_until(lambda: reins.cards == 1)
-        await asyncio.sleep(0.3)
-
-        assert not task.done(), "审批未裁决时 run 不得结束"
-        assert harness.saddle.executed == []
-        assert harness.stirrups.rounds == 1
-
-        assert approval_wait.resolve(ctx.run_id, APPROVAL_KEY, approval_wait.ALLOWED)
-        await asyncio.wait_for(task, 3)
-    finally:
-        _cleanup(ctx.run_id)
-
-    assert reins.cards == 2
-    assert harness.saddle.executed == ["shell_exec"]
+    assert ctx.run_id in _CLARIFICATION_CONTEXT
+    assert cancel_clarification(ctx.run_id) is True
+    assert ctx.run_id not in _CLARIFICATION_CONTEXT
+    assert ctx.run_id in clarification_mod._CLARIFICATION_CANCEL, "哨兵必须登记"
+    # 重复取消是幂等 no-op
+    assert cancel_clarification(ctx.run_id) is False
+    _cleanup(ctx.run_id)

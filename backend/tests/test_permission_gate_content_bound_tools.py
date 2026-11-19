@@ -240,6 +240,16 @@ def test_prod_deny_message_translates_consequence_reasons():
 # ── 5. 审批三态与拒绝记忆对内容工具同样生效 ──
 
 def test_approval_fallback_marks_card_expired_but_keeps_pending(audits):
+    # 默认兜底已是 0（永久等待）：显式设有限兜底以测过期分支
+    from agent.harness.reins.core import set_approval_fallback_seconds
+    old_fallback = set_approval_fallback_seconds(600)
+    try:
+        _run_fallback_expiry_body(audits)
+    finally:
+        set_approval_fallback_seconds(old_fallback)
+
+
+def _run_fallback_expiry_body(audits):
     gate, ctx = _gate(), _ctx()
     guard = _guard(gate)
     args = _write("file_write", NGINX)

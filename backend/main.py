@@ -234,6 +234,19 @@ def _load_post_config() -> None:
 
 
 def _reset_stale() -> None:
+    # 启动对账第一步：持待确认快照的滞留 run 救回 waiting_confirmation
+    # （先于 mark_stale / 会话复位 —— 顺序反了会被标 failed 或随会话级联清掉）。
+    try:
+        from db.run_checkpoints import promote_waiting_checkpoint_runs
+        promoted = promote_waiting_checkpoint_runs()
+        if promoted:
+            logger.info(
+                "[cKunAgentic] Promoted %s waiting-checkpoint run(s) to waiting_confirmation",
+                promoted,
+            )
+    except Exception:
+        logger.warning("[cKunAgentic] waiting-checkpoint 提升失败（best-effort）",
+                       exc_info=True)
     n = db.reset_stale_in_progress_conversations()
     if n:
         logger.info("[cKunAgentic] Reset %s stale in_progress conversation(s)", n)

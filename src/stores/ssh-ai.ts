@@ -388,6 +388,30 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     }, 300)
   }
 
+  /** 确保会话末尾有一条运行中的占位助手消息（temp-agent-）。
+   *  正常发送与「恢复待确认点」共用：resume 流必须有固化落点，
+   *  否则 finalizeAgentMessage 找不到消息，结果只活在内存、刷新即丢。 */
+  function ensureAssistantPlaceholder(
+    conv: SshAiConversation,
+    ctx?: SshAiMessage['context'],
+  ): SshAiMessage {
+    const existing = [...conv.messages].reverse().find(
+      (m) => m.role === 'assistant' && String(m.id).startsWith('temp-agent-'),
+    )
+    if (existing) return existing as SshAiMessage
+    const msg: SshAiMessage = {
+      id: 'temp-agent-' + genId(),
+      role: 'assistant',
+      content: '',
+      streamingContent: '',
+      streamingReasoning: '',
+      context: ctx,
+      created_at: new Date().toISOString(),
+    }
+    conv.messages.push(msg)
+    return msg
+  }
+
   // ── Agent 完成固化（store 层 watch，不依赖组件生命周期）──
   // 修复 P3-4：面板卸载不会丢失 Agent 结果。
   const agentStore = useAgentStore()
@@ -873,16 +897,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     }
     conv.messages.push(userMsg)
 
-    const assistantMsg: SshAiMessage = {
-      id: 'temp-agent-' + genId(),
-      role: 'assistant',
-      content: '',
-      streamingContent: '',
-      streamingReasoning: '',
-      context: ctx,
-      created_at: new Date().toISOString(),
-    }
-    conv.messages.push(assistantMsg)
+    const assistantMsg = ensureAssistantPlaceholder(conv, ctx)
 
     if (conv.messages.length <= 2 && conv.title === 'New Chat') {
       conv.title = effectiveContent.slice(0, 30) + (effectiveContent.length > 30 ? '...' : '')
@@ -967,6 +982,8 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     groupedConversations: persistence.groupedConversations,
     fetchDefaultModel,
     setSelectedModel,
+    // ── 挂起恢复（resume 流的固化落点）──
+    ensureAssistantPlaceholder,
     // ── 审批档 ──
     approvalMode,
     setApprovalMode,

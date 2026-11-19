@@ -31,7 +31,7 @@ vi.mock('@/api/client', () => ({
     denyCommand: vi.fn(async () => ({ ok: true })),
     grantPermission: vi.fn(async () => ({ ok: true })),
     submitClarification: vi.fn(async () => ({ run_id: '', status: 'ok', steps: 0 })),
-    skipClarification: vi.fn(async () => ({ run_id: '', status: 'ok' })),
+    cancelRun: vi.fn(async () => ({ run_id: '', status: 'cancelled', cancelled: true })),
     releaseRunPermissions: vi.fn(async () => ({ ok: true })),
   },
   postToolResult: vi.fn(async () => ({})),

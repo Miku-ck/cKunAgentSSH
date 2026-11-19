@@ -28,10 +28,16 @@ def test_shared_set_covers_every_declared_terminal_state():
     """共享源本身必须完整：枚举里标了终止态的，集合里就得有"""
     assert TERMINAL_RUN_STATES == frozenset({
         "completed", "failed", "max_reached", "human_help",
+        # 用户主动终止 —— 独立终态（不是 failed），前端显示「已取消」，
+        # 启动对账也不把它当崩溃残留。
+        "cancelled",
     })
     # 集合成员是**裸字符串值**而不是枚举成员 —— str-Enum 的哈希语义不保证与
     # 裸字符串一致，而三处消费者比对的都是从 JSON/DB 读出的字符串
     assert all(isinstance(x, str) and not isinstance(x, State) for x in TERMINAL_RUN_STATES)
+    # waiting_confirmation 是暂停态（非终态）：写 completed_at / 自愈占位 /
+    # 状态转移异常检测都会被它误导
+    assert "waiting_confirmation" not in TERMINAL_RUN_STATES
 
 
 def _owner_with_attr(mod, attr: str):
