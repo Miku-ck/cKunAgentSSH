@@ -2,7 +2,6 @@
 
 import { request, ensureApiToken, getBaseUrl, withApiToken } from './base'
 import type { StructureResponse } from '@/utils/task-structure-core'
-
 // ── Agent API ──
 
 /** /agent/safety/classify 单条结果 —— level 与后端 classify_command 同枚举 */
@@ -150,12 +149,14 @@ export const agentApi = {
    * 返回原始 Response：恢复流由 sse.ts 的流式解析消费，不走 request() 的 JSON 通道。
    * 首帧 data 内带 {type:"state",state:"thinking",resumed:true}。
    */
-  resumeRun: (runId: string, answers: Record<string, { choice: string; custom_text?: string }>, toolCallId = '') =>
-    fetch(`${getBaseUrl()}/agent/runs/${encodeURIComponent(runId)}/resume`, {
+  resumeRun: async (runId: string, answers: Record<string, { choice: string; custom_text?: string }>, toolCallId = '') => {
+    await ensureApiToken()
+    return fetch(`${getBaseUrl()}/agent/runs/${encodeURIComponent(runId)}/resume`, {
       method: 'POST',
       headers: withApiToken({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
       body: JSON.stringify({ kind: 'clarification', tool_call_id: toolCallId, answers }),
-    }),
+    })
+  },
 }
 
 // ── 定时任务调度 API ──

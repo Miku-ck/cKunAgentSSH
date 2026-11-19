@@ -20,6 +20,9 @@ export interface AgentSSEEvent {
   type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'permission_explain' | 'intention' | 'tool_deliver' | 'budget_extended' | 'reflection_request' | 'plan_mode_block' | 'clarification_needed' | 'clarification_done' | 'expert_suggestion' | 'done'
   state?: string
   iteration?: number
+  /** done(state=waiting_confirmation) 专用：挂起的待确认点快照，
+   *  前端据此恢复卡片渲染（澄清题面/审批信息），非挂起 done 不下发 */
+  pending?: Record<string, unknown>
   content?: string
   reasoning?: string
   tool?: string

@@ -19,12 +19,17 @@ import {
 } from './agent-run-status'
 
 describe('runStatusLabel', () => {
-  it('四种终态各有各的文案，不合并成「失败」', () => {
+  it('五种终态各有各的文案，不合并成「失败」', () => {
     expect(runStatusLabel('completed')).toBe('完成')
     expect(runStatusLabel('failed')).toBe('失败')
     expect(runStatusLabel('human_help')).toBe('请求人工介入')
     expect(runStatusLabel('max_reached')).toBe('达到迭代上限')
-    expect(new Set(RUN_TERMINAL_STATES.map(runStatusLabel)).size).toBe(4)
+    // 用户主动终止是独立终态：显示「已取消」，不与 failed 混同
+    expect(runStatusLabel('cancelled')).toBe('已取消')
+    expect(new Set(RUN_TERMINAL_STATES.map(runStatusLabel)).size).toBe(5)
+    expect(isRunTerminalState('cancelled')).toBe(true)
+    // waiting_confirmation 是暂停态（非终态），绝不能进终态集合
+    expect(isRunTerminalState('waiting_confirmation')).toBe(false)
   })
 
   it('每个终态都有标签（枚举与文案表不会各改各的）', () => {

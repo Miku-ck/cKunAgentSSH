@@ -897,7 +897,8 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     }
     conv.messages.push(userMsg)
 
-    const assistantMsg = ensureAssistantPlaceholder(conv, ctx)
+    // 占位助手消息（temp-agent-）：resume 流的固化落点必须存在
+    ensureAssistantPlaceholder(conv, ctx)
 
     if (conv.messages.length <= 2 && conv.title === 'New Chat') {
       conv.title = effectiveContent.slice(0, 30) + (effectiveContent.length > 30 ? '...' : '')
