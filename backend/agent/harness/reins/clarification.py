@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re as _re
 import time
 import uuid as _uuid
 from dataclasses import dataclass, field
@@ -30,8 +29,6 @@ from ...clarification_policy import (
     OUTCOME_ANSWERED,
     OUTCOME_EXPIRED,
     OUTCOME_SKIPPED,
-    POLICY_BLOCKED,
-    POLICY_NONE,
     RISK_HIGH,
     classify_tool_risk,
     decide_policy,

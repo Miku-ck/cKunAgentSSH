@@ -500,7 +500,6 @@ def test_record_clarification_answers_rejects_orphan_without_stub():
 
 def test_purge_expired_clarifications_only_reclaims_orphans():
     """TTL 已删除：老题不许被清理；只回收 done 有、context 无的孤儿。"""
-    import time as _t
     done, ctx = reins_mod._CLARIFICATION_DONE, reins_mod._CLARIFICATION_CONTEXT
     done.pop("run-ttl", None)
     ctx.pop("run-ttl", None)

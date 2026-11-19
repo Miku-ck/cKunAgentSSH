@@ -10,7 +10,6 @@
 运行: python -m pytest backend/tests/test_run_suspend_resume.py -v
 """
 import asyncio
-import json
 
 import pytest
 
@@ -18,9 +17,7 @@ import database as db
 from db.run_checkpoints import (
     save_checkpoint,
     load_checkpoint,
-    clear_checkpoint,
     promote_waiting_checkpoint_runs,
-    list_waiting_checkpoints,
 )
 
 
