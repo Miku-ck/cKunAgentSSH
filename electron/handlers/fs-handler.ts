@@ -102,9 +102,10 @@ export function findProgramInPath(name: string): string | null {
 }
 
 /** 敏感路径拒绝事件不在 catch 中改写成通用文案（透传 + warn）。 */
-function rethrowIfSensitivePath(err: any, logWarn: (d: string, m: string) => void): void {
-  if (typeof err?.message === 'string' && err.message.startsWith('拒绝访问敏感路径')) {
-    logWarn('fs', `敏感路径访问被拒绝: ${err.message}`)
+function rethrowIfSensitivePath(err: unknown, logWarn: (d: string, m: string) => void): void {
+  const message = (err as Error)?.message
+  if (typeof message === 'string' && message.startsWith('拒绝访问敏感路径')) {
+    logWarn('fs', `敏感路径访问被拒绝: ${message}`)
     throw err
   }
 }
@@ -182,7 +183,7 @@ export function setupFSIPC(deps: FsHandlerDeps): void {
         return a.name.localeCompare(b.name)
       })
       return items
-    } catch (err: any) {
+    } catch (err) {
       rethrowIfSensitivePath(err, logWarn)
       throw new Error('读取目录失败，请检查路径是否存在或是否有访问权限')
     }
@@ -198,10 +199,11 @@ export function setupFSIPC(deps: FsHandlerDeps): void {
       }
       const content = await readFile(filePath, 'utf-8')
       return content
-    } catch (err: any) {
+    } catch (err) {
       rethrowIfSensitivePath(err, logWarn)
-      throw new Error(err?.message && err.message.includes('文件过大')
-        ? err.message
+      const message = (err as Error)?.message
+      throw new Error(message && message.includes('文件过大')
+        ? message
         : '读取文件失败，请检查文件是否存在或是否有访问权限')
     }
   })
@@ -214,10 +216,11 @@ export function setupFSIPC(deps: FsHandlerDeps): void {
         throw new Error('内容过大（超过 50MB），无法写入')
       }
       await writeFile(filePath, content, 'utf-8')
-    } catch (err: any) {
+    } catch (err) {
       rethrowIfSensitivePath(err, logWarn)
-      throw new Error(err?.message && err.message.includes('内容过大')
-        ? err.message
+      const message = (err as Error)?.message
+      throw new Error(message && message.includes('内容过大')
+        ? message
         : '写入文件失败，请检查路径是否存在或是否有写入权限')
     }
   })
@@ -232,9 +235,9 @@ export function setupFSIPC(deps: FsHandlerDeps): void {
       }
       const buf = await readFile(filePath) as Buffer
       return { base64: buf.toString('base64'), size: s.size }
-    } catch (err: any) {
+    } catch (err) {
       rethrowIfSensitivePath(err, logWarn)
-      const msg = err?.message
+      const msg = (err as Error)?.message
       // 尺寸超限类友好文案原样透出；其余归并为通用读取失败
       throw new Error(msg && msg.includes('图片过大')
         ? msg
@@ -261,7 +264,7 @@ export function setupFSIPC(deps: FsHandlerDeps): void {
         size,
         readOnly: size > 5 * 1024 * 1024,
       }
-    } catch (err: any) {
+    } catch (err) {
       throw fsErrorWith(err, '读取文件失败，请检查文件是否存在或是否有访问权限')
     }
   })
@@ -348,7 +351,7 @@ export function setupFSIPC(deps: FsHandlerDeps): void {
         }
       } catch { /* 目录读取失败忽略 */ }
       return { fileName, mime, name: basename(filePath) }
-    } catch (err: any) {
+    } catch (err) {
       throw fsErrorWith(err, '读取图片失败')
     }
   })
@@ -391,7 +394,7 @@ export function setupFSIPC(deps: FsHandlerDeps): void {
         throw new Error('背景图文件过大')
       }
       return `data:${mime};base64,${buf.toString('base64')}`
-    } catch (err: any) {
+    } catch (err) {
       throw fsErrorWith(err, '加载背景图失败')
     }
   })
@@ -405,7 +408,7 @@ export function setupFSIPC(deps: FsHandlerDeps): void {
         await rm(filePath)
       }
       return true
-    } catch (err: any) {
+    } catch (err) {
       throw fsErrorWith(err, '删除背景图失败')
     }
   })
