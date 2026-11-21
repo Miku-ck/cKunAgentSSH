@@ -10,7 +10,7 @@ import { execFile, spawn } from 'child_process'
 import { BackendManager } from './managers/backend-manager'
 import { PtyManager, clampPtyDimension } from './managers/pty-manager'
 import { loadSsh2, SSHManager } from './managers/ssh-manager'
-import { SSHError, toIpcTransport } from './utils/ssh-error'
+import { SSHError, toIpcTransport, type SSHErrorTransport } from './utils/ssh-error'
 import { SSHStore, type SSHConnectionRecord } from './stores/ssh-store'
 import { TunnelStore, type TunnelRule } from './stores/tunnel-store'
 import { TunnelManager } from './managers/tunnel-manager'
@@ -121,8 +121,8 @@ function handleTrusted(
     try {
       const result = fn(event, ...args)
       // async handler 返回 Promise：拦截 rejection 中的 SSHError
-      if (result && typeof (result as any).then === 'function') {
-        return (result as Promise<any>).catch((err: unknown) => {
+      if (result && typeof (result as { then?: unknown }).then === 'function') {
+        return (result as Promise<unknown>).catch((err: unknown) => {
           throw normalizeIpcError(err)
         })
       }
@@ -135,13 +135,13 @@ function handleTrusted(
 
 /** 错误 SSHError → IPC 可序列化的 transport 格式（双通道：__sshError 增强 + name 前缀兜底）。 */
 function normalizeIpcError(err: unknown): Error {
-  if ((err as any)?.__sshError) {
+  if ((err as { __sshError?: SSHErrorTransport })?.__sshError) {
     // 已是 transport（二次穿透防護）
     return err as Error
   }
   if (isSSHError(err)) {
-    const transport = toIpcTransport(err as any)
-    const e = new Error(transport.message) as Error & { __sshError?: any; name: string }
+    const transport = toIpcTransport(err)
+    const e = new Error(transport.message) as Error & { __sshError?: SSHErrorTransport; name: string }
     e.name = `SSHError:${transport.code}`
     e.__sshError = transport
     if ((err as Error).stack) {

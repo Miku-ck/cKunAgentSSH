@@ -35,6 +35,9 @@ run "后端 lint (ruff F,E9)" npm run --silent lint:backend
 # 2. 前端类型检查
 run "前端 typecheck (vue-tsc)" npm run --silent typecheck
 
+# 2b. 显式 any 门禁：只降不升，防止类型系统被掏空（见 AGENTS.md）
+run "前端 any 门禁" node scripts/check-any.mjs
+
 # 3. 前端单测
 run "前端单测 (vitest)" npm run --silent test
 
