@@ -37,6 +37,7 @@ from routes.experts import router as experts_router
 from routes.plugins import router as plugins_router
 from routes.agent import router as agent_router
 from routes.agent_clarification import router as agent_clarification_router
+from routes.agent_commit import router as agent_commit_router
 from routes.agent_governance import router as agent_governance_router
 from routes.agent_memory import router as agent_memory_router
 from routes.agent_permission import router as agent_permission_router
@@ -513,6 +514,7 @@ app.include_router(experts_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(agent_clarification_router, prefix="/api")
+app.include_router(agent_commit_router, prefix="/api")
 app.include_router(agent_governance_router, prefix="/api")
 app.include_router(agent_memory_router, prefix="/api")
 app.include_router(agent_permission_router, prefix="/api")
