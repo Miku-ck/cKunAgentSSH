@@ -63,9 +63,12 @@ def test_reflection_uses_the_shared_set():
 
 def test_database_terminal_list_matches_shared_source():
     """storage 层保持纯 stdlib leaf，不反向 import harness —— 那就用对账钉住"""
-    src = (BACKEND / "database.py").read_text(encoding="utf-8")
+    src = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in [BACKEND / "database.py", *sorted(BACKEND.glob("db/*.py"))]
+    )
     m = re.search(r"_TERMINAL_RUN_STATUSES\s*=\s*\(([^)]*)\)", src)
-    assert m, "database.py 里找不到 _TERMINAL_RUN_STATUSES（改动前先确认它还在）"
+    assert m, "database.py / db/* 里找不到 _TERMINAL_RUN_STATUSES（agent_runs 域已收敛）"
     literals = set(re.findall(r'"([^"]+)"', m.group(1)))
     assert literals == set(TERMINAL_RUN_STATES), (
         f"database 的终态清单 {sorted(literals)} 与共享源 {sorted(TERMINAL_RUN_STATES)} 不一致"

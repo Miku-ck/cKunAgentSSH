@@ -225,6 +225,7 @@ def test_release_run_slot_sync_identity():
 
 def test_mark_stale_agent_runs_failed(monkeypatch):
     import database as db
+    import db._conn as db_conn_mod
 
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -245,7 +246,8 @@ def test_mark_stale_agent_runs_failed(monkeypatch):
          ("r3", "c", "completed"), ("r4", "c", "failed")],
     )
     conn.commit()
-    monkeypatch.setattr(db, "_get_conn", lambda: _NoClose(conn))
+    # agent_runs / conversations 域已收敛到 db/*（P2-3），连接入口是 db._conn._get_conn。
+    monkeypatch.setattr(db_conn_mod, "_get_conn", lambda: _NoClose(conn))
 
     n = db.mark_stale_agent_runs_failed()
     assert n == 2, "running/init 两条应被标记"
@@ -259,6 +261,7 @@ def test_mark_stale_agent_runs_failed(monkeypatch):
 def test_try_set_default_conversation_title(monkeypatch):
     """MINOR-1：标题仍为默认值 → 写入；窗口期内用户已改自定义标题 → 不覆盖"""
     import database as db
+    import db._conn as db_conn_mod
 
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -269,7 +272,8 @@ def test_try_set_default_conversation_title(monkeypatch):
     )
     conn.execute("INSERT INTO conversations (id, title) VALUES ('c1', 'New Chat')")
     conn.commit()
-    monkeypatch.setattr(db, "_get_conn", lambda: _NoClose(conn))
+    # agent_runs / conversations 域已收敛到 db/*（P2-3），连接入口是 db._conn._get_conn。
+    monkeypatch.setattr(db_conn_mod, "_get_conn", lambda: _NoClose(conn))
 
     defaults = tuple({"New Chat", "新对话", "New Conversation", ""})
     assert db.try_set_default_conversation_title("c1", "生成的标题", defaults) is True
@@ -284,6 +288,7 @@ def test_try_set_default_conversation_title(monkeypatch):
 def test_get_recent_messages_rowid_tiebreak(monkeypatch):
     """MINOR-3：同秒消息按 rowid（插入序）排序，乱序喂 LLM 的问题消除"""
     import database as db
+    import db._conn as db_conn_mod
 
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -302,7 +307,8 @@ def test_get_recent_messages_rowid_tiebreak(monkeypatch):
         [("uuid-c", "第一条"), ("uuid-a", "第二条"), ("uuid-b", "第三条")],
     )
     conn.commit()
-    monkeypatch.setattr(db, "_get_conn", lambda: _NoClose(conn))
+    # agent_runs / conversations 域已收敛到 db/*（P2-3），连接入口是 db._conn._get_conn。
+    monkeypatch.setattr(db_conn_mod, "_get_conn", lambda: _NoClose(conn))
 
     rows = db.get_recent_messages("c1", limit=10)
     assert [r["content"] for r in rows] == ["第一条", "第二条", "第三条"], \

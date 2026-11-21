@@ -156,7 +156,10 @@ def test_undo_recorded_reaches_the_runs_table():
     —— SSE 线上有、库里恒 NULL，运行列表的「回滚」标记无从谈起。"""
     kwargs = _routes_update_agent_run_kwargs()
     assert "undo_recorded" in kwargs, "routes 没把 undo_recorded 传给 update_agent_run，落库链仍断"
-    db_text = (BACKEND / "database.py").read_text(encoding="utf-8")
+    db_text = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in [BACKEND / "database.py", *sorted(BACKEND.glob("db/*.py"))]
+    )
     assert re.search(r"_RUN_LIST_COLUMNS = \([^)]*undo_recorded", db_text, re.S), (
         "运行列表投影 _RUN_LIST_COLUMNS 缺 undo_recorded 列，前端标记恒 undefined"
     )

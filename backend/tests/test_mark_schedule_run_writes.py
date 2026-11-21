@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 import database as db
+import db._conn as db_conn_mod
 
 
 @pytest.fixture
@@ -85,7 +86,9 @@ class _Counting:
 def test_一次调用只发一条_UPDATE(sch_db, monkeypatch):
     sid = _new_schedule()
     counter = _Counting(db._get_conn())
-    monkeypatch.setattr(db, "_get_conn", lambda: counter)
+    # schedules 域已收敛到 db/schedules.py（P2-3），连接入口是 db._conn._get_conn；
+    # database._get_conn 只是再导出的同义名，函数体内引用 db._conn 模块里的名字。
+    monkeypatch.setattr(db_conn_mod, "_get_conn", lambda: counter)
 
     db.mark_schedule_run(sid, "running", last_run_at="2026-10-08 09:00:00",
                          last_run_id="run-1")

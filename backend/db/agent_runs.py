@@ -5,7 +5,8 @@
 """
 from typing import Optional
 
-from db._conn import _assert_sql_ident, _assert_sql_ident_list, _get_conn
+from db._conn import _assert_sql_ident, _assert_sql_ident_list
+from db import _conn as _conn_mod
 from db._util import _new_id, _now
 
 __all__ = [
@@ -29,7 +30,7 @@ def create_agent_run(run_id: str, conversation_id: str, task: str,
                      expert_name: Optional[str] = None,
                      expert_snapshot_json: Optional[str] = None) -> None:
     """创建 Agent 运行记录。专家快照由服务端生成，调用方只传已序列化文本。"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         # 原 INSERT 保持逐字不变：未选专家的路径（含自建精简 schema 的测试、
         # 定时任务等无人值守入口）不碰任何新列。专家字段只在真的选中专家时
@@ -76,7 +77,7 @@ def update_agent_run(run_id: str, status: str, iteration: Optional[int] = None,
     _TERMINAL_RUN_STATUSES = (
         "completed", "failed", "human_help", "max_reached", "cancelled",
     )
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         sets = ["status = ?"]
         params: list = [status]
@@ -136,7 +137,7 @@ def mark_stale_agent_runs_failed() -> int:
     还会把它报成「不可恢复」。表不存在的精简测试库跳过排除子句（行为与
     引入前一致）。
     """
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         # 表存在性必须在**同一个连接**上检查：_get_conn 可能被测试替换成
         # 只有 agent_runs 表的内存库 —— 用另一个连接查 sqlite_master 得到
@@ -171,7 +172,7 @@ def reset_stale_in_progress_conversations() -> int:
     仅启动时调用一次：正常运行中 in_progress 表示真有 run 进行中，不能动。
     返回被复位的条数。
     """
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         cur = conn.execute(
             "UPDATE conversations SET status = 'completed', updated_at = ? "
@@ -186,7 +187,7 @@ def reset_stale_in_progress_conversations() -> int:
 
 def get_agent_run(run_id: str) -> Optional[dict]:
     """获取单个 Agent 运行记录"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         row = conn.execute(
             "SELECT * FROM agent_runs WHERE id = ?",
@@ -235,7 +236,7 @@ def get_agent_runs(conversation_id: str = None, limit: int = 20, offset: int = 0
     where, params = _run_filters(conversation_id, status, run_id)
     cols = "*" if full else _RUN_LIST_COLUMNS
     params = params + [limit, offset]
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         rows = conn.execute(
             f"SELECT {cols} FROM agent_runs{where} ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?",
@@ -254,7 +255,7 @@ def count_agent_runs(conversation_id: str = None, status: str = None,
     翻页时"共 N 条"与眼前这几行不是同一个集合。
     """
     where, params = _run_filters(conversation_id, status, run_id)
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         return conn.execute(
             f"SELECT COUNT(*) FROM agent_runs{where}", params
@@ -276,7 +277,7 @@ def add_tool_call(agent_run_id: str, iteration: int, tool_name: str,
     NULL 不是 False：False 是「工具明确失败」。
     """
     tool_call_id = _new_id()
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             "INSERT INTO tool_calls (id, agent_run_id, iteration, tool_name, arguments, result, success, duration_ms, created_at) "
@@ -292,7 +293,7 @@ def add_tool_call(agent_run_id: str, iteration: int, tool_name: str,
 
 def update_tool_call(tool_call_id: str, result: str, success: bool, duration_ms: int = 0) -> None:
     """更新工具调用结果"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             "UPDATE tool_calls SET result = ?, success = ?, duration_ms = ? WHERE id = ?",
@@ -310,7 +311,7 @@ def get_tool_calls(agent_run_id: str) -> list[dict]:
     created_at 排时同键行的次序由查询计划决定，轨迹回放会印出「先重启服务、
     后改配置」这种因果颠倒的顺序 —— id 是 uuid，不能当次序用，故用 rowid。
     """
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         rows = conn.execute(
             "SELECT * FROM tool_calls WHERE agent_run_id = ? ORDER BY created_at, rowid",

@@ -31,16 +31,15 @@ def _module_top_functions(module) -> dict:
     }
 
 
-def test_schedules_functions_ast_parity():
-    old_funcs = _module_top_functions(dbmod)
-    new_funcs = _module_top_functions(db_sched)
-    exported = list(db_sched.__all__)
-    missing = [name for name in exported if name not in old_funcs]
-    assert not missing, f"database.py 缺少同名函数: {missing}"
-    for name in exported:
-        assert old_funcs[name] == new_funcs[name], (
-            f"{name} 在 database.py 与 db/schedules.py 的实现不一致："
-            "迁移期副本必须同步修改（docs/structure-refactor-plan.md P0）"
+def test_schedules_functions_are_shared():
+    """P2-3 收敛后 database.py 不再持有副本：同名符号必须是 db/schedules 的同一对象。
+
+    过渡期的 AST parity（两份实现逐字一致）在收敛为再导出后失去意义 —— 现在要
+    防的回归是「有人在 database.py 里再抄一份」。
+    """
+    for name in db_sched.__all__:
+        assert getattr(dbmod, name) is getattr(db_sched, name), (
+            f"{name} 不是 db/schedules.py 的再导出（疑似出现了第二份副本）"
         )
 
 

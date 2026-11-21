@@ -5,7 +5,7 @@
 import json
 from typing import Optional
 
-from db._conn import _get_conn
+from db import _conn as _conn_mod
 from db._util import _new_id, _now
 
 
@@ -13,7 +13,7 @@ def create_conversation(title: str = "New Chat", mode: str = "ssh") -> dict:
     """创建新会话"""
     cid = _new_id()
     now = _now()
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             "INSERT INTO conversations (id, title, status, mode, created_at, updated_at) VALUES (?, ?, 'completed', ?, ?, ?)",
@@ -40,7 +40,7 @@ def list_conversations(limit: int = 50, offset: int = 0, mode: Optional[str] = N
     同一条会话会印在两页上、另一条永远翻不到；预览子查询同理，`LIMIT 1` 会在同秒的
     用户消息和回复里挑一条随机的。与 get_agent_runs / get_recent_messages 同一口径。
     """
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conditions = []
         params: list = []
@@ -69,7 +69,7 @@ def list_conversations(limit: int = 50, offset: int = 0, mode: Optional[str] = N
 
 def get_conversation(cid: str) -> Optional[dict]:
     """获取单个会话"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         row = conn.execute(
             "SELECT id, title, status, mode, created_at, updated_at FROM conversations WHERE id = ?",
@@ -83,7 +83,7 @@ def get_conversation(cid: str) -> Optional[dict]:
 def update_conversation_status(cid: str, status: str) -> None:
     """更新会话状态"""
     now = _now()
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             "UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?",
@@ -104,7 +104,7 @@ def try_set_default_conversation_title(cid: str, title: str,
     """
     now = _now()
     placeholders = ", ".join("?" * len(default_titles)) if default_titles else "''"
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         cur = conn.execute(
             f"UPDATE conversations SET title = ?, updated_at = ? "
@@ -119,7 +119,7 @@ def try_set_default_conversation_title(cid: str, title: str,
 
 def delete_conversation(cid: str) -> bool:
     """删除会话 (级联删除消息)"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         cur = conn.execute("DELETE FROM conversations WHERE id = ?", (cid,))
         conn.commit()
@@ -131,7 +131,7 @@ def delete_conversation(cid: str) -> bool:
 def touch_conversation(cid: str) -> None:
     """更新会话的 updated_at"""
     now = _now()
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             "UPDATE conversations SET updated_at = ? WHERE id = ?",
@@ -155,7 +155,7 @@ def add_message(
     """添加消息"""
     mid = _new_id()
     now = _now()
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             "INSERT INTO messages (id, conversation_id, role, content, reasoning, model_used, tokens_used, run_id, agent_trace, created_at) "
@@ -194,7 +194,7 @@ def get_messages(
     conversation_id: str, limit: int = 50, offset: int = 0
 ) -> list[dict]:
     """获取会话消息 (按时间正序)"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         # F-4 修复：返回最新 N 条（按时间正序输出）。
         # 原 ORDER BY created_at ASC LIMIT ? 返回的是最旧 N 条，>50 条的会话
@@ -229,7 +229,7 @@ def get_messages(
 
 def get_recent_messages(conversation_id: str, limit: int = 20) -> list[dict]:
     """获取最近 N 条消息 (按时间正序返回，用于构建 LLM 上下文)"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         # C-review MINOR-3：created_at 是秒级时间戳，同秒消息加 rowid（插入序）
         # 兜底排序，避免乱序喂 LLM
@@ -245,7 +245,7 @@ def get_recent_messages(conversation_id: str, limit: int = 20) -> list[dict]:
 
 def count_messages_by_role(conversation_id: str, role: str) -> int:
     """统计会话中指定角色的消息数（审查：替代 get_messages(limit=1000) 全量拉取只计数）"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         row = conn.execute(
             "SELECT COUNT(*) AS cnt FROM messages WHERE conversation_id = ? AND role = ?",
@@ -260,7 +260,7 @@ def upsert_tool_config(tool_name: str, mode: str, enabled: bool) -> dict:
     """插入或更新工具配置（按 tool_name + mode 唯一索引）"""
     import uuid as _uuid
     from datetime import datetime, timezone
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     now = datetime.now(timezone.utc).isoformat()
     try:
         existing = conn.execute(
@@ -300,7 +300,7 @@ def upsert_tool_config(tool_name: str, mode: str, enabled: bool) -> dict:
 
 def list_disabled_tools(mode: str = "all") -> list[str]:
     """获取指定模式下被禁用的工具名列表（用于 register_builtin_tools 过滤）"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         # 同时匹配 mode='all'（全局禁用）和 mode=指定模式
         rows = conn.execute(

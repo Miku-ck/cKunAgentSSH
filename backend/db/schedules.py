@@ -5,7 +5,8 @@ prune_agent_runs / prune_conversations 等跨域清理维护暂留 database.py�
 """
 from typing import Optional
 
-from db._conn import _assert_sql_ident, _get_conn
+from db._conn import _assert_sql_ident
+from db import _conn as _conn_mod
 from db._util import _new_id, _now
 
 # star import（db/__init__.py 的 `from db.schedules import *`）只导出本模块的
@@ -37,7 +38,7 @@ _SCHEDULE_COLS = (
 
 
 def list_schedules() -> list[dict]:
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         rows = conn.execute(
             f"SELECT {_SCHEDULE_COLS} FROM schedules ORDER BY created_at DESC"
@@ -48,7 +49,7 @@ def list_schedules() -> list[dict]:
 
 
 def get_schedule(schedule_id: str) -> Optional[dict]:
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         row = conn.execute(
             f"SELECT {_SCHEDULE_COLS} FROM schedules WHERE id = ?",
@@ -60,7 +61,7 @@ def get_schedule(schedule_id: str) -> Optional[dict]:
 
 
 def list_enabled_schedules() -> list[dict]:
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         rows = conn.execute(
             f"SELECT {_SCHEDULE_COLS} FROM schedules WHERE enabled = 1"
@@ -76,7 +77,7 @@ def create_schedule(data: dict) -> Optional[dict]:
     指定主键，重复时 sqlite3.IntegrityError 原样抛出，不做幂等吞并。"""
     now = _now()
     sid = data.get("id") or _new_id()
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             """INSERT INTO schedules (
@@ -132,7 +133,7 @@ def update_schedule(schedule_id: str, fields: dict) -> Optional[dict]:
     cols.append("updated_at = ?")
     vals.append(now)
     vals.append(schedule_id)
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             f"UPDATE schedules SET {', '.join(cols)} WHERE id = ?", vals
@@ -144,7 +145,7 @@ def update_schedule(schedule_id: str, fields: dict) -> Optional[dict]:
 
 
 def set_schedule_next_run(schedule_id: str, next_run_at: Optional[str]) -> None:
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             "UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?",
@@ -176,7 +177,7 @@ def mark_schedule_run(
         sets.append("last_run_id = ?")
         params.append(last_run_id)
     params.append(schedule_id)
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         # 拼进 SQL 的只有上面这几个字面量，值一律走占位符
         conn.execute(
@@ -189,7 +190,7 @@ def mark_schedule_run(
 
 def set_schedule_last_abnormal(schedule_id: str, ts: str) -> None:
     """记录巡检异常沉淀时间（方案 Phase 3）。只在判读为异常时调用，正常巡检零痕迹。"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             "UPDATE schedules SET last_abnormal_at = ?, updated_at = ? WHERE id = ?",
@@ -201,7 +202,7 @@ def set_schedule_last_abnormal(schedule_id: str, ts: str) -> None:
 
 
 def delete_schedule(schedule_id: str) -> bool:
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         cur = conn.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
         conn.commit()
@@ -213,7 +214,7 @@ def delete_schedule(schedule_id: str) -> bool:
 def create_schedule_run(schedule_id: str, run_id: str) -> dict:
     rid = _new_id()
     now = _now()
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             """INSERT INTO schedule_runs (id, schedule_id, run_id, status, started_at, created_at)
@@ -259,7 +260,7 @@ def update_schedule_run(
     if not cols:
         return 0
     touched = 0
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         for key_col in ("id", "run_id"):
             _assert_sql_ident(key_col)
@@ -276,7 +277,7 @@ def update_schedule_run(
 
 def fail_running_schedule_runs(schedule_id: str, error: str) -> int:
     """把某任务所有还在 running 的执行历史标为 failed，返回受影响行数。"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         cur = conn.execute(
             """UPDATE schedule_runs SET status = 'failed', error = ?, finished_at = ?
@@ -290,7 +291,7 @@ def fail_running_schedule_runs(schedule_id: str, error: str) -> int:
 
 
 def list_schedule_runs(schedule_id: str, limit: int = 50) -> list[dict]:
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         rows = conn.execute(
             """SELECT id, schedule_id, run_id, status, summary, error,
@@ -317,7 +318,7 @@ def prune_schedule_runs(max_count: int = 2000) -> int:
     不清理会随运行时间无界增长。由调度引擎低频调用（每 6h），不放在
     热路径上。
     """
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         cur = conn.execute(
             """DELETE FROM schedule_runs WHERE id IN (
@@ -350,7 +351,7 @@ def clear_schedule_runs(schedule_id: str) -> Optional[int]:
     路由层的两次独立 to_thread 之间，是可被调度触发穿透的 TOCTOU 窗口）。
     返回 None 表示闸拒绝（存在 running 行），调用方据此回 409。
     """
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -380,7 +381,7 @@ def has_running_schedule_run(schedule_id: str) -> bool:
     与 fail_running_schedule_runs 同一非终态口径：schedule_runs 只有 running 是非终态
     （completed/failed 为终态）。
     """
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         row = conn.execute(
             "SELECT 1 FROM schedule_runs WHERE schedule_id = ? AND status = 'running' LIMIT 1",
