@@ -204,8 +204,9 @@ function execFileAsync(
           return
         }
         // execFile 的 err.code 对非零退出是数字退出码；超时被杀时 code 为 null
-        const code = err ? (typeof (err as any).code === 'number' ? (err as any).code : 1) : 0
-        resolvePromise({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), timedOut: !!(err as any)?.killed })
+        const errCode = (err as NodeJS.ErrnoException | undefined)?.code
+        const code = err ? (typeof errCode === 'number' ? errCode : 1) : 0
+        resolvePromise({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), timedOut: !!(err as NodeJS.ErrnoException & { killed?: boolean })?.killed })
       },
     )
   })
@@ -235,7 +236,8 @@ function execSsh(args: string[]): Promise<{ code: number; stdout: string; stderr
         resolvePromise({ code: -1, stdout: '', stderr: 'ssh-not-found' })
         return
       }
-      const code = err ? (typeof (err as any).code === 'number' ? (err as any).code : 1) : 0
+      const errCode = (err as NodeJS.ErrnoException | undefined)?.code
+      const code = err ? (typeof errCode === 'number' ? errCode : 1) : 0
       resolvePromise({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
     })
   })
@@ -270,13 +272,42 @@ async function readConfigFromDisk(): Promise<GithubAccelConfig> {
   }
 }
 
+/** 落盘配置的原始形状：读盘 JSON 字段可能缺失/类型漂移，逐字段收窄后再用。 */
+interface RawProxy {
+  id?: unknown
+  name?: unknown
+  prefix?: unknown
+  builtin?: unknown
+  enabled?: unknown
+}
+
+interface RawGitBackup {
+  prefix?: unknown
+  previousValue?: unknown
+  pushRewrite?: unknown
+  pushInsteadOfAdded?: unknown
+}
+
+type RawToken = Partial<GitPrivateToken> & { id?: string; [key: string]: unknown }
+
+interface RawGithubAccelConfig {
+  proxies?: unknown
+  gitBackup?: unknown
+  privateTokens?: unknown
+  lastProxyPrefix?: unknown
+  pushMode?: unknown
+  hostsAutoRefresh?: unknown
+  probeStats?: unknown
+}
+
 /**
  * 与出厂配置合并：内置条目不落盘也始终存在（用户只能停用不能删）；
  * 用户自增条目按 id 保留；落盘里的内置条目只取 enabled 状态（改名/换址由出厂值兜底）。
  */
-function normalizeConfig(obj: any): GithubAccelConfig {
+function normalizeConfig(obj: unknown): GithubAccelConfig {
   const defaults = defaultGithubAccelConfig()
-  const savedProxies: any[] = Array.isArray(obj.proxies) ? obj.proxies : []
+  const raw = (obj && typeof obj === 'object' ? obj : {}) as RawGithubAccelConfig
+  const savedProxies: RawProxy[] = Array.isArray(raw.proxies) ? (raw.proxies as RawProxy[]) : []
 
   const proxies: AccelProxy[] = defaults.proxies.map(d => {
     const s = savedProxies.find(x => x && x.id === d.id)
@@ -289,22 +320,23 @@ function normalizeConfig(obj: any): GithubAccelConfig {
     proxies.push({ id: s.id, name: String(s.name || s.prefix), prefix: s.prefix, builtin: false, enabled: !!s.enabled })
   }
 
-  const gitBackup = obj.gitBackup && typeof obj.gitBackup === 'object' && typeof obj.gitBackup.prefix === 'string'
+  const backupRaw = raw.gitBackup as RawGitBackup | null | undefined
+  const gitBackup = backupRaw && typeof backupRaw === 'object' && typeof backupRaw.prefix === 'string'
     ? {
-        prefix: obj.gitBackup.prefix,
-        previousValue: typeof obj.gitBackup.previousValue === 'string' ? obj.gitBackup.previousValue : null,
+        prefix: backupRaw.prefix,
+        previousValue: typeof backupRaw.previousValue === 'string' ? backupRaw.previousValue : null,
         // 旧版本只存了布尔（且仅 direct 模式）；读盘时翻译成三态，保住「关闭时能撤销」
-        pushRewrite: (obj.gitBackup.pushRewrite === 'ssh' || obj.gitBackup.pushRewrite === 'direct'
-          ? obj.gitBackup.pushRewrite
-          : obj.gitBackup.pushInsteadOfAdded === true ? 'direct' : 'none') as 'none' | GitPushMode,
+        pushRewrite: (backupRaw.pushRewrite === 'ssh' || backupRaw.pushRewrite === 'direct'
+          ? backupRaw.pushRewrite
+          : backupRaw.pushInsteadOfAdded === true ? 'direct' : 'none') as 'none' | GitPushMode,
       }
     : null
 
   // 令牌随用户配置保留（整条按 id 保留），出厂模板只在用户从未配置过时注入——
   // 这样「出厂模板带空 token」不会覆盖用户已填的真实值。
-  const existingTokens: any[] = Array.isArray(obj.privateTokens) ? obj.privateTokens : []
+  const existingTokens: RawToken[] = Array.isArray(raw.privateTokens) ? (raw.privateTokens as RawToken[]) : []
   let tokens: GitPrivateToken[] = existingTokens
-    .filter(t => t && typeof t === 'object' && typeof t.id === 'string')
+    .filter((t): t is RawToken & { id: string } => !!t && typeof t === 'object' && typeof t.id === 'string')
     .map(t => sanitizeToken(t, t.id).token)
     .filter((t): t is GitPrivateToken => !!t)
   if (tokens.length === 0) {
@@ -320,10 +352,10 @@ function normalizeConfig(obj: any): GithubAccelConfig {
   return {
     proxies,
     gitBackup,
-    lastProxyPrefix: typeof obj.lastProxyPrefix === 'string' ? obj.lastProxyPrefix : undefined,
-    pushMode: obj.pushMode === 'ssh' ? 'ssh' : 'direct',
-    hostsAutoRefresh: obj.hostsAutoRefresh === true,
-    probeStats: sanitizeProbeStats(obj.probeStats),
+    lastProxyPrefix: typeof raw.lastProxyPrefix === 'string' ? raw.lastProxyPrefix : undefined,
+    pushMode: raw.pushMode === 'ssh' ? 'ssh' : 'direct',
+    hostsAutoRefresh: raw.hostsAutoRefresh === true,
+    probeStats: sanitizeProbeStats(raw.probeStats),
     privateTokens: tokens,
   }
 }
@@ -332,10 +364,10 @@ function normalizeConfig(obj: any): GithubAccelConfig {
  * 连续失败计数读盘清洗：只留合法的正数（封顶到淘汰阈值）。
  * 不保留就会每次读盘都清零，阈值永远凑不满 —— 自动淘汰会静默失效。
  */
-function sanitizeProbeStats(raw: any): Record<string, number> {
+function sanitizeProbeStats(raw: unknown): Record<string, number> {
   const out: Record<string, number> = {}
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
-  for (const [id, v] of Object.entries(raw)) {
+  for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
     if (!id || typeof v !== 'number' || !Number.isFinite(v) || v <= 0) continue
     out[id] = Math.min(Math.floor(v), PROBE_RETIRE_STREAK)
   }
@@ -365,8 +397,8 @@ async function writeConfigToDisk(config: GithubAccelConfig): Promise<void> {
   // Windows rename 到已存在目标可能 EPERM/EBUSY：重试一次后回退直写（与 tunnel-store 同款）
   try {
     await rename(tmpPath, path)
-  } catch (err: any) {
-    if (err && (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY')) {
+  } catch (err) {
+    if (err && ((err as NodeJS.ErrnoException).code === 'EPERM' || (err as NodeJS.ErrnoException).code === 'EACCES' || (err as NodeJS.ErrnoException).code === 'EBUSY')) {
       await new Promise(r => setTimeout(r, 200))
       try {
         await rename(tmpPath, path)
@@ -438,8 +470,8 @@ function probeOnce(url: string, opts: ProbeOptions): Promise<ProbeResult> {
           let next: string
           try {
             next = new URL(res.headers.location, url).toString()
-          } catch (e: any) {
-            return done({ target: url, ok: false, latencyMs: null, error: e?.message ?? '重定向地址非法' })
+          } catch (e) {
+            return done({ target: url, ok: false, latencyMs: null, error: (e instanceof Error ? e.message : String(e)) || '重定向地址非法' })
           }
           probeOnce(next, { kind, redirectsLeft: redirectsLeft - 1, maxBytes, agent })
             .then(r => done({ ...r, target: url }))

@@ -154,9 +154,21 @@ async function fetchJson(url: string): Promise<unknown> {
   return JSON.parse(await fetchBody(url))
 }
 
+/** DoH JSON 应答里的一条记录（只取用到的字段） */
+interface DohAnswer {
+  type?: number
+  data?: string
+}
+
+/** DoH JSON 应答（只取用到的字段） */
+interface DohResponse {
+  Answer?: DohAnswer[]
+}
+
 /** 从 DoH JSON 应答提取 A 记录 IP 列表 */
-function extractARecords(json: any): string[] {
-  const answers: any[] = Array.isArray(json?.Answer) ? json.Answer : []
+function extractARecords(json: unknown): string[] {
+  const answer = (json as DohResponse | null)?.Answer
+  const answers: DohAnswer[] = Array.isArray(answer) ? answer : []
   const out = answers
     .filter(a => a && a.type === 1 && typeof a.data === 'string' && isValidIPv4(a.data))
     .map(a => a.data as string)
@@ -347,12 +359,12 @@ export class GhHostsService {
         stale: applied ? isHostsBlockStale(content) : false,
         message: state === 'broken' ? HOSTS_BLOCK_BROKEN_MESSAGE : undefined,
       }
-    } catch (e: any) {
+    } catch (e) {
       // 读不到 hosts 就没有"托管块现状"可报，时效一律 null + 不提示过期
       // （没有块的时候催用户重选是噪声；applied=false 已经把状态说清了）
       const base = { applied: false, path, writable: false, entries: [], generatedAt: null, staleDays: null, stale: false }
-      if (e?.code === 'ENOENT') return { ...base, message: 'hosts 文件不存在' }
-      if (e?.code === 'EACCES' || e?.code === 'EPERM') {
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { ...base, message: 'hosts 文件不存在' }
+      if ((e as NodeJS.ErrnoException)?.code === 'EACCES' || (e as NodeJS.ErrnoException)?.code === 'EPERM') {
         return { ...base, message: '无权限读取 hosts（需要管理员权限）' }
       }
       return { ...base, message: e instanceof Error ? e.message : String(e) }
@@ -375,8 +387,8 @@ export class GhHostsService {
       let existing: string
       try {
         existing = existsSync(path) ? decodeHostsBytes(await readFile(path)) : ''
-      } catch (e: any) {
-        if (e?.code === 'EACCES' || e?.code === 'EPERM') throw new Error('无权限读取 hosts（需要管理员权限运行应用）')
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code === 'EACCES' || (e as NodeJS.ErrnoException)?.code === 'EPERM') throw new Error('无权限读取 hosts（需要管理员权限运行应用）')
         throw e
       }
       const state = hostsBlockState(existing)
@@ -387,8 +399,8 @@ export class GhHostsService {
       const next = applyHostsBlock(existing, use)
       try {
         await writeFile(path, encodeHostsBytes(next))
-      } catch (e: any) {
-        if (e?.code === 'EACCES' || e?.code === 'EPERM') {
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code === 'EACCES' || (e as NodeJS.ErrnoException)?.code === 'EPERM') {
           // 方案 A：按需提权写入（弹 UAC，用户确认后由提权子进程落盘）
           // 自动重选路径（allowElevate=false）在后台跑，绝不弹窗
           if (opts.allowElevate === false) {
@@ -414,11 +426,11 @@ export class GhHostsService {
       let existing: string
       try {
         existing = decodeHostsBytes(await readFile(path))
-      } catch (e: any) {
-        if (e?.code === 'EACCES' || e?.code === 'EPERM') {
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code === 'EACCES' || (e as NodeJS.ErrnoException)?.code === 'EPERM') {
           throw new Error('无权限读取 hosts（需要以管理员权限运行应用）')
         }
-        if (e?.code === 'ENOENT') return { applied: false, path, writable: true, entries: [], generatedAt: null, staleDays: null, stale: false }
+        if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { applied: false, path, writable: true, entries: [], generatedAt: null, staleDays: null, stale: false }
         throw e
       }
       const state = hostsBlockState(existing)
@@ -428,8 +440,8 @@ export class GhHostsService {
       if (next !== existing) {
         try {
           await writeFile(path, encodeHostsBytes(next))
-        } catch (e: any) {
-          if (e?.code === 'EACCES' || e?.code === 'EPERM') {
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException)?.code === 'EACCES' || (e as NodeJS.ErrnoException)?.code === 'EPERM') {
             await this.elevatedWrite(next, 'no-block')
           } else {
             throw e
@@ -511,10 +523,10 @@ export class GhHostsService {
         ],
         { windowsHide: true, timeout: 120000 }, // UAC 弹窗可能等用户很久，60s 不够
         (err, stdout, stderr) => {
-          const code = err ? (err as any).code : 0
+          const code = err ? (err as NodeJS.ErrnoException).code : 0
           resolvePromise({
             code: typeof code === 'number' || typeof code === 'string' ? code : 1,
-            killed: !!(err as any)?.killed,
+            killed: !!(err as NodeJS.ErrnoException & { killed?: boolean })?.killed,
             stdout: String(stdout ?? ''),
             stderr: String(stderr ?? ''),
           })
