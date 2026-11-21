@@ -38,6 +38,7 @@ from routes.plugins import router as plugins_router
 from routes.agent import router as agent_router
 from routes.agent_governance import router as agent_governance_router
 from routes.agent_memory import router as agent_memory_router
+from routes.agent_trace import router as agent_trace_router
 from routes.terminal import router as terminal_router
 from routes.audit import router as audit_router
 from routes.schedules import router as schedules_router
@@ -508,6 +509,7 @@ app.include_router(plugins_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(agent_governance_router, prefix="/api")
 app.include_router(agent_memory_router, prefix="/api")
+app.include_router(agent_trace_router, prefix="/api")
 app.include_router(terminal_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(schedules_router, prefix="/api")

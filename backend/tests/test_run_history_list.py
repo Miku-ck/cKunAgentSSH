@@ -108,9 +108,13 @@ def _client():
     from fastapi.testclient import TestClient
 
     from routes.agent import router
+    # /agent/runs 与 trace 已拆至 routes/agent_trace.py（P2 单文件单域），
+    # 端点路径不变；本用例只关心 /agent/runs，这里同步挂上拆出的 router。
+    from routes.agent_trace import router as agent_trace_router
 
     app = fastapi.FastAPI()
     app.include_router(router)
+    app.include_router(agent_trace_router)
     return TestClient(app)
 
 
