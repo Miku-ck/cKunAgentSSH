@@ -35,11 +35,14 @@ def client(base_db):
     # /agent/strategies 已拆至 routes/agent_governance.py（P2 单文件单域），
     # 端点路径不变；这里同步挂上拆出的 router。
     from routes.agent_governance import router as agent_governance_router
+    # /agent/tools 已拆至 routes/agent_tool_result.py（P2 单文件单域），同步挂载
+    from routes.agent_tool_result import router as agent_tool_result_router
     from routes.skills import router as skills_router
     app = fastapi.FastAPI()
     app.include_router(settings_router, prefix="/api")
     app.include_router(agent_router, prefix="/api")
     app.include_router(agent_governance_router, prefix="/api")
+    app.include_router(agent_tool_result_router, prefix="/api")
     app.include_router(skills_router, prefix="/api")
     return TestClient(app)
 
