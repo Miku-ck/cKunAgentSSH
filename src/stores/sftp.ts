@@ -110,13 +110,13 @@ export const useSftpStore = defineStore('sftp', () => {
       files.remoteCwd.value = '/'
       await files.loadRemote('/')
       await afterSessionReady(myOpen)
-    } catch (err: any) {
+    } catch (err) {
       if (myOpen !== openSeq) {
         try { await getApi().sshDisconnect(id) } catch { }
         return
       }
       online.value = false
-      files.remoteError.value = unwrapIpcErrorEnvelope(err?.message || '') || 'SFTP 打开失败'
+      files.remoteError.value = unwrapIpcErrorEnvelope((err as Error)?.message || '') || 'SFTP 打开失败'
       // 失败时关闭 SSH
       try { await getApi().sshDisconnect(id) } catch { }
       // 只在身份仍是本次打开设进去的那条时清空：否则抹掉的是后起会话的身份
@@ -162,7 +162,7 @@ export const useSftpStore = defineStore('sftp', () => {
       files.remoteCwd.value = target
       await files.loadRemote(target)
       await afterSessionReady(myOpen)
-    } catch (err: any) {
+    } catch (err) {
       if (myOpen !== openSeq) {
         // 旧代的失败不改全局在线态、也不弹给用户；自己那条子系统若没被接管就顺手回收
         if (sshSessionId.value !== terminalSshId) {
@@ -171,7 +171,7 @@ export const useSftpStore = defineStore('sftp', () => {
         return
       }
       online.value = false
-      files.remoteError.value = unwrapIpcErrorEnvelope(err?.message || '') || 'SFTP 打开失败'
+      files.remoteError.value = unwrapIpcErrorEnvelope((err as Error)?.message || '') || 'SFTP 打开失败'
       // 复用模式下不关闭 SSH 连接（终端仍需要）
       try { await getApi().sftpClose(terminalSshId) } catch { }
       if (sshSessionId.value === terminalSshId) sshSessionId.value = ''

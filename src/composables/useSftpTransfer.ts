@@ -406,7 +406,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
       t.endTime = Date.now()
       toast.success(`复制成功: ${t.name}`)
       scheduleRemoveTransfer(id)
-    } catch (err: any) {
+    } catch (err) {
       // S5-11：取消走 cancelTransfer（先置 cancelled 再发 sftpCancel），断开连接走
       // disconnect 同法，两者都会让 fs:copy 抛「复制已取消」。与 runUpload/runDownload
       // 的 B10 口径一致：看到 cancelled 即静默返回，别再弹一次「复制失败」盖掉「已取消」。
@@ -419,7 +419,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
       // 撞上这个兜底就原样说两遍。
       // S0-24：先剥 Electron 的 invoke 信封再落给用户 —— 否则内部通道名
       // （'fs:copy' 之类）连同 "Error invoking remote method" 一起进用户可见区
-      t.error = unwrapIpcErrorEnvelope(err?.message || '') || '未返回错误详情'
+      t.error = unwrapIpcErrorEnvelope((err as Error)?.message || '') || '未返回错误详情'
       t.endTime = Date.now()
       toast.error(`复制失败: ${t.name} — ${t.error}`)
       scheduleRemoveTransfer(id, 10000)
@@ -482,7 +482,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
       t.endTime = Date.now()
       toast.success(`复制成功: ${t.name}`)
       scheduleRemoveTransfer(id)
-    } catch (err: any) {
+    } catch (err) {
       // 与 runLocalCopy 的 S5-11 口径一致（原注释误指向 runRemoteCopy 自己）：
       // 取消或断开让传输通道抛出时静默返回，别再用「复制失败」盖掉「已取消」，
       // 也不给已被摘掉的记录改状态
@@ -493,7 +493,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
       // 撞上这个兜底就原样说两遍。
       // S0-24：先剥 Electron 的 invoke 信封再落给用户 —— 否则内部通道名
       // （'fs:copy' 之类）连同 "Error invoking remote method" 一起进用户可见区
-      t.error = unwrapIpcErrorEnvelope(err?.message || '') || '未返回错误详情'
+      t.error = unwrapIpcErrorEnvelope((err as Error)?.message || '') || '未返回错误详情'
       t.endTime = Date.now()
       toast.error(`复制失败: ${t.name} — ${t.error}`)
       scheduleRemoveTransfer(id, 10000)
@@ -807,7 +807,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
 
   function runBatch<T>(
     taskDefs: Array<BatchTask<T>>,
-  ): Promise<Array<{ ok: boolean; result?: T; error?: any }>> {
+  ): Promise<Array<{ ok: boolean; result?: T; error?: unknown }>> {
     return new Promise((resolve) => {
       const total = taskDefs.length
       // 空任务直接 resolve，避免 Promise 永久挂起
@@ -815,7 +815,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
         resolve([])
         return
       }
-      const results: Array<{ ok: boolean; result?: T; error?: any }> = []
+      const results: Array<{ ok: boolean; result?: T; error?: unknown }> = []
       let nextIdx = 0
       let finishedCount = 0
 
@@ -918,7 +918,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
       t.endTime = Date.now()
       toast.success(`上传成功: ${t.name}`)
       scheduleRemoveTransfer(id)
-    } catch (err: any) {
+    } catch (err) {
       // S0-15：code 两条腿都读（Error.name 前缀是跨 IPC 保真性最强的通道），
       // retryable 改由 code 现推 —— 不再依赖那个可能已被结构化克隆丢掉的布尔属性
       const { code, retryable, message } = describeTransferError(err)
@@ -978,7 +978,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
       t.endTime = Date.now()
       toast.success(`下载成功: ${t.name}`)
       scheduleRemoveTransfer(id)
-    } catch (err: any) {
+    } catch (err) {
       // S0-15：code 两条腿都读（Error.name 前缀是跨 IPC 保真性最强的通道），
       // retryable 改由 code 现推 —— 不再依赖那个可能已被结构化克隆丢掉的布尔属性
       const { code, retryable, message } = describeTransferError(err)

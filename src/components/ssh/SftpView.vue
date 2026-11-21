@@ -358,7 +358,7 @@ async function handleConnect(conn: SSHConnectionRecord): Promise<void> {
     await store.connect(conn)
     showConnPicker.value = false
     toast.success(`已连接 ${conn.name}`)
-  } catch (err: any) {
+  } catch (err) {
     toast.error(toFriendlyMessage(err, '连接失败'))
   } finally {
     connecting.value = false
@@ -678,7 +678,7 @@ async function handleCtxAction(action: string): Promise<void> {
         if (side === 'local') await store.localDelete(p, { skipRefresh: true })
         else await store.remoteDelete(p, { skipRefresh: true })
         succeeded++
-      } catch (err: any) {
+      } catch (err) {
         firstError ??= toFriendlyMessage(err, '删除失败')
       }
     }
@@ -825,7 +825,7 @@ async function confirmRename(): Promise<void> {
       else await store.remoteRename(renameDialog.oldPath, name)
     }
     toast.success(renameDialog.isNew ? '已创建' : '已重命名')
-  } catch (err: any) {
+  } catch (err) {
     toast.error(toFriendlyMessage(err, '操作失败'))
   }
 }
@@ -886,7 +886,7 @@ async function onChmodApply(mode: number): Promise<void> {
   try {
     await store.remoteChmod(path, mode)
     toast.success('权限已修改')
-  } catch (err: any) {
+  } catch (err) {
     toast.error(toFriendlyMessage(err, '修改权限失败'))
   }
 }

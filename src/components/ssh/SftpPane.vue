@@ -222,6 +222,16 @@ import { toFriendlyMessage } from '@/api/client'
 import SftpBookmarkMenu from './SftpBookmarkMenu.vue'
 import FileTypeIcon from '@/components/icons/FileTypeIcon.vue'
 
+/** 双栏条目公共形状：本地 FileEntry 与远程 SftpEntry 的字段并集（mode 仅远端有） */
+interface PaneEntry {
+  name: string
+  path: string
+  isDirectory: boolean
+  size: number
+  modified: number
+  mode?: string
+}
+
 const props = defineProps<{ side: 'local' | 'remote' }>()
 const store = useSftpStore()
 const toast = useToastStore()
@@ -284,7 +294,7 @@ const dragHintText = computed(() => {
   return props.side === 'local' ? '松开以下载到本地' : '松开以上传到远程'
 })
 
-const entries = computed<any[]>(() =>
+const entries = computed<PaneEntry[]>(() =>
   props.side === 'local' ? store.localEntries : store.remoteEntries
 )
 
@@ -343,10 +353,10 @@ function clearFilter(): void {
 
 // B16 修复：渲染上限（不引第三方虚拟滚动库），超大目录只显示前 N 行
 const RENDER_LIMIT = 2000
-const filteredEntries = computed<any[]>(() =>
+const filteredEntries = computed<PaneEntry[]>(() =>
   store.filterEntries(entries.value, filterText.value)
 )
-const displayEntries = computed<any[]>(() => {
+const displayEntries = computed<PaneEntry[]>(() => {
   const sorted = store.sortEntries(filteredEntries.value, sortState.value.key, sortState.value.dir)
   return sorted.slice(0, RENDER_LIMIT)
 })
@@ -390,7 +400,7 @@ function isSelected(path: string): boolean {
     : store.selectedRemote.has(path)
 }
 
-function permText(entry: any): string {
+function permText(entry: PaneEntry): string {
   if (props.side === 'remote' && entry.mode) return entry.mode
   return entry.isDirectory ? 'drwx' : '-rw'
 }
@@ -514,7 +524,7 @@ async function confirmMkdir(): Promise<void> {
     else await store.remoteMkdir(name)
     toast.success('已创建')
     showMkdirDialog.value = false
-  } catch (err: any) {
+  } catch (err) {
     toast.error(toFriendlyMessage(err, '创建失败'))
   } finally {
     mkdirBusy.value = false
@@ -526,7 +536,7 @@ function cancelMkdir(): void {
   showMkdirDialog.value = false
 }
 
-function onRowClick(entry: any, e: MouseEvent): void {
+function onRowClick(entry: PaneEntry, e: MouseEvent): void {
   // S5-23：Shift 优先于 Ctrl —— 按住 Shift 再点即区间选择，此时 Ctrl 不改变语义
   if (e.shiftKey) {
     store.selectRange(props.side, entry.path, visiblePaths.value)
@@ -555,7 +565,7 @@ function onGlobalKeydown(e: KeyboardEvent): void {
   store.selectAll(props.side, visiblePaths.value)
 }
 
-async function onRowDblClick(entry: any): Promise<void> {
+async function onRowDblClick(entry: PaneEntry): Promise<void> {
   if (entry.isDirectory) {
     if (props.side === 'local') await store.loadLocal(entry.path)
     else await store.loadRemote(entry.path)
@@ -565,7 +575,7 @@ async function onRowDblClick(entry: any): Promise<void> {
 }
 
 // ─── 拖拽 ─────────────────────────────
-function onDragStart(e: DragEvent, entry: any): void {
+function onDragStart(e: DragEvent, entry: PaneEntry): void {
   let paths: string[]
   if (isSelected(entry.path)) {
     paths = props.side === 'local'
@@ -647,15 +657,15 @@ function onDrop(e: DragEvent): void {
 // ─── 右键菜单 ─────────────────────────
 const emit = defineEmits<{
   transfer: [payload: { side: 'local' | 'remote'; paths: string[] }]
-  'context-menu': [e: MouseEvent, entry: any | null, side: 'local' | 'remote']
-  'open-file': [payload: { side: 'local' | 'remote'; entry: any }]
+  'context-menu': [e: MouseEvent, entry: PaneEntry | null, side: 'local' | 'remote']
+  'open-file': [payload: { side: 'local' | 'remote'; entry: PaneEntry }]
 }>()
 
 function onPaneContextMenu(e: MouseEvent): void {
   emit('context-menu', e, null, props.side)
 }
 
-function onRowContextMenu(e: MouseEvent, entry: any): void {
+function onRowContextMenu(e: MouseEvent, entry: PaneEntry): void {
   emit('context-menu', e, entry, props.side)
 }
 </script>

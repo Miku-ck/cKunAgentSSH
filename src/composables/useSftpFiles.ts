@@ -120,9 +120,9 @@ export function useSftpFiles(deps: SftpFilesDeps) {
       localEntries.value = entries
       localCwd.value = target
       selectedLocal.value = new Set()
-    } catch (err: any) {
+    } catch (err) {
       if (mySeq !== localLoadSeq) return
-      localError.value = unwrapIpcErrorEnvelope(err?.message || '') || '读取本地目录失败'
+      localError.value = unwrapIpcErrorEnvelope((err as Error)?.message || '') || '读取本地目录失败'
     } finally {
       // 仅最新请求负责复位 loading（&& !silent 会让「非静默导航 + 期间发起的静默刷新」
       // 两条请求都跳过复位 —— 列表已加载完却永久停在「加载中...」）
@@ -223,9 +223,9 @@ export function useSftpFiles(deps: SftpFilesDeps) {
       remoteEntries.value = entries
       remoteCwd.value = target
       selectedRemote.value = new Set()
-    } catch (err: any) {
+    } catch (err) {
       if (mySeq !== remoteLoadSeq) return
-      remoteError.value = unwrapIpcErrorEnvelope(err?.message || '') || '读取远程目录失败'
+      remoteError.value = unwrapIpcErrorEnvelope((err as Error)?.message || '') || '读取远程目录失败'
     } finally {
       // 与 loadLocal 同步：最新请求一律复位，静默与否只影响是否显示 loading
       if (mySeq === remoteLoadSeq) loadingRemote.value = false
