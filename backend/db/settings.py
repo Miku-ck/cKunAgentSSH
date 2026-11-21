@@ -9,7 +9,6 @@ from typing import Optional
 
 from db._conn import _get_conn
 from db._util import _now
-from database import unprotect_secret
 
 __all__ = [
     "get_app_setting",
@@ -33,6 +32,10 @@ def get_app_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     还原成明文 —— 消费方（web_tools 的 Tavily 调用、诊断面板等）不感知信封，
     见到的永远是可用的明文或未设置的空值。
     """
+    # 局部导入：db 包不得反向依赖 database（database 顶部要 import db._conn，
+    # 模块级引用会形成循环导入）。凭据信封域收敛后此处改从 db._secrets 引用。
+    from database import unprotect_secret
+
     conn = _get_conn()
     try:
         row = conn.execute(

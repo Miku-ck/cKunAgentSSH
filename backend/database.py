@@ -7,93 +7,45 @@ connect/close 的开销；close() 被包装为 rollback-and-keep-alive，
 """
 import asyncio
 import base64
-import re
 import sqlite3
 import sys
 import uuid
 import json
-import atexit
-import threading
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_db_path: str = ""
+# ── 连接层 → db/_conn.py（P2-3 连接层统一，全库唯一一份线程本地连接池）──
+# 收敛前 database.py 与 db/ 包各持一份连接池：init_db 的迁移途中调用池化函数
+# （如 _migrate_db → set_app_setting）时，若该函数来自 db 包，就会拿到同线程的
+# 第二条连接，与迁移连接形成两个写者 → database is locked（P2-3 试收敛 settings
+# 域时的实测故障）。此处改为再导出，database 与 db 包共享同一份 _thread_local /
+# _db_path / _all_connections。
+import db._conn as _db_conn
 
-# SQL 标识符守卫（CWE-89 加固）：凡是拼进 f-string SQL 的表名/列名，必须是
-# 裸标识符。这些标识符全部来自本模块的字面量常量（不接受任何外部入参），
-# 校验是防御性的 —— 字面量手滑改出空格/引号/分号时当场抛 RuntimeError，
-# 而不是静默生成一条语义被改写的 SQL。
-_SQL_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-
-
-def _assert_sql_ident(name: str) -> None:
-    if not _SQL_IDENT_RE.fullmatch(name):
-        raise RuntimeError(f"拒绝拼接非法 SQL 标识符: {name!r}")
-
-
-def _assert_sql_ident_list(names: str) -> None:
-    """逗号分隔的列名串（如 SELECT 投影列列表）逐个过标识符守卫。"""
-    for n in names.split(","):
-        _assert_sql_ident(n.strip())
-
-# ── 线程本地连接池 ──
-_thread_local = threading.local()
-# 跟踪所有线程的连接，用于进程退出时统一清理。
-# 注意：不能用 WeakSet —— sqlite3.Connection 在部分 Python 构建（如 3.13）下
-# 不支持弱引用，WeakSet.add() 会抛 "cannot create weak reference"，导致后端起不来。
-# 由于 _thread_local 已保证每线程仅一条连接，这里改用普通 set，数量受线程数约束，不会无界增长。
-_all_connections: set = set()
-_conn_lock = threading.Lock()
+from db._conn import (  # noqa: F401  (re-export)
+    _PooledConnection,
+    _assert_sql_ident,
+    _assert_sql_ident_list,
+    _close_all_connections,
+    _conn_lock,
+    _create_connection,
+    _get_conn,
+    _thread_local,
+)
 
 
-class _PooledConnection:
-    """sqlite3.Connection 的包装类，用于线程本地连接池。
+def __getattr__(name: str):
+    """module 级属性转发：database._db_path 的唯一来源是 db._conn._db_path。
 
-    - 所有属性/方法委托到底层 _conn（通过 __getattr__）
-    - close() 不真正关闭连接，而是执行 rollback 清理未提交事务，
-      连接保留在线程本地存储中供下次复用
-    - 这样现有代码中 51 处 `finally: conn.close()` 无需改动
+    直接 `from ... import _db_path` 只是字符串快照，init_db 之后再改路径就漂移；
+    读取方（runbook_store 的 getattr(db, "_db_path", "")、get_db_path）统一走这里。
     """
-
-    __slots__ = ("_conn",)
-
-    def __init__(self, conn: sqlite3.Connection):
-        object.__setattr__(self, "_conn", conn)
-
-    def __getattr__(self, name):
-        return getattr(self._conn, name)
-
-    def close(self):
-        """No-op close：回滚未提交事务，但不关闭底层连接。"""
-        try:
-            # 修复：记录未提交事务的回滚，便于排查数据丢失问题
-            if self._conn.in_transaction:
-                logger.debug("回滚未提交的事务（连接保持复用）")
-            self._conn.rollback()
-        except Exception as e:
-            # 连接可能已损坏，下次 _get_conn() 会重建。此处不能静默吞掉：
-            # 这是"有事务没能回滚"的唯一可见信号，pass 会让数据丢失无从排查。
-            logger.warning("回滚未提交事务失败（连接将重建）: %s", e)
-
-
-def _create_connection() -> sqlite3.Connection:
-    """创建一个新的底层连接并应用 PRAGMA 设置。"""
-    conn = sqlite3.connect(_db_path, timeout=5.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
-
-
-# 连接空闲超过该秒数才做 SELECT 1 探活（审查 NIT：本地文件 SQLite 连接不会
-# 像网络连接那样断开，原实现每次 _get_conn() 都跑一遍探活，给每条 SQL 白加
-# 一次往返；30s 空闲阈值兼顾"长期空闲后校验"与热路径零开销）
-_CONN_IDLE_PROBE_SECONDS = 30.0
+    if name == "_db_path":
+        return _db_conn._db_path
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ── 库结构版本（建表脚本短路）───────────────────────────────────────────────
 # init_db 的建表脚本原本每次启动都整段重跑（连同迁移实测 117ms，占后端启动初始化
@@ -134,77 +86,6 @@ def _schema_is_current(conn) -> bool:
         return False
 
 
-def _get_conn() -> _PooledConnection:
-    """获取当前线程的数据库连接（复用线程本地连接）。
-
-    首次调用时创建底层连接并缓存到 threading.local()；
-    后续调用直接返回包装后的连接。
-    close() 被包装为 no-op，所以 `finally: conn.close()` 不会真正关闭连接。
-    """
-    import time as _time
-    now = _time.monotonic()
-    conn = getattr(_thread_local, "conn", None)
-    # 切库（init_db 指向另一个路径）必须换连接：池化连接连着上一个 _db_path，
-    # 直接复用会让 init_db 的结构版本探测读到旧库 —— 把新库当成「已是最新」
-    # 短路掉，建表/迁移永远不执行。
-    if conn is not None and getattr(_thread_local, "conn_path", None) != _db_path:
-        with _conn_lock:
-            _all_connections.discard(conn)
-        try:
-            conn.close()
-        except Exception as e:
-            logger.warning("关闭切库前的旧连接失败（句柄可能泄漏）: %s", e)
-        conn = None
-        _thread_local.conn = None
-    if conn is not None:
-        last_used = getattr(_thread_local, "conn_last_used", 0.0)
-        # 仅当连接空闲超过阈值时验证其有效性（热路径零探活开销）
-        if now - last_used > _CONN_IDLE_PROBE_SECONDS:
-            try:
-                conn.execute("SELECT 1")
-            except Exception:
-                # 连接已损坏，从跟踪列表移除并重建
-                with _conn_lock:
-                    if conn in _all_connections:
-                        _all_connections.remove(conn)
-                    try:
-                        conn.close()
-                    except Exception as e:
-                        # 探活失败已经证明这条连接坏掉了，close 再失败只是同一故障的
-                        # 第二次回响；但泄漏的文件句柄只有这里能看到，留一条 warning
-                        logger.warning("关闭失效连接失败（句柄可能泄漏）: %s", e)
-                conn = None
-                _thread_local.conn = None
-        _thread_local.conn_last_used = now
-
-    if conn is None:
-        conn = _create_connection()
-        with _conn_lock:
-            _all_connections.add(conn)
-        _thread_local.conn = conn
-        _thread_local.conn_path = _db_path
-        _thread_local.conn_last_used = now
-
-    return _PooledConnection(conn)
-
-
-def _close_all_connections() -> None:
-    """关闭所有线程的连接。进程退出时由 atexit 钩子调用。"""
-    with _conn_lock:
-        for conn in _all_connections:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        _all_connections.clear()
-
-    # 清除当前线程的引用
-    if hasattr(_thread_local, "conn"):
-        _thread_local.conn = None
-        _thread_local.conn_last_used = 0.0
-
-
-atexit.register(_close_all_connections)
 
 
 def _skip_script(_script: str) -> None:
@@ -232,19 +113,10 @@ def init_db(db_path: str) -> None:
     except OSError as e:
         log.warning("init_db: mkdir parent failed for %s: %s", db_path, e)
 
-    global _db_path
-    _db_path = db_path
-    # db/ 包（迁移期副本，见 docs/structure-refactor-plan.md P0）持有自己的
-    # 一份线程本地连接池，_db_path 缺省为空 —— 不同步的话，任何按模块 docstring
-    # "按需引用 db.schedules 等新模块"的代码会拿到一个 sqlite3.connect("") 的
-    # 临时空库，查什么都报 no such table。这里把路径同步过去；反向入口
-    # db.init_db() 也会设置本包 _db_path 后再调本函数，两条入口收敛为同一值。
-    try:
-        import db._conn as _db_pkg_conn
-
-        _db_pkg_conn._db_path = db_path
-    except Exception as e:  # db 包缺席/损坏不阻断启动：迁移期它是可选路径
-        log.warning("init_db: 同步 db 包连接池路径失败: %s", e)
+    # 唯一路径源是 db._conn._db_path（P2-3 连接层统一后全库共用一份池）。
+    # 这里不再写 database._db_path 快照 —— 读它的人（get_db_path /
+    # runbook_store）经模块 __getattr__ 转发到 db._conn，避免两处漂移。
+    _db_conn._db_path = db_path
     log.info("init_db: opening %s", os.path.abspath(db_path))
     conn = _get_conn()
     try:
@@ -4973,7 +4845,7 @@ def list_app_settings() -> dict:
 
 def get_db_path() -> str:
     """当前生效的数据库路径（init_db 之后才有值；未初始化返回空串）。"""
-    return _db_path
+    return _db_conn._db_path
 
 
 # 诊断面板的行数统计白名单：拼进 SQL 的表名必须来自这里，不接受任意入参。
