@@ -31,6 +31,10 @@ def client(monkeypatch) -> TestClient:
     )
     app = fastapi.FastAPI()
     app.include_router(agent_mod.router, prefix="/api")
+    # /agent/safety/classify 已从 routes.agent 拆至 routes.agent_permission
+    # （P2 单文件单域）；局部 app 必须同步挂载，否则端点在测试里 404。
+    from routes.agent_permission import router as agent_permission_router
+    app.include_router(agent_permission_router, prefix="/api")
     client = TestClient(app)
     client.audit_calls = audit_calls  # type: ignore[attr-defined]
     return client

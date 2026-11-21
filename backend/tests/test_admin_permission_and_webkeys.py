@@ -32,7 +32,9 @@ def perm_client(base_db, tmp_workspace, monkeypatch):
     monkeypatch.setattr(reins, "ALLOWLIST_PATH", os.path.join(tmp_workspace, "allowlist.txt"))
     monkeypatch.setattr(reins, "_global_permission_gate", None)
     import routes.agent as agent_mod
-    return _make_client(agent_mod.router)
+    # /agent/permission/allow|list 等已拆至 routes.agent_permission（P2），局部 app 同步挂载
+    from routes.agent_permission import router as agent_permission_router
+    return _make_client(agent_mod.router, agent_permission_router)
 
 
 def test_allow_tool_level_grant(perm_client):
