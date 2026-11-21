@@ -1066,7 +1066,8 @@ async def post_process_after_turn(
                 model_id = default_cfg.get("model_id") or default_cfg.get("id", "Qwen3-VL")
             else:
                 model_id = "Qwen3-VL"
-        except Exception:
+        except Exception as e:
+            logger.debug("取默认模型失败，回退 Qwen3-VL: %s", e)
             model_id = "Qwen3-VL"
 
     # 构建 TurnContext
