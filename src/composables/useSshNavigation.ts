@@ -32,7 +32,7 @@ const CONNECT_DEBOUNCE_MS = 2000
 
 export function useSshNavigation(
   focusActiveTerminal: () => void,
-  terminalRefs: Record<string, any>,
+  terminalRefs: Record<string, { focus?: () => void }>,
 ) {
   const store = useSSHStore()
   const sftpStore = useSftpStore()
@@ -154,7 +154,7 @@ export function useSshNavigation(
         activeSession.shell,
       )
       toast.success(`SFTP 已连接: ${activeSession.name}`)
-    } catch (err: any) {
+    } catch (err) {
       toast.error(toFriendlyMessage(err, 'SFTP 连接失败，请手动连接'))
     }
   }
@@ -184,7 +184,7 @@ export function useSshNavigation(
       // 只收 showHome 不够，从管理页新建的终端会被管理页自己挡住。
       activeNavPage.value = 'home'
       showHome.value = false
-    } catch (err: any) {
+    } catch (err) {
       logError('openLocalShell', 'Failed:', shellName, err)
       toast.error(toFriendlyMessage(err, `${shellName} 打开失败`))
     }
@@ -283,7 +283,7 @@ export function useSshNavigation(
         focusActiveTerminal()
       }, 100)
       focusTimers.push(tid)
-    } catch (err: any) {
+    } catch (err) {
       logError('useSshNavigation', 'connectRemote failed:', err)
       // 失败即解除防抖：时间戳在发起前就写入了，而下方 toast 的「重试」按钮直接
       // 回调本函数 —— 秒级失败（拒绝连接/认证错误）时重试会撞进防抖窗口，

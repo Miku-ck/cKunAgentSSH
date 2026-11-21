@@ -297,16 +297,19 @@ const agent = useAgentStore()
 const toast = useToastStore()
 const { openSettings } = useSettings()
 
-// 终端组件引用映射（key: sessionId, value: 组件实例）
-const terminalRefs: Record<string, any> = {}
+// 终端组件引用映射（key: sessionId, value: 组件实例，供 focus 用）
+const terminalRefs: Record<string, { focus?: () => void }> = {}
 // P2 修复：为每个会话 id 缓存一个【稳定身份】的 ref 回调，避免模板里内联箭头函数
 // 每次渲染都换身份 → Vue 对全部终端重复触发 detach/attach（终端实例虽不被重建，但 ref 回调被无谓调用）。
-const terminalRefHandlers = new Map<string, (el: any) => void>()
-function getTerminalRefHandler(id: string): (el: any) => void {
+// 模板 :ref 的回调由 Vue 注入（Element | 组件实例 | null），先接 unknown 再收窄到 focus，
+// 避免把 Vue 的 VNodeRef 具体形状抄死在业务里（也避免 Element 与 { focus? } 的结构不兼容）。
+const terminalRefHandlers = new Map<string, (el: unknown) => void>()
+function getTerminalRefHandler(id: string): (el: unknown) => void {
   let h = terminalRefHandlers.get(id)
   if (!h) {
-    h = (el: any) => {
-      if (el) terminalRefs[id] = el
+    h = (el) => {
+      const inst = el as { focus?: () => void } | null
+      if (inst && typeof inst.focus === 'function') terminalRefs[id] = inst
       else delete terminalRefs[id]
     }
     terminalRefHandlers.set(id, h)
