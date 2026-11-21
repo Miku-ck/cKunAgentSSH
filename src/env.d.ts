@@ -29,6 +29,10 @@ interface EditorFileContent {
 
 type SshReconnectStatus = import('../shared/ipc-types').SshReconnectStatus
 
+type LegacyConnection = import('../shared/ipc-types').LegacyConnection
+
+type BuiltinSkillSyncItem = import('../shared/ipc-types').BuiltinSkillSyncItem
+
 type TunnelRule = import('../shared/ipc-types').TunnelRule
 
 type TunnelStatus = import('../shared/ipc-types').TunnelStatus
@@ -201,7 +205,7 @@ interface ElectronAPI {
   sshDeleteConnection: (id: string) => Promise<void>
   sshDuplicateConnection: (id: string) => Promise<SSHConnectionRecord>
   sshTestConnection: (config: Omit<SSHConnectionRecord, 'tags' | 'createdAt' | 'updatedAt'>) => Promise<SSHTestResult>
-  sshMigrateLegacy: (legacy: any[]) => Promise<number>
+  sshMigrateLegacy: (legacy: LegacyConnection[]) => Promise<number>
   /** 打开 ~/.ssh/config（不存在时先建空文件再打开），返回实际路径 */
   sshOpenConfig: () => Promise<string>
   // SSH 隧道（端口转发）
@@ -351,7 +355,7 @@ interface ElectronAPI {
   listSkills: (mode?: string) => Promise<any[]>
   updateSkillEnabled: (id: string, enabled: boolean, mode?: string) => Promise<{ id: string; enabled: boolean }>
   deleteSkill: (id: string) => Promise<{ deleted: boolean }>
-  syncBuiltinSkills: (skills: any[]) => Promise<{ upserted: number; orphans_removed: number; total: number }>
+  syncBuiltinSkills: (skills: BuiltinSkillSyncItem[]) => Promise<{ upserted: number; orphans_removed: number; total: number }>
 
   // SFTP
   sftpOpen: (sshSessionId: string) => Promise<void>

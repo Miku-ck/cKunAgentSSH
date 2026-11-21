@@ -164,3 +164,35 @@ export interface GatewayHostKeyEvent {
   port: number
   spki: string
 }
+
+/**
+ * 内置技能同步到后端数据库的单条形状（skills:syncBuiltin 的请求体元素）。
+ * 渲染层 src/stores/skills.ts 构造、主进程原样转发给后端 /skills/sync-builtin。
+ */
+export interface BuiltinSkillSyncItem {
+  name: string
+  slug: string
+  system_prompt: string
+  description: string
+  category: string
+  trigger_words: string[]
+}
+
+/**
+ * 旧版本渲染层 localStorage 里的连接形状（ssh:migrateLegacy 的迁移来源）。
+ * 字段全部可选/宽松：旧数据缺字段、类型漂移都不罕见，主进程逐个兜底。
+ */
+export interface LegacyConnection {
+  id?: string
+  name?: string
+  host: string
+  port?: number
+  username: string
+  authType?: string
+  password?: string
+  privateKeyPath?: string
+  passphrase?: string
+  tags?: string[]
+  readyTimeout?: number
+  keepaliveInterval?: number
+}

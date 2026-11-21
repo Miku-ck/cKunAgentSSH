@@ -5,8 +5,12 @@
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { JsonFileStore } from '../utils/json-file-store'
+import type { LegacyConnection } from '../../shared/ipc-types'
 
 export type SSHConnectionRecord = import('../../shared/ipc-types').SSHConnectionRecord
+
+/** 迁移来源形状权威定义在 shared/ipc-types.ts（渲染层 env.d.ts 同源引用） */
+export type { LegacyConnection } from '../../shared/ipc-types'
 
 /**
  * 磁盘上的形态：只有两个敏感字段改名并加密，其余与内存形态逐字段相同。
@@ -267,12 +271,12 @@ export class SSHStore {
   }
 
   /** 从渲染进程 localStorage 迁移旧数据(一次性) */
-  async migrateLegacy(legacy: any[]): Promise<number> {
+  async migrateLegacy(legacy: LegacyConnection[]): Promise<number> {
     if (!Array.isArray(legacy) || legacy.length === 0) return 0
     return this.enqueue(() => this.doMigrateLegacy(legacy))
   }
 
-  private async doMigrateLegacy(legacy: any[]): Promise<number> {
+  private async doMigrateLegacy(legacy: LegacyConnection[]): Promise<number> {
     const records = await this.file.readAll()
     reencryptPlainOnDisk(records)
     const existing = new Set(records.map(r => `${r.host}:${r.port}:${r.username}`))

@@ -9,12 +9,12 @@ import { unlink as fsUnlink } from 'fs/promises'
 import { execFile, spawn } from 'child_process'
 import { BackendManager } from './managers/backend-manager'
 import { PtyManager, clampPtyDimension } from './managers/pty-manager'
-import { loadSsh2, SSHManager } from './managers/ssh-manager'
+import { loadSsh2, SSHManager, type SSHConnectionConfig } from './managers/ssh-manager'
 import { SSHError, toIpcTransport, type SSHErrorTransport } from './utils/ssh-error'
-import { SSHStore, type SSHConnectionRecord } from './stores/ssh-store'
+import { SSHStore, type SSHConnectionRecord, type LegacyConnection } from './stores/ssh-store'
 import { TunnelStore, type TunnelRule } from './stores/tunnel-store'
 import { TunnelManager } from './managers/tunnel-manager'
-import { GithubAccelService } from './services/github-accel'
+import { GithubAccelService, type AccelProxy } from './services/github-accel'
 import { GitReposService } from './services/git-repos'
 import { GhDownloadManager } from './services/gh-download'
 import { GhHostsService } from './services/gh-hosts'
@@ -24,6 +24,7 @@ import { GatewayManager } from './managers/gateway-manager'
 import { UploadTaskStore } from './stores/upload-task-store'
 import { ElectronBridge, BridgeOp } from './managers/electron-bridge'
 import { BridgeWsClient } from './managers/bridge-ws-client'
+import type { BuiltinSkillSyncItem } from '../shared/ipc-types'
 import {
   getDesktopPrefs,
   initDesktopPrefs,
@@ -110,6 +111,12 @@ function assertTrustedSender(event: Electron.IpcMainInvokeEvent): void {
     throw new Error(`拒绝来自非主窗口渲染进程的 IPC 请求: ${event.senderFrame?.url || 'unknown'}`)
   }
 }
+
+/**
+ * ssh:connect 的入参形状：SSHConnectionConfig + 终端初始行列。
+ * 渲染层 env.d.ts 同源镜像（跨 tsconfig 边界不能互相 import）。
+ */
+type ConnectPayload = SSHConnectionConfig & { cols?: number; rows?: number }
 
 /** 带 sender 校验 + SSHError 序列化的 IPC handler 注册（所有 ipcMain.handle 一律走此）。 */
 function handleTrusted(
@@ -728,7 +735,7 @@ if ($result.CompletionMatches) {
  * 语义：渲染层传了非空值优先（弹窗里刚输入/未保存的场景），否则用 Store 中已保存
  * 的凭据；认证方式与磁盘记录不一致时不用（用户正在切换认证方式）。
  */
-async function resolveCredentials(config: any): Promise<any> {
+async function resolveCredentials(config: SSHConnectionConfig): Promise<SSHConnectionConfig> {
   if (!config || !config.id) return config
   let stored: SSHConnectionRecord | null = null
   try {
@@ -807,7 +814,7 @@ function setupSSHIPC(): void {
     sshStore!.touchLastConnected(connectionId).catch(() => { /* ignore */ })
   })
 
-  handleTrusted('ssh:connect', async (_event, config: any) => {
+  handleTrusted('ssh:connect', async (_event, config: ConnectPayload) => {
     const { cols, rows, ...connConfig } = config
     // E20：cols/rows 来自渲染进程，复用 pty:create 同款钳制
     // （cols 1..1000 默认 80，rows 1..500 默认 24），防非法值
@@ -823,7 +830,7 @@ function setupSSHIPC(): void {
     return result
   })
 
-  handleTrusted('ssh:connectSftp', async (_event, config: any) => {
+  handleTrusted('ssh:connectSftp', async (_event, config: SSHConnectionConfig) => {
     // 凭据回填：SFTP 连接与终端连接同一条凭据来源规则
     const resolved = await resolveCredentials(config)
     const result = await sshManager!.connectSftp(resolved)
@@ -905,7 +912,7 @@ function setupSSHIPC(): void {
     return stripCredentials(await sshStore!.duplicate(id))
   })
 
-  handleTrusted('ssh:testConnection', async (_event, config: any) => {
+  handleTrusted('ssh:testConnection', async (_event, config: Omit<SSHConnectionRecord, 'tags' | 'createdAt' | 'updatedAt'>) => {
     // 修复：编辑已保存连接时渲染进程看不到密码（列表已剥离明文凭据），
     // 测试连接若要求重输密码就失去意义 —— 与 ssh:connect 共用同一套回填规则
     // （凭据不出主进程，不落日志）
@@ -913,7 +920,7 @@ function setupSSHIPC(): void {
     return sshManager!.testConnection(resolved)
   })
 
-  handleTrusted('ssh:migrateLegacy', (_event, legacy: any[]) => {
+  handleTrusted('ssh:migrateLegacy', (_event, legacy: LegacyConnection[]) => {
     return sshStore!.migrateLegacy(legacy)
   })
 
@@ -974,7 +981,7 @@ function setupSSHIPC(): void {
     return githubAccel!.getConfig()
   })
 
-  handleTrusted('ghaccel:saveLists', (_event, proxies: any[]) => {
+  handleTrusted('ghaccel:saveLists', (_event, proxies: AccelProxy[]) => {
     return githubAccel!.saveLists(proxies)
   })
 
@@ -1247,7 +1254,7 @@ function setupSSHIPC(): void {
 }
 
 // ─── Skills IPC（转发到后端 HTTP API）─────────────────
-async function callBackendApi(path: string, options?: RequestInit): Promise<any> {
+async function callBackendApi(path: string, options?: RequestInit): Promise<unknown> {
   // 端口在 spawn 前就分配好了 —— 直接读 getPort() 会把渲染进程挂载时抢发的 skills IPC
   // 打到一个还没起监听的端口上（ECONNREFUSED）。等健康检查通过再转发，
   // 崩溃自动重启期间也是连上新实例后再转发。
@@ -1301,7 +1308,7 @@ function setupSkillsIPC(): void {
       method: 'DELETE',
     })
   })
-  handleTrusted('skills:syncBuiltin', async (_event, skills: any[]) => {
+  handleTrusted('skills:syncBuiltin', async (_event, skills: BuiltinSkillSyncItem[]) => {
     return callBackendApi('/skills/sync-builtin', {
       method: 'POST',
       body: JSON.stringify({ skills }),

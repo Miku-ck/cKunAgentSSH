@@ -2,9 +2,15 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { INVOKE_CHANNELS, EVENT_CHANNELS } from '../shared/ipc-contract'
 import type { ApiKey } from '../shared/ipc-contract'
 import { onEventOf } from './preload-helpers'
-import type { SshReconnectStatus } from './managers/ssh-manager'
+import type { SSHConnectionConfig, SshReconnectStatus } from './managers/ssh-manager'
 import type { TunnelStatus } from './managers/tunnel-manager'
 import type { GatewayHostKeyEvent, GatewayStatus } from './managers/gateway-manager'
+import type { LegacyConnection } from './stores/ssh-store'
+import type { TunnelRule } from './stores/tunnel-store'
+import type { GatewayRecord } from './stores/gateway-store'
+import type { AccelProxy, GitPrivateToken, HealthStatus } from './services/github-accel'
+import type { DownloadStatus } from './services/gh-download'
+import type { BuiltinSkillSyncItem, SSHConnectionRecord } from '../shared/ipc-types'
 import type {
   RegisteredUploadTask,
   UploadTaskMeta,
@@ -107,8 +113,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onPtyExit: onEventOf<{ id: string; exitCode: number }>(EVENT_CHANNELS.onPtyExit),
 
   // SSH 远程连接
-  sshConnect: (config: any) => ipcRenderer.invoke(INVOKE_CHANNELS.sshConnect, config),
-  sshConnectSftp: (config: any) => ipcRenderer.invoke(INVOKE_CHANNELS.sshConnectSftp, config),
+  sshConnect: (config: SSHConnectionConfig & { cols?: number; rows?: number }) => ipcRenderer.invoke(INVOKE_CHANNELS.sshConnect, config),
+  sshConnectSftp: (config: SSHConnectionConfig) => ipcRenderer.invoke(INVOKE_CHANNELS.sshConnectSftp, config),
   sshWrite: (id: string, data: string) => ipcRenderer.invoke(INVOKE_CHANNELS.sshWrite, id, data),
   sshResize: (id: string, cols: number, rows: number) => ipcRenderer.invoke(INVOKE_CHANNELS.sshResize, id, cols, rows),
   sshDisconnect: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.sshDisconnect, id),
@@ -160,16 +166,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // SSH 连接配置管理
   sshListConnections: () => ipcRenderer.invoke(INVOKE_CHANNELS.sshListConnections),
-  sshSaveConnection: (conn: any) => ipcRenderer.invoke(INVOKE_CHANNELS.sshSaveConnection, conn),
+  sshSaveConnection: (conn: SSHConnectionRecord) => ipcRenderer.invoke(INVOKE_CHANNELS.sshSaveConnection, conn),
   sshDeleteConnection: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.sshDeleteConnection, id),
   sshDuplicateConnection: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.sshDuplicateConnection, id),
-  sshTestConnection: (config: any) => ipcRenderer.invoke(INVOKE_CHANNELS.sshTestConnection, config),
-  sshMigrateLegacy: (legacy: any[]) => ipcRenderer.invoke(INVOKE_CHANNELS.sshMigrateLegacy, legacy),
+  sshTestConnection: (config: Omit<SSHConnectionRecord, 'tags' | 'createdAt' | 'updatedAt'>) => ipcRenderer.invoke(INVOKE_CHANNELS.sshTestConnection, config),
+  sshMigrateLegacy: (legacy: LegacyConnection[]) => ipcRenderer.invoke(INVOKE_CHANNELS.sshMigrateLegacy, legacy),
   sshOpenConfig: () => ipcRenderer.invoke(INVOKE_CHANNELS.sshOpenConfig),
 
   // SSH 隧道（端口转发）
   tunnelList: () => ipcRenderer.invoke(INVOKE_CHANNELS.tunnelList),
-  tunnelSave: (rule: any) => ipcRenderer.invoke(INVOKE_CHANNELS.tunnelSave, rule),
+  tunnelSave: (rule: TunnelRule) => ipcRenderer.invoke(INVOKE_CHANNELS.tunnelSave, rule),
   tunnelDelete: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.tunnelDelete, id),
   tunnelStart: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.tunnelStart, id),
   tunnelStop: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.tunnelStop, id),
@@ -179,7 +185,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // GitHub 加速（镜像套件）
   ghaccelGetConfig: () => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelGetConfig),
-  ghaccelSaveLists: (proxies: any[]) => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelSaveLists, proxies),
+  ghaccelSaveLists: (proxies: AccelProxy[]) => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelSaveLists, proxies),
   ghaccelProbeAll: () => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelProbeAll),
   ghaccelAutoTune: () => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelAutoTune),
   ghaccelGitStatus: () => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelGitStatus),
@@ -192,7 +198,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ghaccelSsh443Remove: () => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelSsh443Remove),
   // 私人令牌（PAT）配置（读原文 / 写全量；渲染层自身脱敏展示）
   ghaccelGetTokens: () => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelGetTokens),
-  ghaccelSaveTokens: (tokens: any[]) => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelSaveTokens, tokens),
+  ghaccelSaveTokens: (tokens: GitPrivateToken[]) => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelSaveTokens, tokens),
   // GitHub 加速下载器
   ghaccelDownloadStart: (url: string, opts?: { gunzip?: boolean }) => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelDownloadStart, url, opts),
   ghaccelDownloadCancel: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.ghaccelDownloadCancel, id),
@@ -234,9 +240,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitreposSyncCatchup: (path: string, remotes?: string[]) => ipcRenderer.invoke(INVOKE_CHANNELS.gitreposSyncCatchup, path, remotes),
   gitreposSyncMerge: (path: string, remote: string) => ipcRenderer.invoke(INVOKE_CHANNELS.gitreposSyncMerge, path, remote),
   /** 下载进度与状态迁移（一条通道，state 区分）；返回取消监听函数 */
-  onGhaccelDownload: onEventOf<any>(EVENT_CHANNELS.onGhaccelDownload),
+  onGhaccelDownload: onEventOf<DownloadStatus>(EVENT_CHANNELS.onGhaccelDownload),
   /** 镜像巡检结果（主进程每 30 分钟/配置变更后推送）；返回取消监听函数 */
-  onGhaccelHealth: onEventOf<any>(EVENT_CHANNELS.onGhaccelHealth),
+  onGhaccelHealth: onEventOf<HealthStatus>(EVENT_CHANNELS.onGhaccelHealth),
   /**
    * 监听隧道状态变化（主进程推送，每次状态迁移一条）
    * @param callback 状态回调
@@ -246,7 +252,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // TLS 接入网关（安全接入）
   gatewayList: () => ipcRenderer.invoke(INVOKE_CHANNELS.gatewayList),
-  gatewaySave: (rec: any) => ipcRenderer.invoke(INVOKE_CHANNELS.gatewaySave, rec),
+  gatewaySave: (rec: GatewayRecord) => ipcRenderer.invoke(INVOKE_CHANNELS.gatewaySave, rec),
   gatewayDelete: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.gatewayDelete, id),
   gatewayConnect: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.gatewayConnect, id),
   gatewayDisconnect: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.gatewayDisconnect, id),
@@ -268,7 +274,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listSkills: (mode?: string) => ipcRenderer.invoke(INVOKE_CHANNELS.listSkills, mode),
   updateSkillEnabled: (id: string, enabled: boolean, mode?: string) => ipcRenderer.invoke(INVOKE_CHANNELS.updateSkillEnabled, id, enabled, mode),
   deleteSkill: (id: string) => ipcRenderer.invoke(INVOKE_CHANNELS.deleteSkill, id),
-  syncBuiltinSkills: (skills: any[]) => ipcRenderer.invoke(INVOKE_CHANNELS.syncBuiltinSkills, skills),
+  syncBuiltinSkills: (skills: BuiltinSkillSyncItem[]) => ipcRenderer.invoke(INVOKE_CHANNELS.syncBuiltinSkills, skills),
 
   // SFTP 文件传输
   sftpOpen: (sshSessionId: string) => ipcRenderer.invoke(INVOKE_CHANNELS.sftpOpen, sshSessionId),
