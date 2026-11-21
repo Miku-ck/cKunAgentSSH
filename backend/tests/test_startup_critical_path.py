@@ -44,7 +44,7 @@ _FORBIDDEN_AT_IMPORT_THIRDPARTY = (
 
 # init_db / 迁移函数体的指纹。改动这些函数的任何一行，都要在
 # 「升级 _SCHEMA_VERSION」与「更新本常量」之间做一次显式决定。
-_SCHEMA_SOURCE_FINGERPRINT = "e89465ca0a0f500e"
+_SCHEMA_SOURCE_FINGERPRINT = "3407d83e062aeb31"
 
 
 def _run_probe(code: str) -> dict:
@@ -159,7 +159,8 @@ def test_init_db_skips_ddl_when_schema_is_current(base_db, monkeypatch, caplog):
 
     migrated: list[int] = []
     monkeypatch.setattr(db, "_migrate_db", lambda conn: migrated.append(1))
-    with caplog.at_level(logging.INFO, logger="cKunAgentic.database"):
+    # 短路证据行是 debug 级（启动窗口不再刷 INFO），守卫照样钉住它
+    with caplog.at_level(logging.DEBUG, logger="cKunAgentic.database"):
         db.init_db(base_db)
     assert "跳过建表脚本" in caplog.text, "结构版本已命中却仍执行了建表脚本"
     assert migrated == [1], "迁移被一并短路了：表在但列被删的库将无法自愈"

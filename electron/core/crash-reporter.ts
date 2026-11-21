@@ -80,7 +80,8 @@ export function setupCrashReporter(opts: CrashReporterOptions): string {
       // 转储里带上版本：只拿到一份 .dmp 时，第一件要确认的就是它来自哪个版本
       globalExtra: { 'app.version': app.getVersion() },
     })
-    log('info', `崩溃上报已启用（本地收集，目录 ${dir}）`)
+    // 启用横幅不记：默认级别下它是纯噪音，而崩溃真的发生时下面两个 error 级
+    // 事件已带 dir，启用失败也有 warn —— 横幅没有独有信息。
   } catch (e) {
     log('warn', `崩溃上报未启用（不影响使用）：${e instanceof Error ? e.message : String(e)}`)
   }
