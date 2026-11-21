@@ -8,6 +8,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { genId } from '@/utils/id'
 import { readJson, writeJson } from '@/utils/storage-json'
+import { logError } from '@/utils/logger'
 
 export type PathBookmark = {
   id: string
@@ -91,7 +92,7 @@ export const useSftpBookmarksStore = defineStore('sftpBookmarks', () => {
   function save(): void {
     const payload: BookmarkFile = { local: local.value, remote: remote.value }
     writeJson(STORAGE_KEY, payload, err => {
-      console.error('[sftpBookmarks] save failed:', err)
+      logError('sftpBookmarks', 'save failed:', err)
     })
   }
 

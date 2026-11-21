@@ -15,6 +15,7 @@ import type {
 import { genId } from '@/utils/id'
 import { parseBackendTs } from '@/utils/format'
 import { useToastStore } from '@/stores/toast'
+import { logError, logWarn } from '@/utils/logger'
 
 /** 后端 API 的会话模式标识（固定 Agent 模式后仅 ssh 一种） */
 const API_MODE = 'ssh'
@@ -47,7 +48,7 @@ export function useChatPersistence(options: {
       // 或条目缺 messages 会让 messages computed / .find / 分组渲染整个任务台抛错白屏。
       // 按条目形状过滤，坏数据降级为空列表。
       if (!Array.isArray(parsed)) {
-        console.warn(`[useChatPersistence] ${storageKey} 内容不是数组，重置为空列表`)
+        logWarn('useChatPersistence', `${storageKey} 内容不是数组，重置为空列表`)
         return []
       }
       // S9-18：`temp-agent-` 是运行中占位气泡的 id 前缀，只在「同一次 run 还活着」
@@ -64,7 +65,7 @@ export function useChatPersistence(options: {
         }))
     } catch (e) {
       // m3 修复：JSON 解析失败时输出警告，便于排查数据损坏问题
-      console.warn(`[useChatPersistence] 解析 ${storageKey} 失败，重置为空列表:`, e)
+      logWarn('useChatPersistence', `解析 ${storageKey} 失败，重置为空列表:`, e)
       return []
     }
   }
@@ -76,7 +77,7 @@ export function useChatPersistence(options: {
     try {
       localStorage.setItem(storageKey, JSON.stringify(convs))
     } catch (e) {
-      console.warn(`[useChatPersistence] 写入 ${storageKey} 失败（可能配额已满）:`, e)
+      logWarn('useChatPersistence', `写入 ${storageKey} 失败（可能配额已满）:`, e)
       if (!quotaWarned) {
         quotaWarned = true
         try {
@@ -96,7 +97,7 @@ export function useChatPersistence(options: {
         // 否则下一次保存又会把被淘汰的会话写回来，反复失败
         if (conversations.value === convs) conversations.value = trimmed
       } catch (e2) {
-        console.warn(`[useChatPersistence] 淘汰最旧会话后仍写入失败，放弃本次持久化:`, e2)
+        logWarn('useChatPersistence', '淘汰最旧会话后仍写入失败，放弃本次持久化:', e2)
       }
     }
   }
@@ -139,7 +140,7 @@ export function useChatPersistence(options: {
       // JSON 写十遍；渐进合并已把每一页写进内存列表，中途失败保留已并页）
       saveConversations(conversations.value)
     } catch (e) {
-      console.warn(`[${API_MODE}] syncBackendConversations failed（保留本地列表）:`, e)
+      logWarn(API_MODE, 'syncBackendConversations failed（保留本地列表）:', e)
     }
   }
 
@@ -244,7 +245,7 @@ export function useChatPersistence(options: {
       }
     } catch (e) {
       // 后端未就绪/模型列表为空都会走到这里：全静默会让"选不到模型"无从排查
-      console.warn('[useChatPersistence] 取默认模型失败:', e)
+      logWarn('useChatPersistence', '取默认模型失败:', e)
     }
   }
 
@@ -288,7 +289,7 @@ export function useChatPersistence(options: {
       try {
         await api.deleteConversation(conv.backendConvId)
       } catch (e) {
-        console.error('[useChatPersistence] Backend delete failed:', e)
+        logError('useChatPersistence', 'Backend delete failed:', e)
         const toast = useToastStore()
         toast.error('服务端删除失败，请稍后重试')
         return
@@ -317,7 +318,7 @@ export function useChatPersistence(options: {
       conv.backendConvId = backendConv.id
       saveConversations(conversations.value)
     } catch (e) {
-      console.error(`[${API_MODE}] Failed to create backend conversation:`, e)
+      logError(API_MODE, 'Failed to create backend conversation:', e)
       throw e
     }
   }

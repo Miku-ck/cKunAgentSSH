@@ -60,7 +60,6 @@ EXPECTED_GAP_H = {"fast": 24.0, "normal": 60.0, "slow": 120.0}
 QUEUE_TTL_H = 48.0
 # 互动召回分档（官方：用户主动对话后 30 天内 4 个周期各 1 条）
 WAKEUP_PERIODS_H = ((0.0, 24.0), (24.0, 72.0), (72.0, 168.0), (168.0, 720.0))
-COLD_REPLY_THRESHOLD = 0.4  # 寄存消息捎带时对当下 desire 的再门槛
 PROACTIVE_MAX_TOKENS = 256
 # 投递被平台拒了之后的退避：skip 不推进开口闸，不退避就是每 60s 重烧一次模型。
 PUSH_BACKOFF_MIN = 30.0

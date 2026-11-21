@@ -27,6 +27,7 @@
 // 逐个导航，Esc 关闭并把焦点还给终端 —— 与 useGlobalShortcuts 的「Shift 档」原则一致。
 import { onMounted, ref } from 'vue'
 import { accentSearchColors } from '@/composables/useTerminalConfig'
+import { logWarn } from '@/utils/logger'
 
 /**
  * 搜索 addon 的最小结构契约（不直接 import @xterm/addon-search 的类型进
@@ -93,7 +94,7 @@ function find(dir: 'next' | 'prev'): void {
     else props.addon.findPrevious(term, opts)
   } catch (e) {
     // 非法正则等：不炸 UI，显示 0 匹配
-    console.warn('[termSearch] find failed:', e)
+    logWarn('termSearch', 'find failed:', e)
     resultText.value = '0/0'
   }
 }

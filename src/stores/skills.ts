@@ -8,6 +8,7 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { load as yamlLoad } from 'js-yaml'
 import type { SkillBase } from '@/api/core'
+import { logError, logWarn } from '@/utils/logger'
 
 type SkillSource = 'builtin' | 'upload' | 'custom' | 'manual' | 'auto'
 
@@ -186,7 +187,7 @@ export const useSkillStore = defineStore('skills', () => {
             updated_at: now,
           })
         } catch (e: any) {
-          console.warn(`[skills] 加载技能失败 ${entry.path}: ${e?.message || e}`)
+          logWarn('skills', `加载技能失败 ${entry.path}: ${e?.message || e}`)
         }
       }
 
@@ -194,7 +195,7 @@ export const useSkillStore = defineStore('skills', () => {
       // 同步内置技能到后端数据库，让 Agent 模式的 SkillRein 也能匹配到它们
       await syncBuiltinToBackend(loaded)
     } catch (e: any) {
-      console.error('[skills] 扫描内置技能失败:', e)
+      logError('skills', '扫描内置技能失败:', e)
     } finally {
       // 无论内置技能扫描是否成功，都尝试加载后端 manual/auto 技能
       await loadRemoteSkills()
@@ -221,7 +222,7 @@ export const useSkillStore = defineStore('skills', () => {
       // 同步成功 — 无需日志
       void result
     } catch (e: any) {
-      console.warn('[skills] 同步内置技能到后端失败:', e?.message || e)
+      logWarn('skills', '同步内置技能到后端失败:', e?.message || e)
     }
   }
 
@@ -248,7 +249,7 @@ export const useSkillStore = defineStore('skills', () => {
             triggerWords = parsed.filter((w: unknown) => typeof w === 'string')
           }
         } catch (e) {
-          console.warn(`[skills] 解析 trigger_words 失败 (skill ${item.id}):`, e)
+          logWarn('skills', `解析 trigger_words 失败 (skill ${item.id}):`, e)
           triggerWords = []
         }
 
@@ -272,7 +273,7 @@ export const useSkillStore = defineStore('skills', () => {
         }
       })
     } catch (e: any) {
-      console.error('[skills] 加载后端技能失败:', e)
+      logError('skills', '加载后端技能失败:', e)
     }
   }
 

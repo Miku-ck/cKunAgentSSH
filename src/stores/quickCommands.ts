@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { genId } from '@/utils/id'
 import { readJson, writeJson } from '@/utils/storage-json'
+import { logError } from '@/utils/logger'
 
 export type QuickCommand = {
   id: string
@@ -56,7 +57,7 @@ export const useQuickCommandsStore = defineStore('quickCommands', () => {
 
   function save(): void {
     writeJson(STORAGE_KEY, commands.value, err => {
-      console.error('[quickCommands] save failed:', err)
+      logError('quickCommands', 'save failed:', err)
     })
   }
 

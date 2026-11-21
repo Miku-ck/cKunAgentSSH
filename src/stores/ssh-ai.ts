@@ -67,6 +67,7 @@ interface SshAiConversation extends ModeConversation {
 }
 
 import { genId } from '@/utils/id'
+import { logWarn } from '@/utils/logger'
 
 /** 活动终端现场上下文（selection 为空时不传）— 供「问 AI」入口采集。
  *  sessionId 标记快照来源终端：发送前切 tab/关会话时用于防串主机（见 sendMessage） */
@@ -341,7 +342,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       notifyConversationsChanged()
       return true
     } catch (e) {
-      console.warn(`[ssh] 拉取会话消息失败（保留本地消息）:`, e)
+      logWarn('ssh', `拉取会话消息失败（保留本地消息）:`, e)
       return false
     }
   }
@@ -686,7 +687,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       if (persistence.currentConversation.value?.backendConvId !== cid) return
       workflowSnapshot.value = snap
     } catch (e) {
-      console.warn('[ssh] 加载会话工作流失败（按空处理）:', e)
+      logWarn('ssh', '加载会话工作流失败（按空处理）:', e)
       // 审查R2修复：同上，会话已切换时旧请求的失败不应清空新会话的快照
       if (persistence.currentConversation.value?.backendConvId !== cid) return
       workflowSnapshot.value = { phase: '', spec: '', plan: '', goal: '' }
@@ -708,7 +709,7 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       await loadWorkflow()
       return { phase: r.phase }
     } catch (e) {
-      console.warn('[ssh] 删除工作流工件失败:', e)
+      logWarn('ssh', '删除工作流工件失败:', e)
       return null
     }
   }

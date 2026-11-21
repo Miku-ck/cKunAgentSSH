@@ -12,10 +12,6 @@ import { join } from 'path'
 import { JsonFileStore } from '../utils/json-file-store'
 import { isPort, portRangeError } from '../../shared/port-core'
 
-export type TunnelType = 'local' | 'remote' | 'dynamic'
-/** 数据面：借 SSH 通道，或走自家 TLS 网关。缺省视为 'ssh'，所以存量规则零迁移。 */
-export type TunnelVia = 'ssh' | 'gateway'
-
 export type TunnelRule = import('../../shared/ipc-types').TunnelRule
 
 function getStorePath(): string {

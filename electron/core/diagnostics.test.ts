@@ -93,7 +93,12 @@ describe('exportDiagnostics', () => {
     const info = JSON.parse(sink.files['system.json']!)
     expect(info.app.version).toBe('0.1.0')
     expect(info.logs).toHaveLength(2)
+    expect(info.logSources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ pattern: 'botpy.log*', system: 'third-party' }),
+    ]))
     expect(sink.files['README.txt']).toContain('诊断包')
+    // README 标注第三方 SDK 日志格式差异，避免支持者误判为本项目规范失效
+    expect(sink.files['README.txt']).toContain('botpy.log*')
 
     // 成功后 staging 必须清掉，只留产物
     expect(readdirSync(join(userData, 'diagnostics')).sort()).toEqual([

@@ -7,6 +7,7 @@
 
 import { auditApi, type AuditAppendInput, type AuditConclusion } from '@/api/audit'
 import { extractSSHError } from '@/types/ssh-error-types'
+import { logWarn } from '@/utils/logger'
 
 export const AUDIT_ACTION_BULK = 'bulk_ssh_exec'
 export const AUDIT_ACTION_DOCKER = 'docker_action'
@@ -118,7 +119,7 @@ export async function writeRemoteAudit(input: AuditAppendInput): Promise<boolean
     await auditApi.append(input)
     return true
   } catch (e) {
-    console.warn('[audit] 通道审计写入失败:', input.action, e)
+    logWarn('audit', '通道审计写入失败:', input.action, e)
     return false
   }
 }

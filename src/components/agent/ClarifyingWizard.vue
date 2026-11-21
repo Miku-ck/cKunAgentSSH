@@ -105,6 +105,7 @@ import { ref, computed, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useToastStore } from '@/stores/toast'
 import { agentApi } from '@/api/agent'
+import { logError, logWarn } from '@/utils/logger'
 
 const agentStore = useAgentStore()
 
@@ -221,7 +222,7 @@ async function submitAnswers() {
   if (!w || submitting.value) return
   // P0-6 校验：仅允许当前活跃 run 提交（恢复场景 lastRunId 可能为空 → 以 wizard.runId 为准）
   if (w.runId && agentStore.lastRunId && w.runId !== agentStore.lastRunId) {
-    console.warn('[ClarifyingWizard] run_id 不匹配当前活跃 run，忽略:', w.runId)
+    logWarn('ClarifyingWizard', 'run_id 不匹配当前活跃 run，忽略:', w.runId)
     return
   }
   submitting.value = true
@@ -230,7 +231,7 @@ async function submitAnswers() {
     // P0-2 修复：提交成功后立即自行关闭，不依赖 clarification_done SSE 回执
     agentStore.clearClarification()
   } catch (err) {
-    console.error('[ClarifyingWizard] submit failed:', err)
+    logError('ClarifyingWizard', 'submit failed:', err)
     useToastStore().error('提交失败，请重试')
   } finally {
     submitting.value = false
@@ -247,7 +248,7 @@ async function handleCancelTask() {
   const w = wizard.value
   if (!w) return
   if (w.runId && agentStore.lastRunId && w.runId !== agentStore.lastRunId) {
-    console.warn('[ClarifyingWizard] run_id 不匹配当前活跃 run，忽略:', w.runId)
+    logWarn('ClarifyingWizard', 'run_id 不匹配当前活跃 run，忽略:', w.runId)
     return
   }
   const confirmed = window.confirm('确定取消整个任务？未完成的执行将终止（不是失败，可重新发起）。')
@@ -259,7 +260,7 @@ async function handleCancelTask() {
     agentStore.clearClarification()
     useToastStore().info(res.cancelled ? '任务已取消' : '任务此前已结束')
   } catch (err) {
-    console.error('[ClarifyingWizard] cancel failed:', err)
+    logError('ClarifyingWizard', 'cancel failed:', err)
     useToastStore().error('取消失败，请重试')
   } finally {
     submitting.value = false

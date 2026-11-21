@@ -13,6 +13,7 @@ import { useToastStore } from './toast'
 import { unwrapIpcErrorEnvelope } from '@/api/client'
 import { useSftpFiles } from '@/composables/useSftpFiles'
 import { MAX_CONCURRENT_CEIL, useSftpTransfer } from '@/composables/useSftpTransfer'
+import { logWarn } from '@/utils/logger'
 
 // B26/门面上限：SftpTransferDialog 从这里取天花板，转发保持导入路径不变
 export { MAX_CONCURRENT_CEIL }
@@ -78,7 +79,7 @@ export const useSftpStore = defineStore('sftp', () => {
       activeConnectionId.value = connId || ''
       await transfer.restoreUploads()
     } catch (e) {
-      console.warn('[sftp] 恢复上传记录失败:', e)
+      logWarn('sftp', '恢复上传记录失败:', e)
     }
   }
 

@@ -16,6 +16,7 @@ import { isActiveTransferStatus, type TransferKind, type TransferStatus } from '
 import { sortForRestore, toTransferItem } from '@/utils/upload-task-restore'
 import { nextTransferSeqFrom } from '../../shared/upload-task-core'
 import { shSingleQuote } from '../../shared/sh-quote-core'
+import { logWarn } from '@/utils/logger'
 
 /** 并发上限的可调天花板。导出而不是让底栏再抄一份 8 —— 两边一旦分叉，
  *  「+」号会在 store 还在钳的时候先停住，或反过来按下去没反应。 */
@@ -617,7 +618,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
           groupLabel: t.groupLabel,
         })))
       } catch (e) {
-        console.warn('[sftp] 上传任务登记失败（不影响传输）:', e)
+        logWarn('sftp', '上传任务登记失败（不影响传输）:', e)
       }
       // 登记往返期间用户已取消/删除的行：取消的补发 sftpCancel 让主进程同步终态，
       // 删除的移除刚登记进去的记录 —— 否则「删掉后重连又冒出来」
@@ -634,7 +635,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
       if (results.some(r => r.ok)) await deps.files.remoteRefresh()
     }).catch((err) => {
       // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
-      console.warn('[sftp] 上传批次收尾刷新失败:', err)
+      logWarn('sftp', '上传批次收尾刷新失败:', err)
     })
   }
 
@@ -769,7 +770,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
           groupLabel: t.groupLabel,
         })))
       } catch (e) {
-        console.warn('[sftp] 下载任务登记失败（不影响传输）:', e)
+        logWarn('sftp', '下载任务登记失败（不影响传输）:', e)
       }
       for (const t of registeredDown) {
         const row = transferById.get(t.id)
@@ -783,7 +784,7 @@ export function useSftpTransfer(deps: SftpTransferDeps) {
       if (results.some(r => r.ok)) await deps.files.localRefresh()
     }).catch((err) => {
       // C2 修复：防止 post-batch refresh 抛错导致未捕获 Promise rejection
-      console.warn('[sftp] 下载批次收尾刷新失败:', err)
+      logWarn('sftp', '下载批次收尾刷新失败:', err)
     })
   }
 

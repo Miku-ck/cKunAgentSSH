@@ -8,6 +8,7 @@
 import { ref, type Ref } from 'vue'
 import type { Terminal } from '@xterm/xterm'
 import { useSSHStore } from '@/stores/ssh'
+import { logError } from '@/utils/logger'
 import {
   readCurrentLine,
   stripPrompt,
@@ -95,7 +96,7 @@ export function useCompletionPopup(deps: CompletionPopupDeps) {
       positionPopup()
       completionState.value.visible = true
     } catch (err) {
-      console.error('[completion] triggerCompletion error:', err)
+      logError('completion', 'triggerCompletion error:', err)
       hideCompletion()
     }
   }

@@ -8,6 +8,7 @@ import type { Accent, GradientDirection, GradientMode, TerminalBgMode, Theme } f
 import { ACCENT_MAP, isHexColor } from '@/utils/appearance-tokens'
 import { readJson, writeJson } from '@/utils/storage-json'
 import { useToastStore } from './toast'
+import { logError, logWarn } from '@/utils/logger'
 
 /**
  * 惰性获取 chatStore 并刷新模型列表
@@ -299,7 +300,7 @@ export const useSettingsStore = defineStore('settings', () => {
   function persistSettings() {
     // 设置体量小，无容量淘汰逻辑；写入失败只记日志，不掀翻防抖/pagehide 调用栈。
     writeJson(LS_KEY, settings.value, e => {
-      console.warn('[settings] 设置持久化失败（localStorage 可能已满或被禁用）:', e)
+      logWarn('settings', '设置持久化失败（localStorage 可能已满或被禁用）:', e)
     })
   }
 
@@ -506,7 +507,7 @@ export const useSettingsStore = defineStore('settings', () => {
       modelConfigs.value = data
       return true
     } catch (e: unknown) {
-      console.error('[SettingsStore] Error fetching models:', e)
+      logError('SettingsStore', 'Error fetching models:', e)
       modelsError.value = e instanceof Error ? e.message : String(e)
       return false
     } finally {
@@ -523,7 +524,7 @@ export const useSettingsStore = defineStore('settings', () => {
       // —— 但前提是这次 GET 真的成功了。GET 失败时列表是上一轮的陈旧值，新 id 当然不在里面，
       // 不加这个条件就会把一次网络抖动报成"数据库没落库"（本仓踩过：抖动 → 假告警 → 用户以为丢数据）。
       if (refreshed && data && !modelConfigs.value.some(m => m.id === data.id)) {
-        console.error('[SettingsStore] created model not in fetched list — DB persistence may be broken:',
+        logError('SettingsStore', 'created model not in fetched list — DB persistence may be broken:',
           { createdId: data.id, fetchedIds: modelConfigs.value.map(m => m.id) })
         modelsError.value = '模型已创建但未在数据库中持久化，重启后可能丢失。请检查后端 DB 路径日志。'
         // 仍返回 data 让 UI 关闭对话框，但 toast 已由上层基于 modelsError 提示
@@ -594,11 +595,11 @@ export const useSettingsStore = defineStore('settings', () => {
       } else {
         // 业务层失败（HTTP 200 但 body.status=error）：保留后端 detail，避免泛化"未知错误"丢失真实原因
         const detail = result?.detail || `后端返回未知状态: ${JSON.stringify(result)}`
-        console.warn('[STORE testModelConnection] business error:', detail)
+        logWarn('STORE testModelConnection', 'business error:', detail)
         onStatus('error', detail)
       }
     } catch (e: unknown) {
-      console.error('[STORE testModelConnection] exception:', e)
+      logError('STORE testModelConnection', 'exception:', e)
       onStatus('error', e instanceof Error ? e.message : String(e))
     }
   }

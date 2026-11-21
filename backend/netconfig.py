@@ -167,7 +167,9 @@ def load_policy_from_db() -> dict:
         if stored["retry_set"]:
             retries = stored["retry_count"]
     except Exception as e:
-        logger.warning("HTTP 策略读取失败，沿用直连默认: %s", e)
+        # 出站策略读不到就静默按直连跑，可能绕过用户配置的代理（安全/合规相关），
+        # 升为 ERROR 留痕；直连行为保持不变，不因日志升级改变控制流。
+        logger.error("[SECURITY][fail-open] HTTP 策略读取失败，沿用直连默认: %s", e)
     # 区间夹紧只用于 PUT 写路径；这里的 env 值已由 _env_int 校验，DB 值已由
     # db.is_int_app_setting_set 校验，越界一律回默认而不是钳到边界。
     try:

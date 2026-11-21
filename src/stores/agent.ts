@@ -13,6 +13,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { agentApi, streamAgentRun, type AgentSSEEvent, type AgentCostSnapshot, type AgentTraceSnapshot, type AgentIntentionInfo, type AgentClarificationStep } from '@/api/client'
+import { logError, logWarn } from '@/utils/logger'
 import { StreamingThinkScrubber } from '@/utils/think-scrubber'
 import { useToastStore } from './toast'
 import { useAgentDeliver } from '@/composables/useAgentDeliver'
@@ -337,7 +338,7 @@ export const useAgentStore = defineStore('agent', () => {
         // 只判 completed，中止后的迟到 error（abort 已置 idle+aborted）会把
         // 已中止的 run 状态翻回 failed
         if (runSettled()) {
-          console.warn('[Agent] 运行已终局，忽略迟到 onError:', err)
+          logWarn('Agent', '运行已终局，忽略迟到 onError:', err)
           return
         }
         errorMessage.value = err?.trim()
@@ -529,7 +530,7 @@ export const useAgentStore = defineStore('agent', () => {
       return 'granted'
     } catch (e) {
       req.settling = false
-      console.error('[Agent] 授权失败:', e)
+      logError('Agent', '授权失败:', e)
       return 'failed'
     }
   }
@@ -554,7 +555,7 @@ export const useAgentStore = defineStore('agent', () => {
     try {
       await agentApi.denyCommand(req.tool, command, req.runId)
     } catch (e) {
-      console.error('[Agent] 拒绝登记失败:', e)
+      logError('Agent', '拒绝登记失败:', e)
       req.settling = false
       return false  // 卡片保留，用户可重试；否则后端仍会等待审批
     }
@@ -867,7 +868,7 @@ export const useAgentStore = defineStore('agent', () => {
         // idle+aborted）时，流尾迟到的 error 事件不得把终态翻回失败。
         // 与 onError 回调（runSettled）、done 分支同一判据，四条终态路径对称。
         if (runSettled()) {
-          console.warn('[Agent] 运行已终局，忽略迟到 error 事件:', event.message)
+          logWarn('Agent', '运行已终局，忽略迟到 error 事件:', event.message)
           break
         }
         errorMessage.value = event.message?.trim() || 'AI 运行失败，后端未返回具体错误'
@@ -1027,7 +1028,7 @@ export const useAgentStore = defineStore('agent', () => {
         // Q-F2：迟到事件守卫 —— 同 error 分支，abort 后（idle+aborted）或已
         // completed/failed 的 run 不再接受迟到的 done 事件翻转状态
         if (runSettled()) {
-          console.warn('[Agent] 运行已终局，忽略迟到 done 事件')
+          logWarn('Agent', '运行已终局，忽略迟到 done 事件')
           break
         }
         // 流结束：flush 擦洗器，输出残留 buf（仍在 think 块内则丢弃，防泄露 partial CoT）

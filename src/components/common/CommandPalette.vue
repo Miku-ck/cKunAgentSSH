@@ -48,6 +48,7 @@ import { useQuickCommandsStore, type QuickCommand } from '@/stores/quickCommands
 import { useToastStore } from '@/stores/toast'
 import type { NavPage } from '@/composables/useSshNavigation'
 import { setGitSubTab } from '@/components/ssh/git/subTab'
+import { logError } from '@/utils/logger'
 
 interface PaletteItem {
   key: string
@@ -144,7 +145,7 @@ function runQuickCommand(cmd: QuickCommand): void {
   if (!api) return
   const writer = session.type === 'local' ? api.ptyWrite : api.sshWrite
   writer(session.id, cmd.command).catch((err: unknown) => {
-    console.error('[commandPalette] send failed:', sessionId, err)
+    logError('commandPalette', 'send failed:', sessionId, err)
     useToastStore().error(`命令未发送：${err instanceof Error ? err.message : String(err)}`)
   })
   emit('close')

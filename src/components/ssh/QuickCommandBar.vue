@@ -72,6 +72,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useToastStore } from '@/stores/toast'
 import { menuLeft, menuTop } from '@/utils/menu'
 import QuickCommandEditor from './QuickCommandEditor.vue'
+import { logError } from '@/utils/logger'
 
 const sshStore = useSSHStore()
 const store = useQuickCommandsStore()
@@ -104,7 +105,7 @@ function sendCommand(e: MouseEvent, cmd: QuickCommand) {
   if (!api) return
   const writer = session.type === 'local' ? api.ptyWrite : api.sshWrite
   writer(sessionId, cmd.command).catch((err: any) => {
-    console.error('[quickCommand] send failed:', sessionId, err)
+    logError('quickCommand', 'send failed:', sessionId, err)
     // S4-06：ssh:write / pty:write 在会话缺失时不再静默 no-op，而是抛
     // SESSION_NOT_FOUND / 本地终端已关闭 —— 这条 catch 从不可达死码变成唯一
     // 的用户反馈通道。带上原因，重连窗口里点快捷命令不会再「点了没反应」。

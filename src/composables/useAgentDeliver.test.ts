@@ -365,9 +365,11 @@ describe('哨兵行匹配与捕获终态', () => {
       expect(last?.[2]).toBe(false) // success=false
 
       // 结构化诊断：收到过数据、命中过 BEGIN → 指向 END 断流而非订阅断连
+      // 日志已收敛到 logWarn(tag, message, obj)，底层为 console.warn('[tag]', message, obj)，
+      // 故从调用参数里找含"捕获超时"的那条，取其后的对象参数。
       const payloads = warnSpy.mock.calls
-        .filter(c => String(c[0]).includes('捕获超时'))
-        .map(c => c[1] as Record<string, unknown>)
+        .filter(c => c.some(a => String(a).includes('捕获超时')))
+        .map(c => c.find(a => a && typeof a === 'object') as Record<string, unknown>)
       expect(payloads).toHaveLength(1)
       expect(payloads[0]).toMatchObject({
         tool_id: 't-timeout',

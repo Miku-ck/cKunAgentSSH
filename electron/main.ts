@@ -36,7 +36,8 @@ import { assertSafePath } from './utils/path-guard'
 import { shSingleQuote, shQuoteBody } from '../shared/sh-quote-core'
 import type { RegisteredUploadTask, UploadTaskMeta } from '../shared/upload-task-core'
 import { requestCopyCancel } from './utils/copy-cancel'
-import { perfMark } from './utils/perf-mark'
+import { perfMark, logPerfSummary } from './utils/perf-mark'
+import { announceCriticalFault, resetCriticalFaultEpisode } from './core/critical-fault'
 import { ensureShellShortcuts } from './core/shortcut-win'
 import { installMainLogger, logRendererConsole } from './core/main-logger'
 import { Updater } from './managers/updater'
@@ -51,9 +52,10 @@ installMainLogger()
 
 perfMark('main module loaded')
 
-// ─── 统一日志口径（startupLogNotes）────────────────
-// 时间戳（tsNow）已迁入 main-logger.ts 统一提供：console 劫持层给每行日志加
-// [HH:MM:SS.mmm] 与级别前缀，这里的 logWarn/logError 不再自己加时间戳（否则双份）。
+// ─── 日志来源标签 ────────────────────────────────
+// 时间戳与级别前缀由 main-logger.ts 的 console 劫持层统一加（[HH:MM:SS.mmm] [LEVEL]），
+// 这里的 logWarn/logError 只负责带一个 [domain] 来源标签、不再自己加时间戳（否则双份）。
+// 级别语义与落盘策略见 docs 的「统一日志级别规范」表。
 function logWarn(domain: string, msg: string): void { console.warn(`[${domain}] ${msg}`) }
 function logError(domain: string, msg: string): void { console.error(`[${domain}] ${msg}`) }
 
@@ -1640,7 +1642,8 @@ if (mayStart) {
 const UNCAUGHT_WINDOW_MS = 60_000
 const uncaughtTimes: number[] = []
 process.on('uncaughtException', (err) => {
-  logError('main', `uncaughtException: ${err instanceof Error ? (err.stack || err.message) : String(err)}`)
+  const msg = err instanceof Error ? (err.stack || err.message) : String(err)
+  logError('main', `uncaughtException: ${msg}`)
   const now = Date.now()
   while (uncaughtTimes.length > 0 && now - uncaughtTimes[0] > UNCAUGHT_WINDOW_MS) {
     uncaughtTimes.shift()
@@ -1649,7 +1652,12 @@ process.on('uncaughtException', (err) => {
   if (uncaughtTimes.length >= 3) {
     logError('main', `${UNCAUGHT_WINDOW_MS / 1000} 秒内 3 次未捕获异常，退出应用`)
     uncaughtTimes.length = 0
+    // 致命退出路径不弹窗：退出时挂模态框会拖死进程，日志已留现场。
     app.quit()
+  } else {
+    // 立即明确告知用户（主进程本地弹框，不传 parent）。ready 前 dialog 不可用
+    // 时内部 .catch 静默吞掉，仅留 [critical] 日志，不成为新崩溃源。
+    announceCriticalFault('uncaught', '应用发生未处理异常', msg)
   }
 })
 process.on('unhandledRejection', (reason) => {
@@ -1751,6 +1759,12 @@ app.whenReady().then(async () => {
     if (data.status === 'ready' && data.port) {
       ensureBridgeWsClient(data.port)
     }
+    // ready = 新故障周期开始，复位一次性告知标志（对话框与渲染层 toast 同步）
+    if (data.status === 'ready') resetCriticalFaultEpisode()
+    // 关键故障：立即明确告知用户（一次性）。放在 send 之前，即使窗口不存在也弹框。
+    if (data.status === 'error') {
+      announceCriticalFault('backend-fatal', '后端服务不可用', String(data.error ?? ''))
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('backend:status', data)
     }
@@ -1773,11 +1787,18 @@ app.whenReady().then(async () => {
     }
   } catch (err) {
     // 前缀修正：这里在 main.ts 的启动编排里，域是 main，不是 BackendManager（它的内部日志在 backend-manager.ts）
-    logError('main', `Failed to start Python backend: ${err instanceof Error ? (err.stack || err.message) : String(err)}`)
+    const detail = err instanceof Error ? (err.stack || err.message) : String(err)
+    logError('main', `Failed to start Python backend: ${detail}`)
+    // 立即明确告知用户：这条 catch 是"首次启动彻底失败"的汇聚点。
+    // 与 onStatusChange error 共用 backend-fatal key → 同周期只弹一次。
+    announceCriticalFault('backend-fatal', '后端启动失败', detail)
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('backend:status', { status: 'error', error: String(err) })
     }
   }
+  // 启动编排结束（成功或失败）：输出一行 perf 汇总，对齐后端 _log_startup_summary。
+  // 明细行仅在 CKUN_PERF=1 时逐条落地，默认不再每次启动刷十几行。
+  logPerfSummary()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

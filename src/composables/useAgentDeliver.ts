@@ -17,6 +17,7 @@ import { useSSHStore } from '@/stores/ssh'
 // 哨兵匹配前的 ANSI 剥离（回显常带 CSI 着色/光标序列与 OSC 标题序列）：
 // 强实现（CSI+OSC+Fe）收敛在 shared/ansi-core.ts
 import { stripAnsi } from '../../shared/ansi-core'
+import { logError, logWarn } from '@/utils/logger'
 
 type DeliveryStatus =
   | 'pending_confirm'
@@ -249,7 +250,7 @@ async function postResultWithRetry(toolId: string, payload: PostPayload): Promis
       return true
     } catch (err) {
       const gone = isPostGone(err)
-      console.error(`[useAgentDeliver] 回传 tool-result 失败（第 ${attempt + 1} 次${gone ? '，后端已无此待交付' : ''}）:`, err)
+      logError('useAgentDeliver', `回传 tool-result 失败（第 ${attempt + 1} 次${gone ? '，后端已无此待交付' : ''}）:`, err)
       const d = findDelivery(toolId)
       // 重试间隙新一轮 run 可能已 resetDeliveries —— 找不到记录就别再折腾
       if (gone || !d || attempt >= POST_RETRY_MAX) {
@@ -307,7 +308,7 @@ function armTimeout(delivery: ToolDelivery): void {
     if (!c || c.finished) return
     c.finished = true
     // 结构化诊断：区分「没收到任何数据（订阅/会话问题）」与「收到数据但没匹配上（哨兵匹配问题）」
-    console.warn('[useAgentDeliver] 捕获超时（未见 END 哨兵）', {
+    logWarn('useAgentDeliver', '捕获超时（未见 END 哨兵）', {
       tool_id: delivery.tool_id,
       session_id: delivery.session_id,
       marker: c.marker,
@@ -428,7 +429,7 @@ async function deliverCommand(toolId: string): Promise<void> {
   try {
     await writer(delivery.session_id, sentinel + '\r')
   } catch (err) {
-    console.error('[useAgentDeliver] 写入终端失败:', err)
+    logError('useAgentDeliver', '写入终端失败:', err)
     const c = captures.get(toolId)
     if (c) c.finished = true
     clearCapture(toolId)
@@ -508,7 +509,7 @@ async function rejectDeliver(toolId: string): Promise<void> {
   // 问题 4：通知后端标记该命令被拒绝，避免 LLM 重试时再次弹卡片
   if (delivery.command && delivery.runId) {
     agentApi.denyCommand('shell_exec', delivery.command, delivery.runId).catch((err: unknown) => {
-      console.warn('[useAgentDeliver] denyCommand 失败（不阻塞）:', err)
+      logWarn('useAgentDeliver', 'denyCommand 失败（不阻塞）:', err)
     })
   }
 }
@@ -614,7 +615,7 @@ function abortRun(runId?: string): void {
   //（ReflectionRein 只在正常终态触发，用户中止可能绕过 AGENT_FAILED 清理）
   if (runId) {
     agentApi.releaseRunPermissions(runId).catch((err: unknown) => {
-      console.warn('[useAgentDeliver] releaseRunPermissions 失败（不阻塞）:', err)
+      logWarn('useAgentDeliver', 'releaseRunPermissions 失败（不阻塞）:', err)
     })
   }
 }

@@ -8,21 +8,22 @@
  * 用 Vite 的动态 import() 拆出独立 CSS chunk，运行时 fetch 注入。
  * 路径必须是字面量字符串（禁用变量），否则 Vite 无法静态分析拆包。
  */
+import { logWarn } from '@/utils/logger'
 
 export function loadDockerModalCss(): Promise<void> {
   return import('./docker-modal.css').then(() => {}).catch((e) => {
-    console.warn('[loadCss] docker-modal.css 加载失败:', e)
+    logWarn('loadCss', 'docker-modal.css 加载失败:', e)
   })
 }
 
 export function loadDockerPageCss(): Promise<void> {
   return import('./docker-page.css').then(() => {}).catch((e) => {
-    console.warn('[loadCss] docker-page.css 加载失败:', e)
+    logWarn('loadCss', 'docker-page.css 加载失败:', e)
   })
 }
 
 export function loadK8sPageCss(): Promise<void> {
   return import('./k8s-page.css').then(() => {}).catch((e) => {
-    console.warn('[loadCss] k8s-page.css 加载失败:', e)
+    logWarn('loadCss', 'k8s-page.css 加载失败:', e)
   })
 }

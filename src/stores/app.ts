@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, onScopeDispose } from 'vue'
+import { useToastStore } from './toast'
 
 export const useAppStore = defineStore('app', () => {
   const backendStatus = ref<'starting' | 'ready' | 'error' | 'restarting'>('starting')
@@ -8,6 +9,24 @@ export const useAppStore = defineStore('app', () => {
   function setBackendStatus(status: 'starting' | 'ready' | 'error' | 'restarting', port?: number) {
     backendStatus.value = status
     if (port) backendPort.value = port
+  }
+
+  // 关键故障告知：后端失败会在 starting→error→restarting→error 循环中反复到达，
+  // 但用户只需看到一次"不可用"提示（主进程对话框也按同一"故障周期"去重）。
+  // ready 时复位标志，下一轮故障可重新提示。duration=0 永驻，参照安全事件范式
+  // （ssh.ts 主机密钥变更）：没恢复前用户始终看得到，而非 5s 后消失被忽略。
+  let faultToastShown = false
+  function reportBackendFault(detail?: string): void {
+    if (faultToastShown) return
+    faultToastShown = true
+    useToastStore().error(
+      '后端服务不可用，部分功能无法使用',
+      0,
+      detail ? { details: `原因：${detail}` } : undefined,
+    )
+  }
+  function resetBackendFaultNotice(): void {
+    faultToastShown = false
   }
 
   // 启动可靠性：后端就绪闸门，供初始数据加载（会话同步/模型列表/设置）gate 用 ——
@@ -73,10 +92,12 @@ export const useAppStore = defineStore('app', () => {
       if (data.status === 'ready') {
         stopPortPolling() // ready 事件已携带新端口，无需继续轮询
         setBackendStatus('ready', data.port)
+        resetBackendFaultNotice() // 故障周期结束，下一轮失败可重新提示
         resolveReadyOnce(data.port ?? backendPort.value) // IPC resolve 或重启后的 ready 事件，谁先到算谁
       } else if (data.status === 'error') {
         stopPortPolling()
         setBackendStatus('error') // 不锁闸门：失败态只由 backendStatus 承载，等后续 ready 事件（含自动重启）再开
+        reportBackendFault(data.error) // 一次性 toast，永驻至恢复
       } else if (data.status === 'restarting') {
         setBackendStatus('restarting')
         startPortPolling()
@@ -97,11 +118,13 @@ export const useAppStore = defineStore('app', () => {
 
     window.electronAPI.whenBackendReady?.().then((port: number) => {
       setBackendStatus('ready', port)
+      resetBackendFaultNotice() // 健康检查确认就绪，故障周期结束
       resolveReadyOnce(port)
     }).catch(() => {
       // 主进程本次启动已确定失败（spawn 错误 / 健康检查超时），诚实落到 error。
       // 不 reject 闸门：崩溃自动重启若成功会再发 ready 事件开启它（见上语义）。
       setBackendStatus('error')
+      reportBackendFault() // 一次性 toast（此路径无 error 载荷，显示通用文案）
     })
 
     // Pinia scope 销毁时清理监听器（HMR 场景）

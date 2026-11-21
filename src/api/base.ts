@@ -9,6 +9,7 @@
  */
 import { useAppStore } from '@/stores/app'
 import { extractSSHError, toFriendlySshMessage } from '@/types/ssh-error-types'
+import { logWarn } from '@/utils/logger'
 
 const FALLBACK_PORT = 7777  // 后端 dev 默认端口（与 backend/main.py --port default 一致）
 
@@ -277,7 +278,7 @@ export async function request<T>(path: string, options?: RequestInit, _retrying 
     const method = ((restOptions.method as string) || 'GET').toUpperCase()
     const isIdempotent = method === 'GET' || method === 'DELETE'
     if (isNetworkError && !_retrying && isIdempotent) {
-      console.warn(`[API] Request ${path} failed (network), waiting for backend to recover...`)
+      logWarn('API', `Request ${path} failed (network), waiting for backend to recover...`)
       try {
         await waitForBackendReady()
         // 后端已恢复，继续重试请求

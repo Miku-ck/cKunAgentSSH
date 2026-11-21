@@ -6,6 +6,7 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api, type ModelConfig } from '@/api/client'
+import { logError } from '@/utils/logger'
 
 export const useModelsStore = defineStore('models', () => {
   const models = ref<ModelConfig[]>([])
@@ -21,7 +22,7 @@ export const useModelsStore = defineStore('models', () => {
         // 留着上一次读到的列表：这份是只读缓存，GET 抖动时清空它的效果是
         // 「用户的模型全都不见了」—— 选择器当场变空，而下拉里那条模型其实还在库里。
         // 最坏情况只是少看到一条新加的模型，刷新一次就回来。
-        console.error('[models] fetchModels failed:', e)
+        logError('models', 'fetchModels failed:', e)
       } finally {
         fetchModelsPromise = null
       }

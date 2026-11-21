@@ -6,6 +6,7 @@ import { acceptHMRUpdate, defineStore } from 'pinia'
 import { ref, computed, onScopeDispose, getCurrentScope } from 'vue'
 import { useToastStore } from './toast'
 import { toFriendlyMessage } from '@/api/client'
+import { logError } from '@/utils/logger'
 
 export type SSHConnection = SSHConnectionRecord
 
@@ -213,7 +214,7 @@ export const useSSHStore = defineStore('ssh', () => {
       localStorage.removeItem(LEGACY_KEY)
     } catch (e) {
       // m6 修复：记录迁移失败日志，便于排查兼容性问题
-      console.error('[ssh] 旧版连接迁移失败:', e)
+      logError('ssh', '旧版连接迁移失败:', e)
     }
   }
 
@@ -223,7 +224,7 @@ export const useSSHStore = defineStore('ssh', () => {
     try {
       connections.value = await api.sshListConnections()
     } catch (err) {
-      console.error('[ssh] loadConnections failed:', err)
+      logError('ssh', 'loadConnections failed:', err)
     }
   }
 
@@ -554,7 +555,7 @@ export const useSSHStore = defineStore('ssh', () => {
         await connectRemote(target.connectionId, 80, 24)
       }
     } catch (e) {
-      console.error('[sshStore] duplicateSession failed:', e)
+      logError('sshStore', 'duplicateSession failed:', e)
       useToastStore().error(toFriendlyMessage(e, '复制终端失败'))
     }
   }

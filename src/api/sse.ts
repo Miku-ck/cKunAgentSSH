@@ -4,6 +4,7 @@ import { PERMISSION_MODE_DEFAULT, type PermissionModeKey } from '@/utils/run-mod
 import type { RunTerminalState } from '@/utils/agent-run-status'
 import { backendErrorDetail, ensureApiToken, getBaseUrl, toFriendlyMessage, withApiToken } from './base'
 import { createConnectTimeout } from './connect-timeout'
+import { logError } from '@/utils/logger'
 
 // ── Agent SSE 流式运行 ──
 
@@ -335,7 +336,7 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
         try {
           options.onError(backendErrorDetail(err) || res.statusText)
         } catch (cbErr) {
-          console.error('[streamAgentRun] onError 回调异常:', cbErr)
+          logError('streamAgentRun', 'onError 回调异常:', cbErr)
         }
         return
       }
@@ -360,7 +361,7 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           try {
             options.onDone()
           } catch (cbErr) {
-            console.error('[streamAgentRun] onDone 回调异常:', cbErr)
+            logError('streamAgentRun', 'onDone 回调异常:', cbErr)
           }
           // 审查修复：显式取消底层读取，避免 [DONE] 后流仍占用连接直到服务端关闭
           reader.cancel().catch(() => { /* already closed */ })
@@ -374,7 +375,7 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           } catch (e) {
             // 事件对象可能很大（content 片段）：日志按 backend-python-cache 的截断
             // 口径只留前 200 字符，别把整条流倒进控制台
-            console.error('[streamAgentRun] onEvent 处理异常:', e, 'event:', JSON.stringify(parsed).slice(0, 200))
+            logError('streamAgentRun', 'onEvent 处理异常:', e, 'event:', JSON.stringify(parsed).slice(0, 200))
           }
         } catch {
           // JSON.parse 失败：心跳或非 JSON 数据，忽略
@@ -403,7 +404,7 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
             try {
               options.onError('连接停滞，请检查网络后重试')
             } catch (cbErr) {
-              console.error('[streamAgentRun] onError callback threw:', cbErr)
+              logError('streamAgentRun', 'onError callback threw:', cbErr)
             }
             return
           }
@@ -437,7 +438,7 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
         try {
           options.onError('响应中断')
         } catch (cbErr) {
-          console.error('[streamAgentRun] onError callback threw:', cbErr)
+          logError('streamAgentRun', 'onError callback threw:', cbErr)
         }
       } finally {
         // M5 修复：显式释放 reader，避免 abort 后底层流仍被占用导致资源泄漏
@@ -456,7 +457,7 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
         try {
           options.onError(message)
         } catch (cbErr) {
-          console.error('[streamAgentRun] onError callback threw:', cbErr)
+          logError('streamAgentRun', 'onError callback threw:', cbErr)
         }
       }
     } finally {

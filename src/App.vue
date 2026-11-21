@@ -44,6 +44,7 @@ import type { TitlebarPage } from './composables/useSshNavigation'
 import TitleBar from './layouts/TitleBar.vue'
 import ToastContainer from './components/common/ToastContainer.vue'
 import SshView from './views/ssh/SshView.vue'
+import { logError, logWarn } from '@/utils/logger'
 
 // 启动性能：设置与确认弹窗只在用户主动触发时才需要，拆为独立 chunk。
 // 首屏省掉 SettingsDialog（~15KB 含 9 个设置面板）+ ConfirmDialog 的实例化。
@@ -86,7 +87,7 @@ async function loadBackgroundImage(fileName: string, silent = false) {
   } catch (e) {
     if (mySeq !== bgLoadSeq) return
     backgroundImageUrl.value = ''
-    if (!silent) console.warn('[App] 背景图加载失败:', e)
+    if (!silent) logWarn('App', '背景图加载失败:', e)
   }
 }
 
@@ -122,7 +123,7 @@ onMounted(async () => {
       settingsStore.loadPostProcessSettings(),
     ])
   } catch (e) {
-    console.error('[App] 初始化设置加载失败:', e)
+    logError('App', '初始化设置加载失败:', e)
   }
 })
 </script>

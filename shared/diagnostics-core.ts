@@ -14,6 +14,46 @@ export const DIAG_MAX_CRASH_DUMPS = 5
 export const DIAG_MAX_LOG_BYTES = 4 * 1024 * 1024
 
 /**
+ * 日志体系来源标注：诊断包可能同时出现多套格式，支持者需能区分"本项目日志"
+ * 与"第三方 SDK 自带日志"，避免把不同的时间戳/级别格式误判为本项目规范失效。
+ *
+ * - main.log* / electron-bridge.log*：本项目体系，格式 `[HH:MM:SS.mmm] [LEVEL] ...`。
+ * - botpy.log*：qq-botpy SDK 自写文件、按日轮转，格式为 `日期,时间 [LEVEL] (file:line) func msg`；
+ *   不在 LOG_WHITELIST（不进诊断包），这里标注是为了在 system.json 中说明它的存在与归属。
+ */
+export interface LogSourceInfo {
+  pattern: string
+  system: 'project' | 'third-party'
+  owner: string
+  format: string
+  inBundle: boolean
+}
+
+export const LOG_SOURCES: LogSourceInfo[] = [
+  {
+    pattern: 'main.log*',
+    system: 'project',
+    owner: 'installMainLogger（electron/core/main-logger.ts）',
+    format: '[HH:MM:SS.mmm] [LEVEL] [tag] message',
+    inBundle: true,
+  },
+  {
+    pattern: 'electron-bridge.log*',
+    system: 'project',
+    owner: 'bridgeLog（electron/managers/electron-bridge.ts）',
+    format: '[HH:MM:SS.mmm] [LEVEL] [tag] message',
+    inBundle: true,
+  },
+  {
+    pattern: 'botpy.log*',
+    system: 'third-party',
+    owner: 'qq-botpy SDK（按日轮转，独立于本项目日志配置）',
+    format: 'YYYY-MM-DD HH:MM:SS,mmm [LEVEL] (file.py:LINE) func message',
+    inBundle: false,
+  },
+]
+
+/**
  * 凭据抹除规则。
  *
  * 注意 `\b(key)\b\s*[:=]` 这一族必须要求"值至少 4 个非空字符"，否则
@@ -158,6 +198,7 @@ export function buildSystemInfo(input: SystemInfoInput): Record<string, unknown>
       phase: input.updatePhase,
     },
     logs: input.logs,
+    logSources: LOG_SOURCES,
     crashDumps: input.crashDumps,
     env: envSnapshot(input.env),
   }

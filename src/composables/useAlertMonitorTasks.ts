@@ -16,6 +16,7 @@ import {
   type AlertMonitorTask,
 } from '@/utils/alert-trigger-core'
 import { readJson, writeJson } from '@/utils/storage-json'
+import { logWarn } from '@/utils/logger'
 
 function loadFromStorage(): AlertMonitorTask[] {
   return sanitizeAlertMonitorTasks(readJson(ALERT_MONITOR_STORAGE_KEY, []))
@@ -27,7 +28,7 @@ const tasks = ref<AlertMonitorTask[]>(loadFromStorage())
 let saveTimer: ReturnType<typeof setTimeout> | undefined
 function persist(): void {
   writeJson(ALERT_MONITOR_STORAGE_KEY, tasks.value, e => {
-    console.warn('[alertMonitorTasks] 持久化失败（localStorage 可能已满或被禁用）:', e)
+    logWarn('alertMonitorTasks', '持久化失败（localStorage 可能已满或被禁用）:', e)
   })
 }
 

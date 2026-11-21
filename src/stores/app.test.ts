@@ -18,6 +18,10 @@ import { createPinia, setActivePinia } from 'pinia'
 
 import { useAppStore } from './app'
 
+// toast.error 的替身：断言关键故障只提示一次（每故障周期）。
+const toastError = vi.fn()
+vi.mock('./toast', () => ({ useToastStore: () => ({ error: toastError }) }))
+
 type StatusCb = (data: { status: string; port?: number; error?: string }) => void
 
 function makeElectronApi(overrides: Record<string, unknown> = {}) {
@@ -97,5 +101,44 @@ describe('appStore.readyPromise — 初始加载的就绪闸门', () => {
     setWindow(undefined)
     const store = useAppStore()
     await expect(store.readyPromise).resolves.toBeDefined()
+  })
+})
+
+describe('后端故障 toast：每故障周期只提示一次', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('error→error→ready→error：提示两次（ready 复位开启下一周期），且 duration=0 永驻', async () => {
+    const api = makeElectronApi({
+      whenBackendReady: vi.fn(() => new Promise<number>(() => {})), // 挂起，只走事件路径
+    })
+    setWindow(api)
+    useAppStore()
+
+    api.__statusCb?.({ status: 'error', error: 'spawn ENOENT' })
+    api.__statusCb?.({ status: 'error', error: 'spawn ENOENT' }) // 同周期重复 → 不提示
+    expect(toastError).toHaveBeenCalledTimes(1)
+    expect(toastError).toHaveBeenCalledWith(
+      '后端服务不可用，部分功能无法使用',
+      0,
+      { details: '原因：spawn ENOENT' },
+    )
+
+    api.__statusCb?.({ status: 'ready', port: 8123 }) // 复位
+    api.__statusCb?.({ status: 'error', error: 'health timeout' }) // 新周期 → 再提示
+    expect(toastError).toHaveBeenCalledTimes(2)
+  })
+
+  it('whenBackendReady reject 路径也提示一次（通用文案无 details）', async () => {
+    const api = makeElectronApi({
+      whenBackendReady: vi.fn(() => Promise.reject(new Error('spawn failed'))),
+    })
+    setWindow(api)
+    useAppStore()
+    await flush()
+    expect(toastError).toHaveBeenCalledTimes(1)
+    expect(toastError.mock.calls[0][2]).toBeUndefined()
   })
 })

@@ -6,6 +6,7 @@ import { useSftpStore } from '@/stores/sftp'
 import { useToastStore } from '@/stores/toast'
 import { toFriendlyMessage, unwrapIpcErrorEnvelope } from '@/api/client'
 import { extractSSHError, isRetryable } from '@/types/ssh-error-types'
+import { logError } from '@/utils/logger'
 
 /** 本地终端列表常量（供标签条 ＋ 菜单渲染，动作仍走本文件的 openLocalShell） */
 export const LOCAL_SHELLS = ['PowerShell', 'CMD', 'Git Bash', 'WSL']
@@ -184,7 +185,7 @@ export function useSshNavigation(
       activeNavPage.value = 'home'
       showHome.value = false
     } catch (err: any) {
-      console.error('[openLocalShell] Failed:', shellName, err)
+      logError('openLocalShell', 'Failed:', shellName, err)
       toast.error(toFriendlyMessage(err, `${shellName} 打开失败`))
     }
   }
@@ -283,7 +284,7 @@ export function useSshNavigation(
       }, 100)
       focusTimers.push(tid)
     } catch (err: any) {
-      console.error('[useSshNavigation] connectRemote failed:', err)
+      logError('useSshNavigation', 'connectRemote failed:', err)
       // 失败即解除防抖：时间戳在发起前就写入了，而下方 toast 的「重试」按钮直接
       // 回调本函数 —— 秒级失败（拒绝连接/认证错误）时重试会撞进防抖窗口，
       // 只弹「连接请求过于频繁」，重试按钮形同虚设
@@ -311,7 +312,7 @@ export function useSshNavigation(
   function handleRmConnect(connId: string) {
     const conn = store.connections.find(c => c.id === connId)
     if (!conn) {
-      console.error('[useSshNavigation] connection not found:', connId)
+      logError('useSshNavigation', 'connection not found:', connId)
       toast.error('连接配置不存在')
       return
     }

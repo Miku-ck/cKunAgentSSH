@@ -239,6 +239,14 @@ function bundleReadme(now: Date, logCount: number, crashCount: number): string {
     `本次日志 ${logCount} 份。包内所有文本都经过脱敏（Bearer / sk- / ghp_ / URL 口令 / key=value），`,
     '但不排除仍有主机名、用户名、路径等敏感信息 —— 发出前请自行确认。',
     '',
+    '日志体系说明（避免误判）：',
+    '  logs/ 内为本体系日志，格式 [HH:MM:SS.mmm] [LEVEL] [tag] message。',
+    '  后端 python 日志（含 [TRACE] / [SECURITY][fail-open]）经 stderr 转发进 main.log，',
+    '  同属本体系。system.json 的 logSources 字段列出各来源的格式与归属。',
+    '  botpy.log* 是 qq-botpy SDK 自写文件、按日轮转，格式为',
+    '  "YYYY-MM-DD HH:MM:SS,mmm [LEVEL] (file.py:LINE) func message"，与本项目无关且不在包内；',
+    '  若在场外看到它，时间戳/级别格式不同属正常，不代表本项目日志规范失效。',
+    '',
   ].join('\n')
 }
 

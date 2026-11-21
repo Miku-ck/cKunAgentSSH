@@ -1784,7 +1784,21 @@ class Driver:
             return await self._completion_guard_judge(
                 ctx, harness, task_text, final_text, iteration)
         except Exception as e:  # noqa: BLE001 — fail-open 铁律
-            logger.warning("CompletionGuard 异常，fail-open 放行: %s", e)
+            # 安全裁决异常时 fail-open 是既定口径，但必须 ERROR 留痕 + 前端可见事件，
+            # 不能让用户以为完成度已被校验。控制流不变（仍放行）。
+            logger.error("[SECURITY][fail-open] CompletionGuard 异常，fail-open 放行: %s",
+                         e, exc_info=e)
+            emit = (ctx.metadata or {}).get("emit_event")
+            if emit is not None:
+                try:
+                    await emit(TraceEvent(
+                        kind="warning", source="driver.completion_guard",
+                        run_id=ctx.run_id,
+                        payload={"code": "security_fail_open",
+                                 "message": "安全裁决异常，已按保守策略放行（详见日志）"},
+                    ))
+                except Exception:  # noqa: BLE001 — 事件投递失败不能反过来打断放行
+                    pass
             return False, []
 
     async def _completion_guard_judge(
@@ -1829,8 +1843,10 @@ class Driver:
         if verdict.startswith("PASS"):
             return False, []
         if not verdict.startswith("FAIL"):
-            # 输出不合约定 → fail-open（口径同 auto_approve 的 _parse_verdict）
-            logger.warning("CompletionGuard 输出不合约定，fail-open 放行: %r", verdict)
+            # 输出不合约定 → fail-open（口径同 auto_approve 的 _parse_verdict）。
+            # ERROR 留痕：安全裁决未按预期产出本身就是需要关注的异常信号。
+            logger.error("[SECURITY][fail-open] CompletionGuard 输出不合约定，fail-open 放行: %r",
+                         verdict)
             return False, []
         gap = lines[1].strip() if len(lines) > 1 else ""
         reason = gap or "最终答案未完整覆盖任务要求"

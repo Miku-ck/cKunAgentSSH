@@ -129,8 +129,14 @@ async def test_run_sandboxed_backend_called(monkeypatch, tmp_workspace):
 
 
 @pytest.mark.asyncio
-async def test_run_sandboxed_fallback_allowed(monkeypatch):
-    """无后端 + require_sandbox=False → 放行裸跑（开发逃生，argv 不被包裹）。"""
+async def test_run_sandboxed_fallback_allowed(monkeypatch, caplog):
+    """无后端 + require_sandbox=False → 放行裸跑（开发逃生，argv 不被包裹）。
+
+    安全语义变更必须 ERROR 级留痕（[SECURITY][fail-open]），不能只是 warning：
+    未隔离本机执行是值得在 main.log / 诊断包里被看见的事件。
+    """
+    import logging
+
     monkeypatch.setattr(sandbox_exec, "detect_backend", lambda: None)
     calls = []
 
@@ -139,8 +145,14 @@ async def test_run_sandboxed_fallback_allowed(monkeypatch):
         return await _make_proc()
 
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
-    await run_sandboxed(["echo", "hi"], require_sandbox=False)
-    assert calls and calls[0][0] == "echo"
+    with caplog.at_level(logging.ERROR, logger=sandbox_exec.logger.name):
+        await run_sandboxed(["echo", "hi"], require_sandbox=False)
+    assert calls and calls[0][0] == "echo"  # 控制流不变：仍放行裸跑
+
+    records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("[SECURITY][fail-open]" in r.getMessage() for r in records), (
+        "未隔离本机执行缺少 ERROR 级安全留痕"
+    )
 
 
 # ── workdir 白名单（Q-B2：模型可控 workdir 不得任意 bind 进容器）────────────

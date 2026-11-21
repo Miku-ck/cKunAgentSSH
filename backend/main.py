@@ -338,10 +338,19 @@ async def lifespan(_app: FastAPI):
     # 审批策略模块图不依赖 DB：先丢线程池，与 init_db 的 sqlite I/O 重叠
     permission_modules = asyncio.create_task(asyncio.to_thread(_import_permission_modules))
 
-    db.init_db(settings.db_path)
+    # 数据库初始化失败必须留下可诊断的项目级 error（含堆栈）—— 否则只能靠
+    # Electron 的 stderr 尾部超时兜底，现场只有进程退出、看不出根因。此处只加
+    # 异常日志包裹并原样上抛（保留"起不来就是起不来"语义）：告知由 start() 的
+    # 失败路径统一负责，不吞异常带坏库继续跑。绝不改 database.py 的建表/迁移。
+    try:
+        db.init_db(settings.db_path)
+    except Exception:
+        logger.error("[cKunAgentic] 数据库初始化失败，后端启动中止", exc_info=True)
+        raise
     _perf_mark("init_db")
-    # 心跳型稳态信息：DB 初始化极少失败，路径+耗时已由 _log_startup_summary
-    # 统一输出；此处留 debug 便于需要时复现时序，不占 info 通道。
+    # 心跳型稳态信息：DB 初始化极少失败；耗时由 _log_startup_summary 统一输出
+    # （它只含耗时、不含路径），完整 DB 路径只在本条 debug 行，默认不落地，
+    # 需复现时序时临时开 debug。
     logger.debug("[cKunAgentic] Database initialized: %s", settings.db_path)
 
     net_ready = asyncio.Event()

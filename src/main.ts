@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import { useToastStore } from './stores/toast'
+import { logError } from './utils/logger'
 import './styles/global.css'
 // 24 栅格规范令牌层与布局系统（spec-tokens → grid）。
 // 与现有 variables.css 并存：规范里「画布无关」的档（危险实色 + 前景）经此层
@@ -31,7 +32,7 @@ app.use(createPinia())
 // 白屏且无提示、无恢复入口。此处上报 toast（pinia 装配后 store 可用）并保留
 // 组件链到 console；不返回 false，错误照常按 Vue 默认策略传播。
 app.config.errorHandler = (err, instance, info) => {
-  console.error(`[vue] 未处理错误（${info}）:`, err, instance ?? null)
+  logError('vue', `未处理错误（${info}）:`, err, instance ?? null)
   try {
     useToastStore().error(`界面异常：${err instanceof Error ? err.message : String(err)}`)
   } catch { /* store 尚不可用（极早期失败）时保底 console */ }

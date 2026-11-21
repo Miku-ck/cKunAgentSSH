@@ -248,6 +248,7 @@ import { isPreviewable, isImagePreviewable } from '@/utils/language'
 import { rwxStringToMode } from '../../../shared/mode-bits-core'
 import { toFriendlyMessage } from '@/api/client'
 import { buildTransferPlan, type ConflictDecision, type ConflictItem, type ConflictMeta } from '@/utils/transfer-conflict'
+import { logWarn } from '@/utils/logger'
 
 const store = useSftpStore()
 const sshStore = useSSHStore()
@@ -304,7 +305,7 @@ onMounted(() => {
   // 原 `window.electronAPI!` 非空断言在此处 onMounted 即 TypeError
   const api = window.electronAPI
   if (!api) {
-    console.warn('[SftpView] 非 Electron 环境，SFTP 功能不可用')
+    logWarn('SftpView', '非 Electron 环境，SFTP 功能不可用')
     return
   }
   unsubProgress = api.onSftpProgress((data) => {

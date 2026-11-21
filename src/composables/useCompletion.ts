@@ -14,6 +14,7 @@ import { api } from '@/api/client'
 import { useSettingsStore } from '@/stores/settings'
 // 终端回显剥 ANSI（CSI/OSC/Fe）的全仓唯一实现在 shared/ansi-core.ts
 import { stripAnsi } from '../../shared/ansi-core'
+import { logError } from '@/utils/logger'
 
 export interface CompletionCandidate {
   text: string
@@ -494,7 +495,7 @@ export async function queryCompletion(
     return candidates
   } catch (e) {
     // 修复：记录错误日志，便于排查 IPC 通信失败等问题
-    console.error('[completion] 查询补全失败:', e)
+    logError('completion', '查询补全失败:', e)
     return []
   }
 }

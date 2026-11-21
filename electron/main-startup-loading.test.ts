@@ -49,3 +49,19 @@ describe('dev 启动先亮 loading 窗、探活后台并行', () => {
     expect(mainSrc).toMatch(/mainWindow\.loadFile\(join\(__dirname, '\.\.\/renderer\/index\.html'\)\)/)
   })
 })
+
+describe('perf 日志：默认一行汇总、明细需 CKUN_PERF=1（对齐后端）', () => {
+  const perfSrc = readFileSync(new URL('./utils/perf-mark.ts', import.meta.url), 'utf-8').replace(/\r\n/g, '\n')
+
+  it('perfMark 保留签名，明细受 CKUN_PERF 开关控制', () => {
+    expect(perfSrc).toMatch(/export function perfMark\(name: string\): void/)
+    expect(perfSrc).toContain("process.env.CKUN_PERF === '1'")
+    expect(perfSrc).toContain('if (VERBOSE) console.log')
+  })
+
+  it('导出 logPerfSummary 且 main.ts 在启动编排结束后调用一次', () => {
+    expect(perfSrc).toMatch(/export function logPerfSummary\(\): void/)
+    expect(mainSrc).toContain('logPerfSummary()')
+    expect(mainSrc).toContain('import { perfMark, logPerfSummary }')
+  })
+})

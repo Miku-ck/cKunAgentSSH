@@ -183,6 +183,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { toFriendlyMessage } from '@/api/client'
 import { useModalFocusTrap } from '../../composables/useModalFocusTrap'
 import { isPort, PORT_MAX } from '../../../shared/port-core'
+import { logError } from '@/utils/logger'
 
 const props = defineProps<{
   editData?: SSHConnection
@@ -417,7 +418,7 @@ async function handleSave() {
     }
     emit('saved', { savedId, connectNow: form.connectNow })
   } catch (err: any) {
-    console.error('[ConnectionModal] save failed:', err)
+    logError('ConnectionModal', 'save failed:', err)
     errorMsg.value = toFriendlyMessage(err, '保存失败')
   } finally {
     saving.value = false

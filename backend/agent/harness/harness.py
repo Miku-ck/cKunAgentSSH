@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Optional
@@ -38,6 +39,12 @@ from .saddle import Saddle, Sandbox, UndoBuilder
 from .stirrups import Stirrups
 
 logger = logging.getLogger(__name__)
+
+# [TRACE] 日志节流窗口（秒）。content/reasoning 等常规事件逐 chunk 产生，
+# 若每条都打 debug 日志会在 DEBUG 级别刷屏（原注释"避免日志爆炸"并未真正实现）。
+# 关键事件（error/warning/需人工/需授权）直通不节流，节流放行时带 suppressed=N
+# 说明本窗口吞掉了多少条，不静默丢事件。单测可 monkeypatch 本常量。
+_TRACE_LOG_WINDOW_S = 0.25
 
 
 @dataclass
@@ -273,23 +280,42 @@ class Harness:
         if not self._assembled:
             raise RuntimeError("Harness 未 assemble，请先调用 assemble()")
 
+        # 每个 run 清空 [TRACE] 节流状态，避免跨 run 内存增长/窗口串味。
+        self._trace_log_last: dict[tuple[str, str], float] = {}
+        self._trace_log_suppressed: dict[tuple[str, str], int] = {}
+
         # H13 修复 A2：注册日志订阅者（让 TelemetryBus.subscribe 不再是死代码）
         # 用途：把所有 TraceEvent 转为结构化日志，便于离线分析/调试
         # 原实现 TelemetryBus.subscribe/emit 已实现但生产路径零订阅者
         if not getattr(self, "_log_subscriber_registered", False):
+            # 关键事件（错误/告警/需人工/需授权）直通 info，永不节流 —— 它们正是
+            # 排查现场最需要的信号，漏一条都可能误判。其余常规事件按 (run_id, kind)
+            # 时间窗节流：窗口内只记首条并累计，下一条放行时补报 suppressed=N，
+            # 既不刷屏也不静默丢总量。窗口/计数状态在每次 run() 开头清空。
+            _critical = ("error", "warning", "human_help_needed", "permission_needed")
+
             def _log_subscriber(event: TraceEvent) -> None:
-                # 关键事件用 info，常规事件用 debug，避免日志爆炸
-                if event.kind in ("error", "warning", "human_help_needed", "permission_needed"):
+                if event.kind in _critical:
                     logger.info(
                         "[TRACE] run=%s kind=%s iter=%d source=%s payload_keys=%s",
                         event.run_id, event.kind, event.iteration, event.source,
                         list(event.payload.keys()) if event.payload else [],
                     )
-                else:
-                    logger.debug(
-                        "[TRACE] run=%s kind=%s iter=%d source=%s",
-                        event.run_id, event.kind, event.iteration, event.source,
-                    )
+                    return
+
+                key = (event.run_id, event.kind)
+                now = time.monotonic()
+                last = self._trace_log_last.get(key)
+                if last is not None and now - last < _TRACE_LOG_WINDOW_S:
+                    self._trace_log_suppressed[key] = self._trace_log_suppressed.get(key, 0) + 1
+                    return
+                suppressed = self._trace_log_suppressed.pop(key, 0)
+                self._trace_log_last[key] = now
+                logger.debug(
+                    "[TRACE] run=%s kind=%s iter=%d source=%s suppressed=%d",
+                    event.run_id, event.kind, event.iteration, event.source, suppressed,
+                )
+
             self.telemetry.subscribe(_log_subscriber)
             self._log_subscriber_registered = True
 

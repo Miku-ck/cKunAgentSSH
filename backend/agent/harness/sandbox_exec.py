@@ -243,8 +243,11 @@ async def run_sandboxed(
                 "本地执行被 fail-closed 拒绝。请安装容器/命名空间运行时；"
                 "开发环境可设 CKUN_AGENT_ALLOW_UNSANDBOXED_LOCAL=1 放行（不安全）。"
             )
-        logger.warning("沙箱后端不可用，放行未隔离本机执行（不安全）：%s",
-                       " ".join(argv))
+        # 这是安全语义变更（未隔离本机执行），必须 ERROR 级留痕：
+        # stderr → Electron stderrTail → main.log → 诊断包，现场可查。
+        # 不改变 fail-open 放行控制流（开发环境显式豁免仍需能跑）。
+        logger.error("[SECURITY][fail-open] 沙箱后端不可用，放行未隔离本机执行（不安全）：%s",
+                     " ".join(argv))
         wrapped = list(argv)
     else:
         wrapped = build_isolated_argv(backend, argv, workdir, L)

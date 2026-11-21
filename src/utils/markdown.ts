@@ -26,6 +26,7 @@ import typescript from 'highlight.js/lib/languages/typescript'
 import diff from 'highlight.js/lib/languages/diff'
 import plaintext from 'highlight.js/lib/languages/plaintext'
 import DOMPurify from 'dompurify'
+import { logWarn } from '@/utils/logger'
 
 for (const [id, def] of [
   ['bash', bash], ['shell', shell], ['powershell', powershell], ['python', python],
@@ -150,7 +151,7 @@ export function renderMarkdown(text: string): string {
     // 那一个换行会凭空渲染成一行空白，把每条气泡都撑高一档。
     return DOMPurify.sanitize(highlighted, SANITIZE_OPTIONS).trim()
   } catch (e) {
-    console.warn('[renderMarkdown] failed, falling back to sanitized plain text:', e)
+    logWarn('renderMarkdown', 'failed, falling back to sanitized plain text:', e)
     return DOMPurify.sanitize(text, SANITIZE_OPTIONS).trim()
   }
 }

@@ -10,10 +10,10 @@ import { perfMark } from '../utils/perf-mark'
 import { resolvePowerShell } from '../utils/powershell-path'
 import { clearPythonCache, loadPythonCache, savePythonCache } from './backend-python-cache'
 
-// ─── 统一日志口径（startupLogNotes）────────────────
+// ─── 日志来源标签 ────────────────────────────────
 /** [BackendManager] 消息。启动链路的时序问题（解释器探测、健康轮询、
- *  重启冷却都以秒计）只有带毫秒时间戳才排得动——时间戳由 main-logger 的 console
- *  劫持层统一加，这里只带来源标签，避免双份。 */
+ *  重启冷却都以秒计）只有带毫秒时间戳才排得动——时间戳与级别前缀由 main-logger
+ *  的 console 劫持层统一加，这里只带来源标签，避免双份。 */
 function bmLog(level: 'log' | 'warn' | 'error', msg: string): void {
   console[level](`[BackendManager] ${msg}`)
 }

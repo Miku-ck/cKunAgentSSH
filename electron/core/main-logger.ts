@@ -36,7 +36,7 @@ type LogLevel = 'log' | 'info' | 'warn' | 'error'
 
 /** 文件里的级别前缀；console 转发用原始方法本身区分级别，不再重复前缀 */
 const FILE_TAG: Record<LogLevel, string> = {
-  log: '[INFO]',
+  log: '[LOG]',
   info: '[INFO]',
   warn: '[WARN]',
   error: '[ERROR]',

@@ -126,6 +126,21 @@ describe('buildSystemInfo', () => {
     expect(JSON.stringify(info)).not.toContain('abcdef123456')
   })
 
+  it('logSources 标注本体系与第三方 SDK 日志，避免格式差异被误判为规范失效', () => {
+    const info = buildSystemInfo({
+      appVersion: '0.1.0', electronVersion: '', chromeVersion: '', nodeVersion: '',
+      platform: 'win32', arch: 'x64', locale: 'zh-CN', pid: 1,
+      startedAt: '', appDir: '', userDataDir: '', logs: [],
+      runtimeVersion: null, runtimePath: null, updateFeedUrl: '', updatePhase: 'idle',
+      crashDumps: 0, env: {},
+    })
+    const sources = info.logSources as Array<{ pattern: string; system: string; inBundle: boolean }>
+    expect(sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ pattern: 'main.log*', system: 'project', inBundle: true }),
+      expect.objectContaining({ pattern: 'botpy.log*', system: 'third-party', inBundle: false }),
+    ]))
+  })
+
   it('日志上限常量是"尾部截断"的阈值本身（4MB）', () => {
     expect(DIAG_MAX_LOG_BYTES).toBe(4 * 1024 * 1024)
   })
