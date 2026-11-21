@@ -92,7 +92,6 @@ def init_db(db_path: str) -> None:
     """初始化数据库: 建表 + 启用 WAL + 迁移
 
     db_path 为绝对路径时直接用；相对路径落在本模块 cwd（脆弱，仅兜底）。
-    显式打印实际路径便于排查「重启丢库」类问题。
     """
     import os
     import logging
@@ -109,8 +108,6 @@ def init_db(db_path: str) -> None:
     # 这里不再写 database._db_path 快照 —— 读它的人（get_db_path /
     # runbook_store）经模块 __getattr__ 转发到 db._conn，避免两处漂移。
     _db_conn._db_path = db_path
-    # debug：完整库路径默认不落地（与 main.py 的 "Database initialized" debug 行同口径）
-    log.debug("init_db: opening %s", os.path.abspath(db_path))
     conn = _get_conn()
     try:
         # 建表脚本（数十张表 + 索引）是启动固定成本的大头（实测 ~110ms），结构版本
@@ -118,11 +115,6 @@ def init_db(db_path: str) -> None:
         # **不跳** —— 它们修的是 user_version 表达不了的缺损（表还在但列被删、
         # 老数据写反），正是这类库必须能自愈的地方，而它们实测只占 ~8ms。
         _ddl_applied = _schema_is_current(conn)
-        if _ddl_applied:
-            log.debug(
-                "init_db: 结构版本 %s 已是最新，跳过建表脚本（迁移/数据修复照常）",
-                _SCHEMA_VERSION,
-            )
         _maybe_ddl = _skip_script if _ddl_applied else conn.executescript
         _maybe_ddl("""
             CREATE TABLE IF NOT EXISTS conversations (

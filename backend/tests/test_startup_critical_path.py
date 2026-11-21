@@ -44,7 +44,7 @@ _FORBIDDEN_AT_IMPORT_THIRDPARTY = (
 
 # init_db / 迁移函数体的指纹。改动这些函数的任何一行，都要在
 # 「升级 _SCHEMA_VERSION」与「更新本常量」之间做一次显式决定。
-_SCHEMA_SOURCE_FINGERPRINT = "3407d83e062aeb31"
+_SCHEMA_SOURCE_FINGERPRINT = "b40cfe629cf20a1e"
 
 
 def _run_probe(code: str) -> dict:
@@ -146,23 +146,23 @@ def test_init_db_marks_schema_version(base_db):
         assert hit is not None, f"核心表缺失: {table}"
 
 
-def test_init_db_skips_ddl_when_schema_is_current(base_db, monkeypatch, caplog):
+def test_init_db_skips_ddl_when_schema_is_current(base_db, monkeypatch):
     """结构已是最新时只跳过建表脚本；迁移与数据修复必须照常执行。
 
     这是本优化的安全边界：重跑建表脚本是固定成本（~110ms），而迁移修的是
     user_version 表达不了的缺损（表在但列被删、老数据写反）—— 一并短路会让
     这类库失去自愈能力（test_migrate_survives_db_without_name_column 覆盖）。
     """
-    import logging
-
     import database as db
 
     migrated: list[int] = []
     monkeypatch.setattr(db, "_migrate_db", lambda conn: migrated.append(1))
-    # 短路证据行是 debug 级（启动窗口不再刷 INFO），守卫照样钉住它
-    with caplog.at_level(logging.DEBUG, logger="cKunAgentic.database"):
-        db.init_db(base_db)
-    assert "跳过建表脚本" in caplog.text, "结构版本已命中却仍执行了建表脚本"
+    # 短路走的是 _skip_script 占位（而非 conn.executescript）：把它换成记录器，
+    # 直接证明 DDL 文本被吞掉而不是真跑了（原证据日志属冗余，已删）。
+    seen: list[str] = []
+    monkeypatch.setattr(db, "_skip_script", lambda script: seen.append(script))
+    db.init_db(base_db)
+    assert seen and "CREATE TABLE" in seen[0], "结构版本已命中却仍执行了建表脚本"
     assert migrated == [1], "迁移被一并短路了：表在但列被删的库将无法自愈"
 
 
