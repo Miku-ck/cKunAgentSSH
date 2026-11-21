@@ -36,6 +36,7 @@ from routes.skills import router as skills_router
 from routes.experts import router as experts_router
 from routes.plugins import router as plugins_router
 from routes.agent import router as agent_router
+from routes.agent_clarification import router as agent_clarification_router
 from routes.agent_governance import router as agent_governance_router
 from routes.agent_memory import router as agent_memory_router
 from routes.agent_runs import router as agent_runs_router
@@ -508,6 +509,7 @@ app.include_router(skills_router, prefix="/api")
 app.include_router(experts_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
+app.include_router(agent_clarification_router, prefix="/api")
 app.include_router(agent_governance_router, prefix="/api")
 app.include_router(agent_memory_router, prefix="/api")
 app.include_router(agent_runs_router, prefix="/api")

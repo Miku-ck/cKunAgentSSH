@@ -12,8 +12,13 @@ from pathlib import Path
 
 import pytest
 
-ROUTE_SRC = (Path(__file__).resolve().parents[1] / "routes" / "agent.py").read_text(
-    encoding="utf-8")
+# agent.py 已按域拆出 agent_memory/agent_governance/agent_trace/agent_runs/
+# agent_clarification（P2 单文件单域）：守卫扫描 routes/agent*.py 全部模块，
+# 调用点搬了家也不能从守卫视野里消失。
+ROUTES_DIR = Path(__file__).resolve().parents[1] / "routes"
+ROUTE_SRC = "\n".join(
+    p.read_text(encoding="utf-8") for p in sorted(ROUTES_DIR.glob("agent*.py"))
+)
 
 # 每条隶属某个 run 的决策动作 → 必须能在同一条 append_record_async 调用里看到 run_id
 RUN_BOUND_ACTIONS = (
