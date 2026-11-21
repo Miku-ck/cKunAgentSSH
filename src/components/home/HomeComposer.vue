@@ -685,11 +685,6 @@ const { showModelDropdown, modelSelectorRef, currentModelName, selectModel } = u
 const noModel = computed(() => modelsStore.models.length === 0)
 const running = computed(() => agent.isRunning)
 
-/** O5：运行中 token 读数，过千显示 k，省得在窄输入区占位太长。 */
-function formatRunTokens(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
-}
-
 const ta = ref<HTMLTextAreaElement | null>(null)
 /**
  * 高度按行格算，不按像素拍：横线是按 --hcc-lh 重复画的，若 max 落在两行之间
@@ -1520,14 +1515,6 @@ onMounted(() => {
         >×</button>
       </span>
 
-      <!-- O5：运行中成本可见 —— 后端每轮迭代附成本快照，agent.costInfo 实时更新。
-           只在有读数时显示，避免刚启动还没拿到快照时闪一行空字。 -->
-      <span v-if="running" class="hcc-note">
-        AI 正在运行中<span v-if="agent.costInfo && agent.costInfo.total_tokens > 0" class="hcc-cost">
-          · {{ formatRunTokens(agent.costInfo.total_tokens) }} tokens<span v-if="agent.costInfo.cost_usd > 0"> · ${{ agent.costInfo.cost_usd.toFixed(4) }}</span>
-        </span>
-      </span>
-
       <!-- 模型选择器坐行尾：margin-left:auto 把它带着执行钮一起推到右边；
            下拉改从右缘向左展开，面板按 left:0 开会伸出卡外。 -->
       <div ref="modelSelectorRef" class="hcc-sel model-sel">
@@ -2184,8 +2171,6 @@ onMounted(() => {
   font-size: 0.8462rem;
   color: var(--accent-green);
 }
-.hcc-note { font-size: 0.8462rem; color: var(--text-tertiary) }
-.hcc-cost { color: var(--text-secondary) }
 /* 模型选择器坐底栏行尾：margin-left:auto 把它和执行钮一起推到右边。
    下拉从右缘向左展开 —— 220px 的面板按 left:0 开会伸出卡外。 */
 .hcc-sel.model-sel { margin-left: auto }
