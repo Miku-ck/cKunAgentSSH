@@ -10,6 +10,7 @@ import {
   type GitPrivateToken,
   type GitPushMode,
 } from '../../shared/github-accel-core'
+import { toFriendlyMessage } from '@/api/client'
 
 type GhConfig = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelGetConfig']>>
 type ProbeRow = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['ghaccelProbeAll']>>[number]
@@ -407,8 +408,8 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
       for (const r of tune.probed) map[r.id] = r
       probeResults.value = map
       probedAt.value = Date.now()
-    } catch (e: any) {
-      tuneError = e?.message
+    } catch (e) {
+      tuneError = toFriendlyMessage(e, '自动调优失败')
     }
 
     // 有实测结果就严格信它；只有调优本身失败（拿不到任何探测数据）才回退到旧口径 ——
@@ -425,8 +426,8 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
         applyConfig(await api.ghaccelGetConfig())
         await refreshGitStatus()
         steps.push({ key: 'git', ok: true, message: tune ? tuneSummary(tune) : undefined })
-      } catch (e: any) {
-        steps.push({ key: 'git', ok: false, message: e?.message })
+      } catch (e) {
+        steps.push({ key: 'git', ok: false, message: toFriendlyMessage(e, 'git 步骤失败') })
       }
     } else {
       const message = tuneError
@@ -443,8 +444,8 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
       await api.ghaccelSsh443Apply()
       await refreshSsh443()
       steps.push({ key: 'ssh443', ok: true })
-    } catch (e: any) {
-      steps.push({ key: 'ssh443', ok: false, message: e?.message })
+    } catch (e) {
+      steps.push({ key: 'ssh443', ok: false, message: toFriendlyMessage(e, 'ssh443 步骤失败') })
     }
 
     try {
@@ -456,9 +457,9 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
         await refreshHosts()
         steps.push({ key: 'hosts', ok: true })
       }
-    } catch (e: any) {
+    } catch (e) {
       await refreshHosts()
-      steps.push({ key: 'hosts', ok: false, message: e?.message })
+      steps.push({ key: 'hosts', ok: false, message: toFriendlyMessage(e, 'hosts 步骤失败') })
     }
 
     return steps
@@ -474,25 +475,25 @@ export const useGithubAccelStore = defineStore('github-accel', () => {
       await api.ghaccelHostsRemove()
       await refreshHosts()
       steps.push({ key: 'hosts', ok: true })
-    } catch (e: any) {
+    } catch (e) {
       await refreshHosts()
-      steps.push({ key: 'hosts', ok: false, message: e?.message })
+      steps.push({ key: 'hosts', ok: false, message: toFriendlyMessage(e, 'hosts 步骤失败') })
     }
 
     try {
       await api.ghaccelSsh443Remove()
       await refreshSsh443()
       steps.push({ key: 'ssh443', ok: true })
-    } catch (e: any) {
-      steps.push({ key: 'ssh443', ok: false, message: e?.message })
+    } catch (e) {
+      steps.push({ key: 'ssh443', ok: false, message: toFriendlyMessage(e, 'ssh443 步骤失败') })
     }
 
     try {
       await api.ghaccelGitDisable()
       await refreshGitStatus()
       steps.push({ key: 'git', ok: true })
-    } catch (e: any) {
-      steps.push({ key: 'git', ok: false, message: e?.message })
+    } catch (e) {
+      steps.push({ key: 'git', ok: false, message: toFriendlyMessage(e, 'git 步骤失败') })
     }
     return steps
   }

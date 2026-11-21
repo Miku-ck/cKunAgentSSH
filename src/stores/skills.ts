@@ -32,6 +32,16 @@ interface Skill extends SkillBase {
   assets?: string[]
 }
 
+/** SKILL.md frontmatter 的原始形状（js-yaml 返回 any，显式收窄到已知字段） */
+interface SkillManifestFrontmatter {
+  name?: string
+  slug?: string
+  version?: string
+  description?: string
+  category?: string
+  metadata?: Record<string, unknown>
+}
+
 /** SKILL.md frontmatter 解析结果 */
 interface SkillManifest {
   name: string
@@ -90,11 +100,11 @@ function parseSkillMd(text: string): SkillManifest {
   }
   const [, frontmatter, body] = matched
 
-  let parsed: any
+  let parsed: SkillManifestFrontmatter
   try {
-    parsed = yamlLoad(frontmatter) || {}
-  } catch (e: any) {
-    throw new Error(`SKILL.md frontmatter YAML 解析失败：${e?.message || e}`)
+    parsed = (yamlLoad(frontmatter) || {}) as SkillManifestFrontmatter
+  } catch (e) {
+    throw new Error(`SKILL.md frontmatter YAML 解析失败：${e instanceof Error ? e.message : String(e)}`)
   }
 
   const name = String(parsed.name || '').trim()
@@ -186,15 +196,15 @@ export const useSkillStore = defineStore('skills', () => {
             created_at: now,
             updated_at: now,
           })
-        } catch (e: any) {
-          logWarn('skills', `加载技能失败 ${entry.path}: ${e?.message || e}`)
+        } catch (e) {
+          logWarn('skills', `加载技能失败 ${entry.path}: ${e instanceof Error ? e.message : String(e)}`)
         }
       }
 
       builtinSkills.value = loaded
       // 同步内置技能到后端数据库，让 Agent 模式的 SkillRein 也能匹配到它们
       await syncBuiltinToBackend(loaded)
-    } catch (e: any) {
+    } catch (e) {
       logError('skills', '扫描内置技能失败:', e)
     } finally {
       // 无论内置技能扫描是否成功，都尝试加载后端 manual/auto 技能
@@ -221,8 +231,8 @@ export const useSkillStore = defineStore('skills', () => {
       const result = await api.syncBuiltinSkills(payload)
       // 同步成功 — 无需日志
       void result
-    } catch (e: any) {
-      logWarn('skills', '同步内置技能到后端失败:', e?.message || e)
+    } catch (e) {
+      logWarn('skills', '同步内置技能到后端失败:', e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -272,7 +282,7 @@ export const useSkillStore = defineStore('skills', () => {
           updated_at: item.updated_at,
         }
       })
-    } catch (e: any) {
+    } catch (e) {
       logError('skills', '加载后端技能失败:', e)
     }
   }

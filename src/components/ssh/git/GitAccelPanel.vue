@@ -232,12 +232,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useGithubAccelStore } from '@/stores/github-accel'
 import { useToastStore } from '@/stores/toast'
 import { formatBytes } from '@/utils/format'
-import { unwrapIpcErrorEnvelope } from '@/api/client'
-
-/** 统一取 IPC 错误消息（unknown → 可显示文本），避免每个 catch 写 `e: any`。 */
-function errMsg(e: unknown): string {
-  return unwrapIpcErrorEnvelope(e instanceof Error ? e.message : '')
-}
+import { toFriendlyMessage } from '@/api/client'
 
 const accel = useGithubAccelStore()
 const toast = useToastStore()
@@ -317,7 +312,7 @@ async function switchMirror(prefix: string): Promise<void> {
     await accel.switchActiveMirror(prefix)
     toast.success(`已切换到 ${proxyName(prefix)}`)
   } catch (e) {
-    toast.error(errMsg(e) || '切换失败')
+    toast.error(toFriendlyMessage(e, '切换失败'))
     // 主进程先卸旧规则再写新规则：失败时可能已无生效项，回读真实状态而非停在旧子节
     await accel.refreshGitStatus().catch(() => undefined)
   }
@@ -327,7 +322,7 @@ async function onSelfCheck(): Promise<void> {
   try {
     await accel.runSelfCheck()
   } catch (e) {
-    toast.error(errMsg(e) || '自检失败')
+    toast.error(toFriendlyMessage(e, '自检失败'))
   }
 }
 
@@ -403,7 +398,7 @@ onMounted(async () => {
     // 用户面对一排「未测速」无从选起。仅在本会话从未测过时触发，不重复打扰。
     if (!accel.probedAt && !accel.probing) void runProbe()
   } catch (e) {
-    toast.error(errMsg(e) || 'GitHub 加速配置加载失败')
+    toast.error(toFriendlyMessage(e, 'GitHub 加速配置加载失败'))
   }
 })
 
@@ -411,7 +406,7 @@ async function runProbe(): Promise<void> {
   try {
     await accel.probeAll()
   } catch (e) {
-    toast.error(errMsg(e) || '测速失败')
+    toast.error(toFriendlyMessage(e, '测速失败'))
   }
 }
 
@@ -424,7 +419,7 @@ async function cancelDownload(id: string): Promise<void> {
 }
 
 async function revealDownload(id: string): Promise<void> {
-  try { await accel.showInFolder(id) } catch (e) { toast.error(errMsg(e) || '打开失败') }
+  try { await accel.showInFolder(id) } catch (e) { toast.error(toFriendlyMessage(e, '打开失败')) }
 }
 
 function latencyText(id: string): string {
@@ -452,10 +447,10 @@ function latencyClass(id: string): string {
 }
 
 async function toggleProxy(id: string, enabled: boolean): Promise<void> {
-  try { await accel.toggleProxy(id, enabled) } catch (e) { toast.error(errMsg(e) || '保存失败') }
+  try { await accel.toggleProxy(id, enabled) } catch (e) { toast.error(toFriendlyMessage(e, '保存失败')) }
 }
 async function removeProxy(id: string): Promise<void> {
-  try { await accel.removeProxy(id) } catch (e) { toast.error(errMsg(e) || '删除失败') }
+  try { await accel.removeProxy(id) } catch (e) { toast.error(toFriendlyMessage(e, '删除失败')) }
 }
 
 async function onPushMode(mode: string): Promise<void> {
@@ -463,13 +458,13 @@ async function onPushMode(mode: string): Promise<void> {
   try {
     await accel.setPushMode(mode)
     toast.success(mode === 'ssh' ? 'push 已改走 SSH' : 'push 已改为直连 GitHub')
-  } catch (e) { toast.error(errMsg(e) || '切换失败') }
+  } catch (e) { toast.error(toFriendlyMessage(e, '切换失败')) }
 }
 
 async function onHostsAutoRefresh(on: boolean): Promise<void> {
   try {
     await accel.setHostsAutoRefresh(on)
-  } catch (e) { toast.error(errMsg(e) || '保存失败') }
+  } catch (e) { toast.error(toFriendlyMessage(e, '保存失败')) }
 }
 
 async function enableGit(): Promise<void> {
@@ -477,42 +472,42 @@ async function enableGit(): Promise<void> {
     await accel.gitEnable(gitPrefix.value)
     await accel.saveOptions({ lastProxyPrefix: gitPrefix.value })
     toast.success('已开启 git 全局加速')
-  } catch (e) { toast.error(errMsg(e) || '开启失败') }
+  } catch (e) { toast.error(toFriendlyMessage(e, '开启失败')) }
 }
 async function disableGit(): Promise<void> {
   try {
     await accel.gitDisable()
     toast.success('已关闭并还原')
-  } catch (e) { toast.error(errMsg(e) || '关闭失败') }
+  } catch (e) { toast.error(toFriendlyMessage(e, '关闭失败')) }
 }
 async function applySsh(): Promise<void> {
   try {
     await accel.ssh443Apply()
     toast.success('已写入 ~/.ssh/config 托管块')
-  } catch (e) { toast.error(errMsg(e) || '写入失败') }
+  } catch (e) { toast.error(toFriendlyMessage(e, '写入失败')) }
 }
 async function removeSsh(): Promise<void> {
   try {
     await accel.ssh443Remove()
     toast.success('已移除托管块')
-  } catch (e) { toast.error(errMsg(e) || '移除失败') }
+  } catch (e) { toast.error(toFriendlyMessage(e, '移除失败')) }
 }
 async function pickHosts(): Promise<void> {
   try {
     await accel.hostsPick()
-  } catch (e) { toast.error(errMsg(e) || '优选失败') }
+  } catch (e) { toast.error(toFriendlyMessage(e, '优选失败')) }
 }
 async function applyHosts(): Promise<void> {
   try {
     await accel.hostsApply()
     toast.success('hosts 托管块已写入')
-  } catch (e) { toast.error(errMsg(e) || '写入失败') }
+  } catch (e) { toast.error(toFriendlyMessage(e, '写入失败')) }
 }
 async function removeHosts(): Promise<void> {
   try {
     await accel.hostsRemove()
     toast.success('hosts 托管块已移除')
-  } catch (e) { toast.error(errMsg(e) || '移除失败') }
+  } catch (e) { toast.error(toFriendlyMessage(e, '移除失败')) }
 }
 
 // ─── 总控 ───
@@ -526,7 +521,7 @@ async function refreshStaleHosts(): Promise<void> {
     await accel.hostsApply()
     toast.success('hosts 已重新优选并写入')
   } catch (e) {
-    toast.error(errMsg(e) || 'hosts 更新失败')
+    toast.error(toFriendlyMessage(e, 'hosts 更新失败'))
   }
 }
 
@@ -554,7 +549,7 @@ async function onMasterEnable(): Promise<void> {
   } catch (e) {
     masterNoteWarn.value = true
     masterTags.value = []
-    masterNote.value = errMsg(e) || '启动失败'
+    masterNote.value = toFriendlyMessage(e, '启动失败')
   } finally {
     masterBusy.value = false
   }
@@ -578,7 +573,7 @@ async function onMasterDisable(): Promise<void> {
     }
   } catch (e) {
     masterNoteWarn.value = true
-    masterNote.value = errMsg(e) || '关闭失败'
+    masterNote.value = toFriendlyMessage(e, '关闭失败')
   } finally {
     masterBusy.value = false
   }
