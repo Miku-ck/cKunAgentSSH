@@ -2,7 +2,8 @@
 // check-any.mjs — 统计 TypeScript / Vue 源码中的显式 any 类型逃逸。
 //
 // 只降不升：数量超过基线上限即失败，防止新代码把类型系统掏空。
-// 基线值由当前存量确定（见 AGENTS.md「不新增 any」）。排除测试与 .d.ts。
+// 基线 = 当前存量（2 处，均在 electron/utils/ipc-handler.ts：IPC 分发器
+// 的 args/返回开放是唯一合理逃逸）。排除测试与 .d.ts。
 //
 // 用法: node scripts/check-any.mjs
 // 环境变量 ANY_LIMIT 可覆盖上限。
@@ -11,7 +12,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const ROOT = process.cwd();
-const LIMIT = Number(process.env.ANY_LIMIT ?? 199);
+const LIMIT = Number(process.env.ANY_LIMIT ?? 2);
 const EXTS = new Set(['.ts', '.vue']);
 const SKIP_DIR = new Set(['node_modules', 'out', 'dist', 'runtime', '.git', '.superpowers']);
 
