@@ -2,7 +2,14 @@
  * SSH Manager — ssh2 远程连接管理
  * 在 Electron 主进程中运行，管理 SSH 连接和 Shell 通道
  */
-import type { Client, ClientChannel, SFTPWrapper } from 'ssh2'
+import type { Client, ClientChannel, ConnectConfig, FileEntryWithStats, OpenMode, SFTPWrapper, Stats } from 'ssh2'
+
+/** ssh2 运行时支持 SSH 压缩（zlib），但 @types/ssh2 的 ConnectConfig 尚未收录 */
+declare module 'ssh2' {
+  interface ConnectConfig {
+    compress?: boolean
+  }
+}
 import { safeSend as sendToWindow } from '../utils/safe-send'
 import { LS_COLORS_NO_BACKGROUND } from '../utils/ls-colors'
 import { ExecRegistry } from './exec-registry'
@@ -113,7 +120,7 @@ function toTransferError(tErr: TransferError): Error {
 // ════════════════════════════════════════════════
 //   SFTP Promise 化辅助函数
 // ════════════════════════════════════════════════
-function sftpStat(sftp: SFTPWrapper, path: string): Promise<any> {
+function sftpStat(sftp: SFTPWrapper, path: string): Promise<Stats> {
   return new Promise((resolve, reject) => {
     sftp.stat(path, (err, res) => err ? reject(err) : resolve(res))
   })
@@ -150,8 +157,8 @@ async function renameOverwrite(src: string, dest: string): Promise<void> {
   try {
     await fsPromises.rename(src, dest)
     return
-  } catch (err: any) {
-    const code = err?.code as string | undefined
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code
     if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EXDEV') throw err
     try { await fsPromises.unlink(dest) } catch { /* 目标不存在，忽略 */ }
     if (code === 'EXDEV') {
@@ -163,11 +170,11 @@ async function renameOverwrite(src: string, dest: string): Promise<void> {
   }
 }
 
-function sftpOpen(sftp: SFTPWrapper, path: string, flags: string): Promise<Buffer> {
+function sftpOpen(sftp: SFTPWrapper, path: string, flags: OpenMode): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     // ssh2 的 SFTPWrapper.open() 同时支持 OpenMode 字符串与 number，
     // 直接传字符串让 ssh2 内部按 SFTP OPEN_MODE 转换，避免手动数值映射错误。
-    sftp.open(path, flags as any, (err, handle) => err ? reject(err) : resolve(handle))
+    sftp.open(path, flags, (err, handle) => err ? reject(err) : resolve(handle))
   })
 }
 
@@ -839,8 +846,8 @@ export class SSHManager {
   }
 
   /** 根据认证方式构建 ssh2 connect 配置 */
-  private async buildConnectConfig(config: SSHConnectionConfig): Promise<any> {
-    const connectConfig: any = {
+  private async buildConnectConfig(config: SSHConnectionConfig): Promise<ConnectConfig> {
+    const connectConfig: ConnectConfig = {
       host: config.host,
       port: config.port,
       username: config.username,
@@ -1704,10 +1711,10 @@ export class SSHManager {
 
       try {
         client.connect(connectConfig)
-      } catch (err: any) {
+      } catch (err) {
         // 同族口径：同步抛出也带 authType，认证类配置错才归得准
         const code = classifyRawError(err, config.authType)
-        done(false, toFriendlyZh(code, err?.message))
+        done(false, toFriendlyZh(code, (err as Error)?.message))
       }
 
       // 兜底超时(比 readyTimeout 多 2s)
@@ -1896,10 +1903,10 @@ export class SSHManager {
   /** 列远程目录,返回排序后的条目(目录在前,同类型按名称) */
   async sftpList(sshSessionId: string, remotePath: string): Promise<SftpEntry[]> {
     const sftp = this.requireSftp(sshSessionId)
-    const list: Array<{ filename: string; attrs: any }> = await new Promise((resolve, reject) => {
+    const list: FileEntryWithStats[] = await new Promise((resolve, reject) => {
       sftp.readdir(remotePath, (err, res) => {
         if (err) reject(new Error('读取远程目录失败，请检查路径是否存在或是否有访问权限'))
-        else resolve(res as any)
+        else resolve(res)
       })
     })
     const entries: SftpEntry[] = list.map(item => ({
@@ -2052,7 +2059,7 @@ export class SSHManager {
  */
 async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
 	const sftp = this.requireSftp(sshSessionId)
-	const stat: any = await new Promise((resolve, reject) => {
+	const stat: Stats = await new Promise((resolve, reject) => {
 		sftp.stat(remotePath, (err, res) => {
 			if (err) reject(new Error('获取文件信息失败，请检查路径是否存在'))
 			else resolve(res)
@@ -2497,7 +2504,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     const VERIFY_SIZE = 4096 // 续传校验前 4KB
 
     // 远程文件大小
-    let stat: any
+    let stat: Stats
     try {
       stat = await sftpStat(sftp, remotePath)
     } catch (err) {
@@ -2623,12 +2630,12 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
             partExists = false
           }
         }
-      } catch (err: any) {
+      } catch (err) {
         // ENOENT = 没有 .part，属正常流程；其他错误（校验读的磁盘错误、
         // 远端 4KB 读的网络错误等）原实现一律静默当「无 .part」降级重下，
         // 真实故障无线索 —— 仍走重下（宁可丢进度不可丢数据），但不再无声
-        if (err?.code !== 'ENOENT') {
-          console.warn(`[ssh] .part 续传校验异常，本次按全新下载处理 (${partPath}):`, err?.message ?? err)
+        if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+          console.warn(`[ssh] .part 续传校验异常，本次按全新下载处理 (${partPath}):`, (err as Error)?.message ?? String(err))
         }
       }
 
@@ -2812,7 +2819,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     remotePath: string,
   ): Promise<{ content: string; size: number; readOnly: boolean }> {
     const sftp = this.requireSftp(sshSessionId)
-    const stat: any = await new Promise((resolve, reject) => {
+    const stat: Stats = await new Promise((resolve, reject) => {
       sftp.stat(remotePath, (err, res) => {
         if (err) reject(new Error('获取远程文件信息失败，请检查路径是否存在'))
         else resolve(res)
@@ -2851,7 +2858,7 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
     remotePath: string,
   ): Promise<{ base64: string; size: number }> {
     const sftp = this.requireSftp(sshSessionId)
-    const stat: any = await new Promise((resolve, reject) => {
+    const stat: Stats = await new Promise((resolve, reject) => {
       sftp.stat(remotePath, (err, res) => {
         if (err) reject(new Error('获取远程文件信息失败，请检查路径是否存在'))
         else resolve(res)
@@ -2910,11 +2917,12 @@ async sftpDelete(sshSessionId: string, remotePath: string): Promise<void> {
         await sftpUnlink(sftp, remotePath)
         await sftpRename(sftp, partPath, remotePath)
       }
-    } catch (err: any) {
+    } catch (err) {
       // 失败不留半截 .part 迷惑下一次保存（编辑器的下次保存是全量内容，
       // 与上传侧「保留 .part 供续传」的取舍不同）
       await sftpUnlink(sftp, partPath).catch(() => {})
-      throw new Error(err?.message ? `写入远程文件失败：${err.message}` : '写入远程文件失败，请检查是否有写入权限')
+      const message = (err as Error)?.message
+      throw new Error(message ? `写入远程文件失败：${message}` : '写入远程文件失败，请检查是否有写入权限')
     }
   }
 

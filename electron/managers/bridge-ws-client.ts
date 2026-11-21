@@ -40,7 +40,15 @@ declare const WebSocket: new (url: string) => WsSocket
 import type { DispatchResult } from './electron-bridge'
 
 /** 后端 req 帧 → 主进程业务实现的注入点（ElectronBridge.dispatch） */
-type BridgeDispatch = (op: string, payload: Record<string, any>) => Promise<DispatchResult>
+type BridgeDispatch = (op: string, payload: Record<string, unknown>) => Promise<DispatchResult>
+
+/** WS 帧的最小开放形状：type 决定分发，req 帧带 id/op/payload；未知帧忽略 */
+interface BridgeFrame {
+  type?: unknown
+  id?: unknown
+  op?: unknown
+  payload?: unknown
+}
 
 export class BridgeWsClient {
   private ws: WsSocket | null = null
@@ -125,7 +133,7 @@ export class BridgeWsClient {
     }
 
     ws.onmessage = (ev) => {
-      let msg: any
+      let msg: BridgeFrame
       try {
         msg = JSON.parse(String(ev.data))
       } catch {
@@ -140,7 +148,7 @@ export class BridgeWsClient {
           this.missedPongs = 0
           break
         case 'req':
-          void this.handleReq(msg.id, msg.op, (msg.payload ?? {}) as Record<string, any>)
+          void this.handleReq(msg.id, typeof msg.op === 'string' ? msg.op : '', ((msg.payload ?? {}) as Record<string, unknown>))
           break
         // 后端不主动发 res/ping（ping 方向为主→后端）；未知帧忽略（前向兼容）
       }
@@ -302,7 +310,7 @@ export class BridgeWsClient {
    * 回 res 帧。id 原样带回；异常统一归为 500，绝不吞掉不回复（否则后端
    * 侧请求会挂到超时）。
    */
-  private async handleReq(id: unknown, op: string, payload: Record<string, any>): Promise<void> {
+  private async handleReq(id: unknown, op: string, payload: Record<string, unknown>): Promise<void> {
     let status = 200
     let body: unknown
     try {

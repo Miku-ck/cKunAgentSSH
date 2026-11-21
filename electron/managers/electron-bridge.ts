@@ -115,7 +115,7 @@ export class ElectronBridge {
    *
    * 返回 {status, body}：status 为 HTTP 风格状态码，body 与后端预期的响应体同构。
    */
-  async dispatch(op: BridgeOp, data: Record<string, any>): Promise<DispatchResult> {
+  async dispatch(op: BridgeOp, data: Record<string, unknown>): Promise<DispatchResult> {
     data = data || {}
     try {
       switch (op) {
@@ -135,8 +135,9 @@ export class ElectronBridge {
             }
             execId = data.execId
           }
-          // 钳制 timeout 到安全范围
-          const timeout = Math.max(MIN_TIMEOUT, Math.min(MAX_TIMEOUT, data.timeout ?? 30))
+          // 钳制 timeout 到安全范围（后端可能下发字符串/缺失，收窄到数字再钳）
+          const timeoutRaw = typeof data.timeout === 'number' ? data.timeout : 30
+          const timeout = Math.max(MIN_TIMEOUT, Math.min(MAX_TIMEOUT, timeoutRaw))
           const { stdout, stderr, exitCode } = await this.sshManager.execCommandWithExitCode(
             data.sshSessionId,
             data.command,
@@ -265,15 +266,17 @@ export class ElectronBridge {
         default:
           return { status: 404, body: { success: false, error: 'Not found' } }
       }
-    } catch (err: any) {
+    } catch (err) {
       // 原实现把 err 整个吞掉，500 根因（execCommandWithExitCode 抛错、
       // 会话丢失等）永远查不到；记日志后再回 500。
       // 只记 message + 去首行的堆栈帧：err（尤其首行）可能内嵌用户 exec 命令
       // 全文，整体落 main.log 会泄敏；后续帧只有文件/行号，保住出错定位能力
+      const message = (err as Error)?.message
+      const stack = (err as Error)?.stack
       console.error(
         `[ElectronBridge] ${op} 处理失败:`,
-        err?.message || err,
-        typeof err?.stack === 'string' ? err.stack.split('\n').slice(1).join('\n') : '',
+        message || String(err),
+        typeof stack === 'string' ? stack.split('\n').slice(1).join('\n') : '',
       )
       // S0-09：这条腿原先把任意失败折成同一句「请求处理失败，请稍后重试」，而
       // 渲染层那条腿（main.ts handleTrusted → toIpcTransport）保住了 code ——
@@ -283,15 +286,17 @@ export class ElectronBridge {
       // 这里把已分类的 code 与它的用户文案带回响应体：error 走共享文案表
       // （成员串本就是设计给用户看的中文），UNKNOWN 除外 —— 那一支的 detail
       // 是原始技术串（getaddrinfo / Cannot parse privateKey），不该端给用户。
-      const code: SSHErrorCode | undefined = isSSHErrorCode(err?.code) ? err.code : undefined
-      const friendly = code && code !== 'UNKNOWN' ? toFriendlyZh(code, err?.detail) : undefined
-      bridgeLog(`ERROR ${op}: ${err?.message || err}${code ? ` [${code}]` : ''}`)
+      const e = err as { code?: unknown; detail?: unknown; message?: unknown; retryable?: unknown } | null | undefined
+      const code: SSHErrorCode | undefined = isSSHErrorCode(e?.code) ? e.code : undefined
+      const detail = typeof e?.detail === 'string' ? e.detail : undefined
+      const friendly = code && code !== 'UNKNOWN' ? toFriendlyZh(code, detail) : undefined
+      bridgeLog(`ERROR ${op}: ${typeof e?.message === 'string' && e.message ? e.message : String(err)}${code ? ` [${code}]` : ''}`)
       return {
         status: 500,
         body: {
           success: false,
           error: friendly || '请求处理失败，请稍后重试',
-          ...(code ? { code, retryable: err?.retryable === true } : {}),
+          ...(code ? { code, retryable: e?.retryable === true } : {}),
         },
       }
     }
