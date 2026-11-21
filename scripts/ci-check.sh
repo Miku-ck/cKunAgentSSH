@@ -38,6 +38,10 @@ run "前端 typecheck (vue-tsc)" npm run --silent typecheck
 # 2b. 显式 any 门禁：只降不升，防止类型系统被掏空（见 AGENTS.md）
 run "前端 any 门禁" node scripts/check-any.mjs
 
+# 2c. 文件行数门禁：新增生产文件 ≤800 行，存量超限文件禁止增行（见 AGENTS.md「单文件单域」）。
+#     基线 scripts/file-size-baseline.json 由 `node scripts/check-file-size.mjs --init` 生成。
+run "文件行数门禁" node scripts/check-file-size.mjs
+
 # 3. 前端单测
 run "前端单测 (vitest)" npm run --silent test
 
