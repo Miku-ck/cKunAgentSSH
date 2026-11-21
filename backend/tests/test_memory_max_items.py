@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 import database as db
+import db.settings as db_settings
 from agent.memory import mstore
 
 
@@ -48,8 +49,10 @@ def memdb():
 
 
 def _read(monkeypatch, raw):
+    # get_memory_settings 与 get_app_setting 同在 db/settings.py（P2-3 收敛），
+    # 模块内调用走本模块全局名，故打桩要落在 db.settings 而非 database 再导出名。
     monkeypatch.setattr(
-        db, "get_app_setting",
+        db_settings, "get_app_setting",
         lambda key, default="": raw if key == "memory.max_items" else default,
     )
     return db.get_memory_settings()["max_items"]

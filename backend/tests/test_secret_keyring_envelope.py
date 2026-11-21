@@ -7,13 +7,11 @@
   绝不静默降级成明文落库（DB 行不存在）；
 - 诚实读取：keyring 不可用/条目缺失 → 空串 + 留痕，绝不把句柄当 key 回给调用方；
 - 旧值兼容：无前缀旧明文行与 dpapi 信封行读取行为不变；
-- 双份实现 parity：database.py 与 db/_secrets.py 的凭据信封函数 AST 一致
-  （迁移过渡期副本纪律，同 test_db_schedules_parity 口径）。
+- 收敛后同一对象：database.py 不再持有副本，凭据信封函数与 db/_secrets.py 是
+  同一对象（P2-3 收敛；防「再抄一份」的回归）。
 
 运行: python -m pytest backend/tests/test_secret_keyring_envelope.py -v
 """
-import ast
-import inspect
 import sys
 
 import pytest
@@ -50,15 +48,17 @@ def _fake_keyring(monkeypatch, *, fail_import=False):
     def fake_get(username):
         return store.get(username)
 
-    monkeypatch.setattr(db, "_keyring_import", fake_import)
-    monkeypatch.setattr(db, "_keyring_set", fake_set)
-    monkeypatch.setattr(db, "_keyring_get", fake_get)
-    monkeypatch.setattr(db, "_keyring_delete", lambda username: store.pop(username, None))
+    # 凭据信封域已收敛到 db/_secrets.py（P2-3）：protect_secret 的函数体引用
+    # 本模块全局名，打桩要落在 db._secrets 上（database 的再导出名不穿透）。
+    monkeypatch.setattr(secrets_mod, "_keyring_import", fake_import)
+    monkeypatch.setattr(secrets_mod, "_keyring_set", fake_set)
+    monkeypatch.setattr(secrets_mod, "_keyring_get", fake_get)
+    monkeypatch.setattr(secrets_mod, "_keyring_delete", lambda username: store.pop(username, None))
     return store, written
 
 
 def _as_non_windows(monkeypatch):
-    monkeypatch.setattr(db, "_SECRET_PROTECTION_PLATFORM", "linux")
+    monkeypatch.setattr(secrets_mod, "_SECRET_PROTECTION_PLATFORM", "linux")
 
 
 # ── 写侧：非 Windows + keyring 可用 → 句柄信封，明文不落库 ────────────────────
@@ -133,7 +133,7 @@ def test_keyring_backend_unavailable_raises(tmp_workspace, monkeypatch):
         def get_password(username):
             return None
 
-    monkeypatch.setattr(db, "_keyring_import", lambda: (_Keyring(), _Errors))
+    monkeypatch.setattr(secrets_mod, "_keyring_import", lambda: (_Keyring(), _Errors))
     with pytest.raises(db.SecretStorageError):
         db.protect_secret(KEY)
 
@@ -143,11 +143,11 @@ def test_keyring_backend_unavailable_raises(tmp_workspace, monkeypatch):
 def test_read_keyring_handle_unavailable_returns_empty(monkeypatch):
     """句柄在但 keyring 不可用/条目缺失 → 空串 + 不抛：报「未配置」引导重填。"""
     _as_non_windows(monkeypatch)
-    monkeypatch.setattr(db, "_keyring_import",
+    monkeypatch.setattr(secrets_mod, "_keyring_import",
                         lambda: (_ for _ in ()).throw(ImportError("gone")))
     assert db.unprotect_secret(db._KEYRING_ENVELOPE_PREFIX + "abc123") == ""
 
-    monkeypatch.setattr(db, "_keyring_get", lambda username: None)
+    monkeypatch.setattr(secrets_mod, "_keyring_get", lambda username: None)
     assert db.unprotect_secret(db._KEYRING_ENVELOPE_PREFIX + "abc123") == ""
 
 
@@ -166,7 +166,7 @@ def test_win32_platform_ignores_keyring_path(monkeypatch):
     """win32 平台写侧仍走 DPAPI，不触 keyring（发布产物不含 keyring 也正常）。"""
     if sys.platform != "win32":
         pytest.skip("仅 Windows")
-    monkeypatch.delattr(db, "_keyring_set", raising=False)
+    monkeypatch.delattr(secrets_mod, "_keyring_set", raising=False)
     sealed = db.protect_secret(KEY)
     assert sealed.startswith(db._SECRET_ENVELOPE_PREFIX)
     assert db.unprotect_secret(sealed) == KEY
@@ -174,22 +174,16 @@ def test_win32_platform_ignores_keyring_path(monkeypatch):
 
 # ── 双份实现 parity：database.py 与 db/_secrets.py 必须同步 ────────────────────
 
-def test_secrets_functions_ast_parity():
-    """迁移过渡期副本纪律：凭据信封相关函数在两份实现里 AST 逐字一致。"""
-    def _top_functions(module):
-        tree = ast.parse(inspect.getsource(module))
-        return {
-            node.name: ast.dump(node)
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
+def test_secrets_functions_are_shared():
+    """P2-3 收敛后 database.py 不再持有副本：同名符号必须是 db/_secrets 的同一对象。
 
-    old_funcs = _top_functions(db)
-    new_funcs = _top_functions(secrets_mod)
+    过渡期的 AST parity（两份实现逐字一致）在收敛为再导出后失去意义 —— 现在要
+    防的回归是「有人在 database.py 里再抄一份」，同一对象断言即可钉死。
+    """
     for name in ("protect_secret", "unprotect_secret", "_dpapi_transform",
                  "_keyring_import", "_keyring_set", "_keyring_get", "_keyring_delete"):
-        assert old_funcs.get(name) == new_funcs.get(name), (
-            f"{name} 在 database.py 与 db/_secrets.py 的实现不一致：副本必须同步修改")
+        assert getattr(db, name) is getattr(secrets_mod, name), (
+            f"{name} 不是 db/_secrets.py 的再导出（疑似出现了第二份副本）")
     # 异常类型语义一致（可被调用方现有的 OSError 捕获路径接住）
     assert issubclass(db.SecretStorageError, OSError)
     assert issubclass(secrets_mod.SecretStorageError, OSError)

@@ -14,6 +14,7 @@ import types
 import pytest
 
 import database as db
+import db.settings as db_settings
 from agent.tools.builtin import ops_job
 from agent.tools.builtin.ops_job import JobEntry, JobManager, JobRunTool
 
@@ -82,8 +83,10 @@ async def test_remote_launch_takes_a_fresh_id_not_the_running_one(monkeypatch):
 
 # ── 整型设置读取：脏行不炸接口 ──────────────────────────────
 def _stub_settings(monkeypatch, values: dict):
+    # 设置读取域已收敛到 db/settings.py（P2-3），模块内互相调用走本模块全局名；
+    # 打桩落在 database 的再导出名上不会穿透，故直接打 db.settings。
     monkeypatch.setattr(
-        db, "get_app_setting",
+        db_settings, "get_app_setting",
         lambda key, default="": values.get(key, default if default is not None else ""),
     )
 

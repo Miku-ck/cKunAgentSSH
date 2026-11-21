@@ -6,9 +6,7 @@ connect/close 的开销；close() 被包装为 rollback-and-keep-alive，
 现有代码的 `finally: conn.close()` 模式无需任何改动。
 """
 import asyncio
-import base64
 import sqlite3
-import sys
 import uuid
 import json
 import logging
@@ -1917,613 +1915,60 @@ def list_disabled_tools(mode: str = "all") -> list[str]:
 
 # skills 全列（四处查询 + 一处 INSERT 共用）。与 _MC_COLS/_SCHEDULE_COLS 同族：
 # 各处各抄一份字面量时，加一列只会改到其中几处，其余读法永久拿不到那一列。
-_SKILLS_COLS = (
-    "id, name, slug, description, category, system_prompt, source, "
-    "is_builtin, enabled, priority, trigger_words, created_at, updated_at"
+# ── 技能 CRUD（P0 阶段 3 复制到 db/skills.py）（P2-3 收敛，函数签名与入口不变）──
+from db.skills import (  # noqa: F401  (re-export)
+    list_skills,
+    list_all_skills,
+    count_skills_by_source,
+    get_skill,
+    get_skill_by_slug,
+    create_skill,
+    update_skill_enabled,
+    upsert_builtin_skill,
+    list_builtin_skill_slugs,
+    delete_builtin_skill_by_slug,
+    delete_skill,
+    list_disabled_skills_for_mode,
+    upsert_skill_mode_config,
+    _SKILLS_COLS,
 )
 
-
-def list_skills(limit: int = 200, offset: int = 0) -> list[dict]:
-    """获取所有技能列表
-
-    updated_at 只到秒，同批导入/批量启停的技能会整片并列；带 id 兜底键才让
-    LIMIT/OFFSET 翻页可重复（否则同一条技能印在两页上、另一条翻不到）。
-    """
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            f"SELECT {_SKILLS_COLS} "
-            "FROM skills ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
-            (limit, offset),
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def list_all_skills() -> list[dict]:
-    """获取所有技能（含 disabled），用于注册表缓存"""
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            f"SELECT {_SKILLS_COLS} "
-            "FROM skills ORDER BY priority DESC, updated_at DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def count_skills_by_source(source: str) -> int:
-    """统计指定来源的技能数（审查：替代 list_skills(limit=9999) 全量加载只计数）"""
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM skills WHERE source = ?",
-            (source,),
-        ).fetchone()
-        return int(row["cnt"]) if row else 0
-    finally:
-        conn.close()
-
-
-def get_skill(skill_id: str) -> Optional[dict]:
-    """按 ID 获取单个技能"""
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            f"SELECT {_SKILLS_COLS} "
-            "FROM skills WHERE id = ?",
-            (skill_id,),
-        ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def get_skill_by_slug(slug: str) -> Optional[dict]:
-    """按 slug 获取单个技能"""
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            f"SELECT {_SKILLS_COLS} "
-            "FROM skills WHERE slug = ?",
-            (slug,),
-        ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def create_skill(
-    name: str,
-    slug: str,
-    system_prompt: str,
-    description: str = "",
-    category: str = "",
-    source: str = "manual",
-    is_builtin: int = 0,
-    enabled: int = 0,
-    priority: int = 0,
-    trigger_words: Optional[list] = None,
-) -> dict:
-    """创建技能，slug 冲突时自动追加后缀"""
-    conn = _get_conn()
-    try:
-        original_slug = slug
-        suffix = 1
-        while conn.execute(
-            "SELECT 1 FROM skills WHERE slug = ?", (slug,)
-        ).fetchone() is not None:
-            slug = f"{original_slug}-{suffix}"
-            suffix += 1
-
-        sid = _new_id()
-        now = _now()
-        # 触发词列表序列化为 JSON 字符串存储，与读取路径（TEXT 列）保持一致
-        trigger_words_json = (
-            json.dumps(trigger_words, ensure_ascii=False) if trigger_words else "[]"
-        )
-        conn.execute(
-            f"INSERT INTO skills ({_SKILLS_COLS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (sid, name, slug, description, category, system_prompt, source, is_builtin, enabled, priority, trigger_words_json, now, now),
-        )
-        conn.commit()
-        return {
-            "id": sid,
-            "name": name,
-            "slug": slug,
-            "description": description,
-            "category": category,
-            "system_prompt": system_prompt,
-            "source": source,
-            "is_builtin": is_builtin,
-            "enabled": enabled,
-            "priority": priority,
-            "trigger_words": trigger_words_json,
-            "created_at": now,
-            "updated_at": now,
-        }
-    finally:
-        conn.close()
-
-
-def update_skill_enabled(skill_id: str, enabled: int) -> Optional[dict]:
-    """更新技能启用状态"""
-    now = _now()
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "UPDATE skills SET enabled = ?, updated_at = ? WHERE id = ?",
-            (enabled, now, skill_id),
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            return None
-        return {"id": skill_id, "enabled": enabled, "updated_at": now}
-    finally:
-        conn.close()
-
-
-def upsert_builtin_skill(
-    name: str,
-    slug: str,
-    system_prompt: str,
-    description: str = "",
-    category: str = "",
-    trigger_words: Optional[list] = None,
-    enabled_on_insert: int = 0,
-) -> dict:
-    """同步内置技能到数据库（按 slug + is_builtin=1 upsert）
-
-    与 create_skill 的区别：slug 冲突时更新而非追加后缀，
-    避免每次同步都新增重复记录。保留用户已设置的 enabled 状态；
-    enabled_on_insert 仅控制首次插入的默认启用值（包内运维技能 = 1 开箱可用）。
-    """
-    conn = _get_conn()
-    try:
-        now = _now()
-        trigger_words_json = (
-            json.dumps(trigger_words, ensure_ascii=False) if trigger_words else "[]"
-        )
-        existing = conn.execute(
-            "SELECT id, enabled FROM skills WHERE slug = ? AND is_builtin = 1",
-            (slug,),
-        ).fetchone()
-        if existing:
-            # 更新内容字段，保留 enabled（用户可自定义启用状态）
-            conn.execute(
-                "UPDATE skills SET name = ?, system_prompt = ?, description = ?, "
-                "category = ?, trigger_words = ?, updated_at = ? WHERE id = ?",
-                (name, system_prompt, description, category, trigger_words_json, now, existing["id"]),
-            )
-            conn.commit()
-            return {"id": existing["id"], "slug": slug, "updated": True}
-        else:
-            sid = _new_id()
-            conn.execute(
-                "INSERT INTO skills (id, name, slug, description, category, system_prompt, "
-                "source, is_builtin, enabled, priority, trigger_words, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'builtin', 1, ?, 0, ?, ?, ?)",
-                (sid, name, slug, description, category, system_prompt, enabled_on_insert, trigger_words_json, now, now),
-            )
-            conn.commit()
-            return {"id": sid, "slug": slug, "updated": False}
-    finally:
-        conn.close()
-
-
-def list_builtin_skill_slugs() -> list[str]:
-    """返回数据库中所有内置技能的 slug 列表（用于孤儿清理）"""
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT slug FROM skills WHERE is_builtin = 1"
-        ).fetchall()
-        return [r["slug"] for r in rows]
-    finally:
-        conn.close()
-
-
-def delete_builtin_skill_by_slug(slug: str) -> bool:
-    """按 slug 删除内置技能（用于孤儿清理：文件系统已删除的技能）"""
-    conn = _get_conn()
-    try:
-        # skill_mode_config 没有指向 skills 的外键，不显式清就会每次删除残留一行
-        # （GET /skills 与每次按 mode 过滤都全表扫它）
-        conn.execute(
-            "DELETE FROM skill_mode_config WHERE skill_id IN "
-            "(SELECT id FROM skills WHERE slug = ? AND is_builtin = 1)",
-            (slug,),
-        )
-        cur = conn.execute(
-            "DELETE FROM skills WHERE slug = ? AND is_builtin = 1", (slug,)
-        )
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
-
-
-def delete_skill(skill_id: str) -> bool:
-    """删除技能（内置技能不可删除，由 is_builtin 控制）"""
-    conn = _get_conn()
-    try:
-        cur = conn.execute("DELETE FROM skills WHERE id = ? AND is_builtin = 0", (skill_id,))
-        if cur.rowcount > 0:
-            conn.execute("DELETE FROM skill_mode_config WHERE skill_id = ?", (skill_id,))
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
-
-
-# ── 技能按模式隔离配置 CRUD ──
-
-
-def list_disabled_skills_for_mode(mode: str) -> list[str]:
-    """返回该模式下被禁用（enabled=0）的技能 ID 列表"""
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT skill_id FROM skill_mode_config WHERE mode = ? AND enabled = 0",
-            (mode,),
-        ).fetchall()
-        return [r["skill_id"] for r in rows]
-    finally:
-        conn.close()
-
-
-def upsert_skill_mode_config(skill_id: str, mode: str, enabled: int) -> dict:
-    """插入或更新某技能在某模式下的启用状态"""
-    now = _now()
-    conn = _get_conn()
-    try:
-        cfg_id = _new_id()
-        conn.execute(
-            "INSERT INTO skill_mode_config (id, skill_id, mode, enabled, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(skill_id, mode) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at",
-            (cfg_id, skill_id, mode, 1 if enabled else 0, now, now),
-        )
-        conn.commit()
-        # ON CONFLICT 命中时保留的是既有行 id，新生成的 cfg_id 并不存在于表中 —
-        # 与 upsert_tool_config 同样重查，避免把幽灵 id 返回给调用方
-        row = conn.execute(
-            "SELECT id FROM skill_mode_config WHERE skill_id = ? AND mode = ?",
-            (skill_id, mode),
-        ).fetchone()
-        return {
-            "id": row["id"] if row else cfg_id,
-            "skill_id": skill_id,
-            "mode": mode,
-            "enabled": 1 if enabled else 0,
-            "updated_at": now,
-        }
-    finally:
-        conn.close()
 
 
 # ── 专家（Expert）CRUD ─────────────────────────────────────────────────
-_EXPERTS_COLS = (
-    "id, slug, name, description, identity_prompt, model_id, tool_names_json, "
-    "plugin_ids_json, skill_ids_json, permission_ceiling, max_iterations, "
-    "memory_scope, enabled, is_builtin, revision, created_at, updated_at"
+# ── 专家 CRUD（P0 阶段 3 复制到 db/experts.py）（P2-3 收敛，函数签名与入口不变）──
+from db.experts import (  # noqa: F401  (re-export)
+    _validate_expert_slug,
+    list_experts,
+    get_expert,
+    get_expert_by_slug,
+    create_expert,
+    update_expert,
+    set_expert_enabled,
+    delete_expert,
+    _EXPERTS_COLS,
+    _EXPERT_WRITABLE_FIELDS,
 )
 
-# 只允许这些字段被写入。slug 不可改（归因与插件命名都引用它）；
-# enabled 走 set_expert_enabled（内置专家禁止禁用）；revision 只能由更新自增。
-_EXPERT_WRITABLE_FIELDS = frozenset({
-    "name", "description", "identity_prompt", "model_id", "tool_names_json",
-    "plugin_ids_json", "skill_ids_json", "permission_ceiling", "max_iterations",
-    "memory_scope",
-})
-
-
-def _validate_expert_slug(slug: str) -> str:
-    """slug 会进入 URL 与插件工具命名空间，只允许 ASCII 小写字母/数字/-/_。"""
-    slug = (slug or "").strip().lower()
-    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
-    if not slug or len(slug) > 64 or not set(slug) <= allowed or not slug[0].isalnum():
-        raise ValueError("slug 须为 1-64 位小写字母/数字/-/_，且以字母或数字开头")
-    return slug
-
-
-def list_experts(include_disabled: bool = True) -> list[dict]:
-    """专家列表：内置在前，其余按最近更新排序（id 兜底保证翻页可重复）。"""
-    conn = _get_conn()
-    try:
-        sql = f"SELECT {_EXPERTS_COLS} FROM experts"
-        params: tuple = ()
-        if not include_disabled:
-            sql += " WHERE enabled = 1"
-        sql += " ORDER BY is_builtin DESC, updated_at DESC, id DESC"
-        rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def get_expert(expert_id: str) -> Optional[dict]:
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            f"SELECT {_EXPERTS_COLS} FROM experts WHERE id = ?", (expert_id,),
-        ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def get_expert_by_slug(slug: str) -> Optional[dict]:
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            f"SELECT {_EXPERTS_COLS} FROM experts WHERE slug = ?", (slug,),
-        ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def create_expert(slug: str, name: str, **fields) -> dict:
-    """新建专家。默认全继承 + 无插件，与 general_ops 同一安全起点。"""
-    unknown = set(fields) - _EXPERT_WRITABLE_FIELDS
-    if unknown:
-        raise ValueError(f"不支持的专家字段: {sorted(unknown)}")
-    slug = _validate_expert_slug(slug)
-    if not (name or "").strip():
-        raise ValueError("专家名称不能为空")
-    expert_id = _new_id()
-    # 默认值与显式字段合并成一份 dict：复制专家会把源行的 plugin_ids_json
-    # （可能是 NULL）传进来，若仍用「默认列 + 追加列」两串拼接会出现重复列名。
-    values = {
-        "id": expert_id, "slug": slug, "name": name.strip(),
-        "identity_prompt": "", "plugin_ids_json": "[]",
-        "permission_ceiling": "inherit", "memory_scope": "inherit",
-        "enabled": 1, "is_builtin": 0, "revision": 1,
-    }
-    values.update(fields)
-    cols, vals = list(values), [values[k] for k in values]
-    conn = _get_conn()
-    try:
-        conn.execute(
-            f"INSERT INTO experts ({', '.join(cols)}) "
-            f"VALUES ({', '.join(['?'] * len(cols))})",
-            vals,
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return get_expert(expert_id)
-
-
-def update_expert(expert_id: str, **fields) -> Optional[dict]:
-    """更新专家配置。任何变更都 revision+1 —— 快照靠它区分同名专家的不同代际。"""
-    unknown = set(fields) - _EXPERT_WRITABLE_FIELDS
-    if unknown:
-        raise ValueError(f"不支持的专家字段: {sorted(unknown)}")
-    if not fields:
-        return get_expert(expert_id)
-    sets, vals = [], []
-    for key, value in fields.items():
-        _assert_sql_ident(key)
-        sets.append(f"{key} = ?")
-        vals.append(value)
-    sets.append("revision = revision + 1")
-    sets.append("updated_at = datetime('now')")
-    vals.append(expert_id)
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            f"UPDATE experts SET {', '.join(sets)} WHERE id = ?", vals,
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            return None
-    finally:
-        conn.close()
-    return get_expert(expert_id)
-
-
-def set_expert_enabled(expert_id: str, enabled: int) -> Optional[dict]:
-    """启停专家。内置默认专家不可禁用 —— 它是未选专家时的系统兜底。"""
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "UPDATE experts SET enabled = ?, updated_at = datetime('now') "
-            "WHERE id = ? AND is_builtin = 0",
-            (1 if enabled else 0, expert_id),
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            return None
-    finally:
-        conn.close()
-    return get_expert(expert_id)
-
-
-def delete_expert(expert_id: str) -> bool:
-    """删除专家。内置保护同时落在 SQL 层，路由漏判也删不掉默认专家。"""
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "DELETE FROM experts WHERE id = ? AND is_builtin = 0", (expert_id,),
-        )
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
 
 
 # ── 插件（MCP）CRUD ───────────────────────────────────────────────────
-_PLUGINS_PUBLIC_COLS = (
-    "id, slug, name, description, command, args_json, cwd, config_rev, "
-    "enabled, consented_at, timeout_s, tools_json, readonly_tools_json, "
-    "created_at, updated_at"
+# ── 插件 CRUD（P0 阶段 3 复制到 db/plugins.py）（P2-3 收敛，函数签名与入口不变）──
+from db.plugins import (  # noqa: F401  (re-export)
+    list_plugins,
+    get_plugin,
+    get_plugin_by_slug,
+    create_plugin,
+    update_plugin_config,
+    consent_plugin,
+    set_plugin_enabled,
+    set_plugin_tools,
+    set_plugin_readonly,
+    delete_plugin,
+    _PLUGINS_PUBLIC_COLS,
+    _PLUGIN_CONFIG_FIELDS,
 )
-_PLUGIN_CONFIG_FIELDS = frozenset({
-    "name", "description", "command", "args_json", "cwd",
-    "env_ciphertext", "timeout_s",
-})
 
-
-def list_plugins(include_env: bool = False) -> list[dict]:
-    """插件列表。默认不返回 env_ciphertext —— 它不该出现在任何 API 响应里。"""
-    cols = _PLUGINS_PUBLIC_COLS + (", env_ciphertext" if include_env else "")
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            f"SELECT {cols} FROM plugins ORDER BY created_at DESC, id DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def get_plugin(plugin_id: str, include_env: bool = False) -> Optional[dict]:
-    cols = _PLUGINS_PUBLIC_COLS + (", env_ciphertext" if include_env else "")
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            f"SELECT {cols} FROM plugins WHERE id = ?", (plugin_id,),
-        ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def get_plugin_by_slug(slug: str, include_env: bool = False) -> Optional[dict]:
-    cols = _PLUGINS_PUBLIC_COLS + (", env_ciphertext" if include_env else "")
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            f"SELECT {cols} FROM plugins WHERE slug = ?", (slug,),
-        ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def create_plugin(slug: str, name: str, command: str, **fields) -> dict:
-    """安装插件。保存即停用、未确认 —— 未走同意流绝不启动子进程。"""
-    unknown = set(fields) - _PLUGIN_CONFIG_FIELDS
-    if unknown:
-        raise ValueError(f"不支持的插件字段: {sorted(unknown)}")
-    slug = _validate_expert_slug(slug)
-    if not (command or "").strip():
-        raise ValueError("启动程序不能为空")
-    values = {
-        "id": _new_id(), "slug": slug, "name": name.strip(),
-        "command": command.strip(), "args_json": "[]", "timeout_s": 30,
-        "config_rev": 1, "enabled": 0,
-    }
-    values.update(fields)
-    cols, vals = list(values), [values[k] for k in values]
-    conn = _get_conn()
-    try:
-        conn.execute(
-            f"INSERT INTO plugins ({', '.join(cols)}) "
-            f"VALUES ({', '.join(['?'] * len(cols))})", vals,
-        )
-        conn.commit()
-        return get_plugin(values["id"])
-    finally:
-        conn.close()
-
-
-def update_plugin_config(plugin_id: str, **fields) -> Optional[dict]:
-    """配置变更 = 撤销同意：递增 revision、停用、清空工具快照与只读确认。"""
-    unknown = set(fields) - _PLUGIN_CONFIG_FIELDS
-    if unknown:
-        raise ValueError(f"不支持的插件字段: {sorted(unknown)}")
-    sets = []
-    vals = []
-    for key, value in fields.items():
-        _assert_sql_ident(key)
-        sets.append(f"{key} = ?")
-        vals.append(value)
-    sets += [
-        "config_rev = config_rev + 1", "enabled = 0", "consented_at = NULL",
-        "tools_json = '[]'", "readonly_tools_json = '[]'",
-        "updated_at = datetime('now')",
-    ]
-    vals.append(plugin_id)
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            f"UPDATE plugins SET {', '.join(sets)} WHERE id = ?", vals,
-        )
-        conn.commit()
-        return get_plugin(plugin_id) if cur.rowcount else None
-    finally:
-        conn.close()
-
-
-def consent_plugin(plugin_id: str) -> Optional[dict]:
-    """用户确认后启用。确认时刻由服务端写入，客户端无法伪造。"""
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "UPDATE plugins SET enabled = 1, consented_at = datetime('now'), "
-            "updated_at = datetime('now') WHERE id = ?", (plugin_id,),
-        )
-        conn.commit()
-        return get_plugin(plugin_id) if cur.rowcount else None
-    finally:
-        conn.close()
-
-
-def set_plugin_enabled(plugin_id: str, enabled: int) -> Optional[dict]:
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "UPDATE plugins SET enabled = ?, updated_at = datetime('now') "
-            "WHERE id = ?", (1 if enabled else 0, plugin_id),
-        )
-        conn.commit()
-        return get_plugin(plugin_id) if cur.rowcount else None
-    finally:
-        conn.close()
-
-
-def set_plugin_tools(plugin_id: str, tools: list) -> Optional[dict]:
-    import json as _json
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "UPDATE plugins SET tools_json = ?, updated_at = datetime('now') WHERE id = ?",
-            (_json.dumps(tools, ensure_ascii=False), plugin_id),
-        )
-        conn.commit()
-        return get_plugin(plugin_id) if cur.rowcount else None
-    finally:
-        conn.close()
-
-
-def set_plugin_readonly(plugin_id: str, names: list) -> Optional[dict]:
-    import json as _json
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "UPDATE plugins SET readonly_tools_json = ?, updated_at = datetime('now') "
-            "WHERE id = ?", (_json.dumps(list(names), ensure_ascii=False), plugin_id),
-        )
-        conn.commit()
-        return get_plugin(plugin_id) if cur.rowcount else None
-    finally:
-        conn.close()
-
-
-def delete_plugin(plugin_id: str) -> bool:
-    conn = _get_conn()
-    try:
-        cur = conn.execute("DELETE FROM plugins WHERE id = ?", (plugin_id,))
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
 
 
 # ── 模型配置 CRUD ──
@@ -2539,171 +1984,24 @@ def delete_plugin(plugin_id: str) -> bool:
 # （历史行兼容，该值下次经写入侧保存时自动升级为信封）。
 # 原子性口径：本信封只作用于 SQLite 行值，落库走单条 INSERT/UPDATE 事务 ——
 # 不引入任何设置文件写盘，CONTEXT.md「半写损坏」的 tmp+rename 由 DB 事务天然保证。
-_SECRET_ENVELOPE_PREFIX = "dpapi:v1:"
-_KEYRING_ENVELOPE_PREFIX = "keyring:v1:"
-# keyring 条目命名：service 固定常量；username 带自描述版本前缀 + 随机句柄。
-_KEYRING_SERVICE = "cKunAgentSSH.secrets"
-_KEYRING_USERNAME_PREFIX = "kr1:"
-# 加密平台开关（测试可改写以模拟非 Windows 路径）；仅 win32 启用 DPAPI。
-_SECRET_PROTECTION_PLATFORM = "win32"
+# ── 凭据信封 / 系统凭据库（P0 阶段 3 复制到 db/_secrets.py）（P2-3 收敛，函数签名与入口不变）──
+from db._secrets import (  # noqa: F401  (re-export)
+    SecretStorageError,
+    _keyring_import,
+    _keyring_set,
+    _keyring_get,
+    _keyring_delete,
+    _dpapi_transform,
+    protect_secret,
+    unprotect_secret,
+    _KEYRING_ENVELOPE_PREFIX,
+    _KEYRING_SERVICE,
+    _KEYRING_USERNAME_PREFIX,
+    _SECRET_ENVELOPE_PREFIX,
+    _SECRET_PROTECTION_PLATFORM,
+    __all__,
+)
 
-
-class SecretStorageError(OSError):
-    """系统凭据库不可用或写入失败。
-
-    继承 OSError：调用方（模型保存 / Tavily 保存）现有的 OSError 失败路径
-    无需改动即可接住。语义是 fail-closed —— 本次保存显式失败，绝不静默
-    降级成明文落库。
-    """
-
-
-# ── keyring 间接层（收进三个函数，测试 monkeypatch 这里即可模拟）──────────────
-
-def _keyring_import():
-    """惰性导入 keyring；缺失时抛 ImportError，由调用方转为 SecretStorageError。"""
-    import keyring  # noqa: F401 — 仅探测可用性
-    from keyring import errors as _keyring_errors
-    return keyring, _keyring_errors
-
-
-def _keyring_set(username: str, value: str) -> None:
-    """明文写入系统凭据库；不可用/失败一律转 SecretStorageError（fail-closed）。"""
-    try:
-        keyring, errors = _keyring_import()
-    except ImportError as e:
-        raise SecretStorageError(
-            "keyring 库未安装，已拒绝保存密钥；请安装 keyring 并配置系统凭据后端"
-            "（如 Linux 的 SecretService / macOS 钥匙串）") from e
-    try:
-        keyring.set_password(_KEYRING_SERVICE, username, value)
-    except errors.NoKeyringError as e:
-        raise SecretStorageError(
-            "系统凭据库不可用（未安装 keyring 后端），已拒绝保存密钥；"
-            "请安装并配置系统凭据后端（如 Linux 的 SecretService / macOS 钥匙串）") from e
-    except SecretStorageError:
-        raise
-    except Exception as e:
-        raise SecretStorageError(f"系统凭据库写入失败: {e}") from e
-
-
-def _keyring_get(username: str) -> str | None:
-    """读取系统凭据库条目；不可用/失败返回 None（读取侧按「未配置」处理）。"""
-    try:
-        keyring, _ = _keyring_import()
-        return keyring.get_password(_KEYRING_SERVICE, username)
-    except Exception as e:
-        logger.warning("keyring 凭据读取失败，按未配置处理: %s", e)
-        return None
-
-
-def _keyring_delete(username: str) -> None:
-    """尽力删除系统凭据库条目（清除语义的辅助，失败仅留痕不阻断）。"""
-    try:
-        keyring, _ = _keyring_import()
-        keyring.delete_password(_KEYRING_SERVICE, username)
-    except Exception as e:
-        logger.warning("keyring 条目删除失败（句柄 %s…，不影响清除语义）: %s", username[:8], e)
-
-
-def _dpapi_transform(data: bytes, protect: bool) -> bytes:
-    """调 crypt32 的 DPAPI 做当前用户级加解密（仅 Windows）。
-
-    CRYPTPROTECT_UI_FORBIDDEN(0x1)：后端是无人值守的服务进程，绝不允许
-    DPAPI 弹 PIN/确认 UI 卡住请求。两个 ctypes 陷阱（实测 0xc0000374 堆损坏）：
-    - pbData 字段必须是 c_void_p 而不是 c_char_p —— c_char_p 字段读出来的是
-      「按 NUL 截断的副本」，binary 密文被截断不说，拿它调 LocalFree 等于
-      释放一块非堆指针，堆当场损坏；
-    - LocalFree 必须声明 argtypes=[c_void_p] —— 不声明时 Python int（64 位
-      地址）按 c_int 传参，地址被截断成 32 位，同样释放到错误的指针上。
-    """
-    import ctypes
-    from ctypes import wintypes
-
-    class _DATA_BLOB(ctypes.Structure):
-        _fields_ = [
-            ("cbData", wintypes.DWORD),
-            ("pbData", ctypes.c_void_p),
-        ]
-
-    crypt32 = ctypes.windll.crypt32
-    crypt32.CryptProtectData.argtypes = [
-        ctypes.POINTER(_DATA_BLOB), wintypes.LPCWSTR,
-        ctypes.POINTER(_DATA_BLOB), ctypes.c_void_p, ctypes.c_void_p,
-        wintypes.DWORD, ctypes.POINTER(_DATA_BLOB),
-    ]
-    crypt32.CryptProtectData.restype = wintypes.BOOL
-    crypt32.CryptUnprotectData.argtypes = crypt32.CryptProtectData.argtypes
-    crypt32.CryptUnprotectData.restype = wintypes.BOOL
-    kernel32 = ctypes.windll.kernel32
-    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
-    kernel32.LocalFree.restype = ctypes.c_void_p
-
-    blob_in = _DATA_BLOB(len(data), ctypes.cast(ctypes.c_char_p(data), ctypes.c_void_p))
-    blob_out = _DATA_BLOB()
-    if protect:
-        ok = crypt32.CryptProtectData(
-            ctypes.byref(blob_in), None, None, None, None, 0x1, ctypes.byref(blob_out))
-    else:
-        ok = crypt32.CryptUnprotectData(
-            ctypes.byref(blob_in), None, None, None, None, 0x1, ctypes.byref(blob_out))
-    if not ok:
-        raise OSError(
-            f"DPAPI {'加密' if protect else '解密'}失败（WinError {ctypes.GetLastError()}）")
-    try:
-        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
-    finally:
-        kernel32.LocalFree(blob_out.pbData)
-
-
-def protect_secret(value: str) -> str:
-    """机密写入侧：明文 → 信封（win32=DPAPI 密文信封；非 win32=keyring 句柄信封）。
-
-    空值原样返回（空串 = 用户清除密钥的语义，不包信封）；已是任一信封的值不
-    二次包裹（幂等）。加密路径失败向上抛 OSError（win32）或 SecretStorageError
-    （非 win32）：静默降级成明文落盘会把「这次没加密」藏进库，调用方（模型
-    保存/Tavily 保存）应当让这次保存显式失败。
-    """
-    value = value or ""
-    if (not value or value.startswith(_SECRET_ENVELOPE_PREFIX)
-            or value.startswith(_KEYRING_ENVELOPE_PREFIX)):
-        return value
-    if sys.platform == _SECRET_PROTECTION_PLATFORM:
-        blob = _dpapi_transform(value.encode("utf-8"), protect=True)
-        return _SECRET_ENVELOPE_PREFIX + base64.b64encode(blob).decode("ascii")
-    # 非 Windows：DB 行只存随机句柄，明文进系统凭据库（keyring 不可用即抛）
-    handle = uuid.uuid4().hex
-    _keyring_set(_KEYRING_USERNAME_PREFIX + handle, value)
-    return _KEYRING_ENVELOPE_PREFIX + handle
-
-
-def unprotect_secret(value: str) -> str:
-    """机密读取侧：见信封前缀就解密还原明文；无前缀按旧明文原样返回。
-
-    解密/读取失败（典型：库文件被拷到别的 Windows 用户/机器、或 keyring
-    不可用/条目缺失）不抛也不回密文，返回空串并留 warning —— 把密文当 key
-    发给上游只会得到费解的 401，报「未配置」则引导用户重填一次密钥（下次
-    保存即按当前环境重新加封）。
-    """
-    if not value:
-        return value
-    if value.startswith(_KEYRING_ENVELOPE_PREFIX):
-        username = _KEYRING_USERNAME_PREFIX + value[len(_KEYRING_ENVELOPE_PREFIX):]
-        got = _keyring_get(username)
-        if got is None:
-            logger.warning(
-                "keyring 凭据句柄读不出明文，按未配置处理（keyring 不可用或条目缺失）")
-            return ""
-        return got
-    if not value.startswith(_SECRET_ENVELOPE_PREFIX):
-        return value
-    try:
-        blob = base64.b64decode(value[len(_SECRET_ENVELOPE_PREFIX):], validate=True)
-        return _dpapi_transform(blob, protect=False).decode("utf-8")
-    except (ValueError, OSError) as e:
-        # binascii.Error（base64 畸形，ValueError 子类）、UnicodeDecodeError、
-        # DPAPI 的 OSError —— 除此之外的异常不属于"密文读不出"，照抛
-        logger.warning("凭据信封解密失败，按未配置处理（库可能来自其他 Windows 用户/机器）: %s", e)
-        return ""
 
 
 def _mask_api_key(key: str | None) -> str:
@@ -2718,380 +2016,24 @@ def _mask_api_key(key: str | None) -> str:
 # models_config 全列（三处查询共用）。此前各处各写一份字面量，
 # get_default_model 那份漏了 reasoning_tokens —— 读默认模型的调用方拿到 None，
 # 思考预算退化为「不限制」。
-_MC_COLS = (
-    "id, name, model_id, provider, base_url, api_key, "
-    "supports_thinking, supports_image, supports_tool_calling, "
-    "is_default, is_default_ssh, fallback_model_id, "
-    "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at"
+# ── 模型配置 CRUD + fallback 链（P0 阶段 3 复制到 db/models_config.py）（P2-3 收敛，函数签名与入口不变）──
+from db.models_config import (  # noqa: F401  (re-export)
+    _resolve_model_pk,
+    _assert_fallback_chain_ok,
+    _normalize_fallback_ref,
+    list_models_config,
+    get_model_config,
+    create_model_config,
+    update_model_config,
+    delete_model_config,
+    set_default_model,
+    get_default_model,
+    resolve_fallback_model_cfg,
+    _DEFAULT_COLUMNS,
+    _FALLBACK_CHAIN_MAX_DEPTH,
+    _MC_COLS,
 )
 
-# 备用链写侧校验的深度上限（运行时只取一跳，这里防的是保存时的环与失控链）
-_FALLBACK_CHAIN_MAX_DEPTH = 8
-
-
-def _assert_fallback_chain_ok(pk: str, fallback_pk: str) -> None:
-    """备用链写侧校验：自指与环（A→B→A）直接拒绝，链深上限 8。
-
-    存量链也可能已经环了（历史脏数据）——从目标出发沿链走，撞到 `pk` 或
-    任何已见节点即环。链上悬空引用（指向已删除行）不构成环，放行。
-    """
-    if not fallback_pk:
-        return
-    if fallback_pk == pk:
-        raise ValueError("备用模型不能指向自身")
-    seen = {pk}
-    cur: Optional[str] = fallback_pk
-    conn = _get_conn()
-    try:
-        for _ in range(_FALLBACK_CHAIN_MAX_DEPTH):
-            if cur is None or cur in seen:
-                raise ValueError("备用模型链存在环（如 A→B→A），已拒绝保存")
-            seen.add(cur)
-            row = conn.execute(
-                "SELECT fallback_model_id FROM models_config WHERE id = ?", (cur,)
-            ).fetchone()
-            nxt = (row["fallback_model_id"] or "").strip() if row else ""
-            if not nxt:
-                return
-            cur = _resolve_model_pk(nxt)
-            if cur is None:
-                return
-    finally:
-        conn.close()
-    raise ValueError(f"备用模型链超过 {_FALLBACK_CHAIN_MAX_DEPTH} 层，已拒绝保存")
-
-
-def _normalize_fallback_ref(self_pk: str, ref: str) -> str:
-    """把用户传入的备用引用（行主键或模型名）归一为行主键；空串=清除。
-
-    引用不存在抛 ValueError（fail-fast 拼写错误），自指/环抛 ValueError。
-    """
-    ref = (ref or "").strip()
-    if not ref:
-        return ""
-    fb_pk = _resolve_model_pk(ref)
-    if fb_pk is None:
-        raise ValueError(f"备用模型不存在: {ref}")
-    _assert_fallback_chain_ok(self_pk, fb_pk)
-    return fb_pk
-
-
-def _resolve_model_pk(ref: str) -> Optional[str]:
-    """把「行主键 id」或「LLM 模型名（model_id 列）」统一解析成行主键；解析不到返回 None。
-
-    读路径（get_model_config）一直认两种键 —— Agent 后处理与默认模型兜底都传模型名；
-    写路径此前只认行主键，于是 PATCH default 传模型名时：存在性检查过 → 清 others 的
-    UPDATE 按 id != 名字匹配到**全部**行（真默认被清掉）→ 置一的 UPDATE 匹配 0 行 →
-    结果是 0 个默认模型，而响应 200。读写必须共用一个解析器，否则每加一个写入口
-    就要再踩一遍（round 14 已登记）。
-    """
-    if not ref:
-        return None
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            "SELECT id FROM models_config WHERE id = ?", (ref,)
-        ).fetchone()
-        if row is None:
-            row = conn.execute(
-                "SELECT id FROM models_config WHERE model_id = ? ORDER BY rowid LIMIT 1",
-                (ref,),
-            ).fetchone()
-        return row["id"] if row else None
-    finally:
-        conn.close()
-
-
-def list_models_config() -> list[dict]:
-    """获取所有模型配置（按 sort_order 正序，api_key 已脱敏）"""
-    conn = _get_conn()
-    try:
-        rows = conn.execute(
-            f"SELECT {_MC_COLS} "
-            "FROM models_config ORDER BY sort_order ASC, created_at ASC"
-        ).fetchall()
-        result = [dict(r) for r in rows]
-        for item in result:
-            # 信封值先还原再掩码：掩码面向前端的口径是「明文的前 4 位」，不是
-            # 信封密文的前 4 位（密文每次加封都不同，掩出来就是噪声）
-            item["api_key"] = _mask_api_key(unprotect_secret(item.get("api_key") or ""))
-        return result
-    finally:
-        conn.close()
-
-
-def get_model_config(model_id: str, mask_key: bool = True) -> Optional[dict]:
-    """根据 id 获取模型配置（mask_key=True 时 api_key 已脱敏）
-
-    调用方可能传入行主键 id（model-<uuid>）或 LLM 模型名（model_id 列，如
-    qwen3.8-27b）— Agent 后处理原样传模型名、chat/agent 的默认模型兜底也优先取
-    模型名。两种键的解析规则**只存在于 `_resolve_model_pk` 一处**（S10-22）：
-    此前这里抄了第二份「先按 id、落空再按 model_id 回退」，读写两侧各种一份，
-    以后调整匹配规则（例如重名取舍）就会只改一边而留下会静默失效的副本。
-    """
-    if not model_id:
-        return None
-    pk = _resolve_model_pk(model_id)
-    if pk is None:
-        return None
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            f"SELECT {_MC_COLS} FROM models_config WHERE id = ?",
-            (pk,),
-        ).fetchone()
-        if not row:
-            return None
-        result = dict(row)
-        # 先还原凭据信封（unprotect_secret 对旧明文行是恒等变换），掩码与
-        # mask_key=False 的内部消费方（llm_adapter 等）拿到的都是明文
-        _raw_key = result.get("api_key")
-        if _raw_key is not None:
-            _raw_key = unprotect_secret(_raw_key)
-        result["api_key"] = _raw_key
-        if mask_key:
-            result["api_key"] = _mask_api_key(_raw_key)
-        return result
-    finally:
-        conn.close()
-
-
-def create_model_config(
-    name: str,
-    base_url: str,
-    api_key: str = "",
-    model_id: str = "",
-    provider: str = "custom",
-    supports_thinking: bool = False,
-    supports_image: bool = False,
-    # 能力门上线后该列有真实语义（False=预判去 tools）；UI 写侧勾选已撤，
-    # 默认必须与存量基线迁移同口径取 True，显式传 False 仍生效。
-    supports_tool_calling: bool = True,
-    temperature: float = 0.7,
-    # max_tokens 是「上下文窗口」列（与 models_config 建表 DEFAULT 16384 一致），
-    # 不是输出预算 —— 输出预算由 max_output_tokens 管。窗口若默认 4096，
-    # safe_max_tokens 会把输出压到 2048、思考模式下压到 256 下限。
-    max_tokens: int = 16384,
-    max_output_tokens: int = 4096,
-    top_p: float = 0.9,
-    is_default_ssh: bool = False,
-    reasoning_tokens: int = 8192,
-    fallback_model_id: str = "",
-) -> dict:
-    """创建模型配置，返回完整记录"""
-    # 去除首尾空格：粘贴时可能带入换行/空白，导致上游 API 校验失败（401）
-    name = (name or "").strip()
-    base_url = (base_url or "").strip()
-    api_key = protect_secret((api_key or "").strip())
-    model_id = (model_id or "").strip()
-    mid = _new_id()
-    # 备用引用归一为行主键并校验（不存在/环 fail-fast）；新行不可能被存量链引用
-    fallback_pk = _normalize_fallback_ref(mid, fallback_model_id)
-    now = _now()
-    conn = _get_conn()
-    try:
-        # 计算 sort_order（已有最大 + 1）
-        row = conn.execute("SELECT COALESCE(MAX(sort_order), -1) AS mx FROM models_config").fetchone()
-        next_order = row["mx"] + 1
-        conn.execute(
-            "INSERT INTO models_config "
-            "(id, name, model_id, provider, base_url, api_key, supports_thinking, supports_image, supports_tool_calling, "
-            "is_default, is_default_ssh, fallback_model_id, "
-            "temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, sort_order, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                mid, name, model_id, provider, base_url, api_key,
-                1 if supports_thinking else 0,
-                1 if supports_image else 0,
-                1 if supports_tool_calling else 0,
-                1 if is_default_ssh else 0,
-                fallback_pk,
-                temperature, max_tokens, max_output_tokens, reasoning_tokens, top_p, next_order, now, now,
-            ),
-        )
-        # 如果新模型被设为默认，需清除其他模型的默认标记
-        if is_default_ssh:
-            conn.execute("UPDATE models_config SET is_default_ssh = 0 WHERE id != ?", (mid,))
-        conn.commit()
-        return get_model_config(mid)  # type: ignore
-    finally:
-        conn.close()
-
-
-def update_model_config(config_id: str, **kwargs) -> Optional[dict]:
-    """更新模型配置（支持部分字段）
-
-    config_id 认行主键 id 也认模型名（与 get_model_config / set_default_model 同一
-    解析器），kwargs 里的 model_id 字段与此互不冲突。
-    """
-    pk = _resolve_model_pk(config_id)
-    if pk is None:
-        return None
-    allowed = {
-        "name", "model_id", "provider", "base_url", "api_key",
-        "supports_thinking", "supports_image", "supports_tool_calling",
-        "temperature", "max_tokens", "max_output_tokens", "reasoning_tokens", "top_p", "sort_order",
-        "is_default", "is_default_ssh", "fallback_model_id",
-    }
-    # 备用引用先归一校验（环/自指/不存在 fail-fast），再进通用 sets
-    if kwargs.get("fallback_model_id") is not None:
-        kwargs["fallback_model_id"] = _normalize_fallback_ref(pk, kwargs["fallback_model_id"])
-    sets = []
-    params = []
-    for k, v in kwargs.items():
-        if k in allowed and v is not None:
-            # api_key 空字符串表示「保留原值」，跳过更新
-            if k == "api_key" and v == "":
-                continue
-            # B-10 修复：前端回传的掩码值（含 "****"）不是真密钥 —
-            # 原实现会把掩码写回 DB 覆盖真实 api_key，导致模型 401
-            if k == "api_key" and "****" in str(v):
-                continue
-            # api_key 落库前加凭据信封（见 protect_secret；历史明文行在下次
-            # 保存时于此处完成信封升级）
-            if k == "api_key":
-                v = protect_secret(str(v))
-            sets.append(f"{k} = ?")
-            params.append(1 if isinstance(v, bool) else v)
-    # 记录是否存在（优先判断，避免 rowcount 0 的误判）
-    existing = get_model_config(pk)
-    if not existing:
-        return None
-    if not sets:
-        return existing
-    now = _now()
-    sets.append("updated_at = ?")
-    params.append(now)
-    # pk 必须放在最后，对应 SQL 中 WHERE id = ? 的位置
-    params.append(pk)
-    conn = _get_conn()
-    try:
-        conn.execute(
-            f"UPDATE models_config SET {', '.join(sets)} WHERE id = ?",
-            params,
-        )
-        # 默认标记是唯一标记：置了某一档就得清掉同档的其它行，与 set_default_model
-        # 同一个原语，免得两处对"唯一"的理解各写各的
-        for col, key in (("is_default", "is_default"), ("is_default_ssh", "is_default_ssh")):
-            if kwargs.get(key):
-                conn.execute(
-                    f"UPDATE models_config SET {col} = 0 WHERE id != ?", (pk,))
-        conn.commit()
-        # rowcount 0 不代表记录不存在——SQLite 在值未变化时不计入 rowcount
-        return get_model_config(pk)
-    finally:
-        conn.close()
-
-
-def delete_model_config(model_id: str) -> bool:
-    """删除模型配置（默认模型不可删除，任一档都算）"""
-    pk = _resolve_model_pk(model_id)
-    if pk is None:
-        return False
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            "SELECT is_default, is_default_ssh FROM models_config WHERE id = ?",
-            (pk,),
-        ).fetchone()
-        if row and (row["is_default"] or row["is_default_ssh"]):
-            raise ValueError("Cannot delete a model that is set as default")
-        # 清掉其它行对被删模型的备用引用（悬空引用运行时被忽略，但留着会误导
-        # 排障；默认模型已禁删，普通模型删后引用必须显式置空）
-        conn.execute(
-            "UPDATE models_config SET fallback_model_id = '' WHERE fallback_model_id = ?", (pk,))
-        cur = conn.execute("DELETE FROM models_config WHERE id = ?", (pk,))
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
-
-
-# 默认档位 → 列名。mode=None 沿用历史口径（不传 = 全局档），"ssh" 是 routes 里
-# SSH_MODE 的取值；显式收窄成这张表，别让"任何非 ssh 的值"都落进 SSH 列。
-_DEFAULT_COLUMNS = {None: "is_default", "global": "is_default", "ssh": "is_default_ssh"}
-
-
-def set_default_model(model_id: str, mode: Optional[str] = None) -> None:
-    """设置默认模型。
-
-    mode：None 或 "global" → 全局 is_default；"ssh" → SSH 模式默认。
-    model_id 认行主键也认模型名（_resolve_model_pk）；解析不到抛 ValueError ——
-    旧实现按名字传进来会"清掉真默认 + 目标匹配 0 行 + 静默成功"，是本函数的
-    主要踩坑面。
-
-    审查修复：原实现"全清 + 置一"为两条非原子 UPDATE，并发切换可产生
-    0 个或 2 个默认模型（两条语句间交错）。改为单条条件 UPDATE
-    （清 others 带 WHERE id != 目标后提交同一事务），消除中间状态。
-    """
-    if mode not in _DEFAULT_COLUMNS:
-        raise ValueError(f"未知的默认档位 {mode!r}（可用：global / ssh）")
-    pk = _resolve_model_pk(model_id)
-    if pk is None:
-        raise ValueError(f"模型不存在: {model_id}")
-    col = _DEFAULT_COLUMNS[mode]
-    conn = _get_conn()
-    try:
-        # 两条 UPDATE 置于同一隐式事务，最后一次性 commit（保持原子性）
-        conn.execute(
-            f"UPDATE models_config SET {col} = 0 WHERE id != ?", (pk,)
-        )
-        conn.execute(
-            f"UPDATE models_config SET {col} = 1 WHERE id = ?", (pk,)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def get_default_model(mode: Optional[str] = None, mask_key: bool = True) -> Optional[dict]:
-    """获取当前默认模型配置。
-    mode 为 None 时返回全局 is_default 模型；
-    mode 为 'ssh' 时返回 SSH 模式的默认模型。
-    mask_key=True（默认）时 api_key 脱敏，面向前端/只取 id 的场景；
-    内部真正调用 LLM/embedding 的场景传 mask_key=False 获取真实 key。
-    """
-    conn = _get_conn()
-    try:
-        col = "is_default" if mode is None else "is_default_ssh"
-        row = conn.execute(
-            f"SELECT {_MC_COLS} FROM models_config WHERE {col} = 1 LIMIT 1"
-        ).fetchone()
-        if not row:
-            return None
-        result = dict(row)
-        # C1 修复：默认脱敏 api_key，避免明文密钥泄露到前端
-        # 审查 M-15：内部需要真实 key 的调用方（embedding/LLM）传 mask_key=False，
-        # 否则拿到 "EMPT****" 式脱敏值 → 401 → 静默降级伪 embedding → 记忆维度混存
-        # 两个分支都先还原凭据信封（get_model_config 同款），再按 mask_key 决定回明文还是掩码
-        _raw_key = result.get("api_key")
-        if _raw_key is not None:
-            _raw_key = unprotect_secret(_raw_key)
-        result["api_key"] = _raw_key if not mask_key else _mask_api_key(_raw_key)
-        return result
-    finally:
-        conn.close()
-
-
-def resolve_fallback_model_cfg(model_cfg: dict) -> Optional[dict]:
-    """解析主模型配置的备用模型完整配置（mask_key=False，供 StreamLLMClient 直用）。
-
-    运行时只取一跳（A 的备用是 B；B 自己的备用在运行中不追）——每 run 只切换一次，
-    更深的链路写侧校验允许保存但运行时用不到。以下任一情况返回 None（不启用回退）：
-    主模型未配置备用 / 备用引用已悬空 / 自指 / 备用缺 base_url 或 api_key
-    （密钥信封解密失败按空串处理，见 unprotect_secret —— 切过去也是 401）。
-    """
-    ref = (model_cfg.get("fallback_model_id") or "").strip()
-    if not ref:
-        return None
-    fb = get_model_config(ref, mask_key=False)
-    if not fb:
-        return None
-    if fb.get("id") == model_cfg.get("id"):
-        return None  # 自指（写侧已挡，运行时兜底）
-    if not (fb.get("base_url") or "").strip() or not (fb.get("api_key") or ""):
-        return None  # 密钥不可用（含信封解密失败）—— 切过去只会 401
-    return fb
 
 
 # ── cKunBot 人格与会话 ──
@@ -4787,6 +3729,7 @@ from db.settings import (  # noqa: F401  (re-export)
     update_app_settings_bulk,
     _float_app_setting,
     _int_app_setting,
+    _DIAG_COUNT_TABLES,
 )
 
 

@@ -16,6 +16,7 @@ import sys
 import pytest
 
 import database as db
+import db._secrets as secrets_mod
 
 KEY = "sk-antinarative-1234567890abcdef"
 TAVILY_KEY = "tvly-abcdef1234567890abcdef"
@@ -94,8 +95,8 @@ def test_legacy_plaintext_model_row_still_readable(tmp_workspace):
 def test_non_windows_missing_keyring_rejects_save(monkeypatch):
     """非 win32 且 keyring 不可用 → 保存显式失败（fail-closed），绝不降级明文落库。
     旧行为「明文恒等落库」已废弃；keyring 可用路径的守卫见 test_secret_keyring_envelope.py。"""
-    monkeypatch.setattr(db, "_SECRET_PROTECTION_PLATFORM", "linux")
-    monkeypatch.setattr(db, "_keyring_import",
+    monkeypatch.setattr(secrets_mod, "_SECRET_PROTECTION_PLATFORM", "linux")
+    monkeypatch.setattr(secrets_mod, "_keyring_import",
                         lambda: (_ for _ in ()).throw(ImportError("keyring not installed")))
     with pytest.raises(db.SecretStorageError):
         db.protect_secret(KEY)
@@ -115,7 +116,7 @@ def test_tampered_envelope_returns_empty_not_ciphertext(tmp_workspace, monkeypat
     _fresh_db(tmp_workspace, None)
     assert db.unprotect_secret(db._SECRET_ENVELOPE_PREFIX + "!!!not-base64!!!") == ""
     good = db.protect_secret(KEY)
-    monkeypatch.setattr(db, "_dpapi_transform",
+    monkeypatch.setattr(secrets_mod, "_dpapi_transform",
                         lambda data, protect: (_ for _ in ()).throw(OSError("boom")))
     assert db.unprotect_secret(good) == ""
 
@@ -124,7 +125,7 @@ def test_tampered_envelope_returns_empty_not_ciphertext(tmp_workspace, monkeypat
 def test_protect_failure_raises_instead_of_plaintext_fallback(tmp_workspace, monkeypatch):
     """加密失败必须向上抛 —— 静默降级会把「这条没加密」藏进库。"""
     _fresh_db(tmp_workspace, None)
-    monkeypatch.setattr(db, "_dpapi_transform",
+    monkeypatch.setattr(secrets_mod, "_dpapi_transform",
                         lambda data, protect: (_ for _ in ()).throw(OSError("boom")))
     with pytest.raises(OSError):
         db.protect_secret(KEY)

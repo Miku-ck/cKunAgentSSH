@@ -54,8 +54,17 @@ def test_masking_happens_at_the_read_edge(wired):
 
 def test_fallback_rule_is_written_only_once():
     """这条是本次修复真正要防的东西：同一规则的第二份文本副本。"""
+    import pathlib
+
     import database as db
-    src = inspect.getsource(db)
+
+    # 模型配置域已收敛到 db/models_config.py（P2-3），database.py 为再导出壳；
+    # 守卫改为扫 database.py + db/*.py，防的是「跨模块再抄一份」的回归。
+    root = pathlib.Path(inspect.getsourcefile(db)).parent
+    src = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in [root / "database.py", *sorted(root.glob("db/*.py"))]
+    )
     assert src.count("FROM models_config WHERE model_id = ? ORDER BY rowid LIMIT 1") == 1
     # 读路径不许再自己拼回退查询 —— 它只能调 _resolve_model_pk
     body = inspect.getsource(db.get_model_config)
