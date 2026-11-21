@@ -2,8 +2,8 @@
 // check-any.mjs — 统计 TypeScript / Vue 源码中的显式 any 类型逃逸。
 //
 // 只降不升：数量超过基线上限即失败，防止新代码把类型系统掏空。
-// 基线 = 当前存量（2 处，均在 electron/utils/ipc-handler.ts：IPC 分发器
-// 的 args/返回开放是唯一合理逃逸）。排除测试与 .d.ts。
+// 基线 = 当前存量 2（均在 electron/utils/ipc-handler.ts：IPC 分发器的 args/返回
+// 开放是唯一合理逃逸）。排除测试与 .d.ts。约定见 AGENTS.md「不新增 any」。
 //
 // 用法: node scripts/check-any.mjs
 // 环境变量 ANY_LIMIT 可覆盖上限。
