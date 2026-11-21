@@ -12,6 +12,7 @@
 - **最小外科手术**：只做被要求的事，不整文件重写，不顺手重构。
 - **口径单一**：同一概念只有一个词、一个入口、一份事实源（见 CONTEXT.md）。
 - **单文件单域**：一次改动只碰一个域；拆模块先补测试再拆。
+- **大文件纪律**：新增生产文件 ≤ 800 行；存量超限文件只减不增。门禁 `node scripts/check-file-size.mjs`（基线 `scripts/file-size-baseline.json`）+ `node scripts/check-any.mjs`（any ≤ 2）。拆出的域在原子模块 re-export（`from xxx import ...  # noqa: F401`）保持 `原模块.符号` 可用；拆分模块用函数内局部导入引用原模块的可变状态（连接池 / 管理器 / 注册表），避免循环导入与测试 monkeypatch 失效。
 
 ## 硬性禁止
 
