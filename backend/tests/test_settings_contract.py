@@ -220,8 +220,12 @@ def test_diagnostics_masks_only_string_secrets_not_numeric_budgets(client, monke
 def test_bulk_write_rolls_back_all_keys_when_one_fails(base_db):
     """单事务的价值所在：第二条失败时第一条不得留在库里。"""
     import database as db
+    # 应用设置域已收敛到 db/settings.py（P2-3），其连接入口是 db._conn._get_conn；
+    # 这里对该入口打桩，而不是 database._get_conn（后者只是再导出的同义名，
+    # 函数体内引用的是 db._conn 模块里的名字）。
+    import db._conn as db_conn_mod
 
-    real_get_conn = db._get_conn
+    real_get_conn = db_conn_mod._get_conn
     state = {"n": 0}
 
     class FlakyConn:
@@ -240,7 +244,7 @@ def test_bulk_write_rolls_back_all_keys_when_one_fails(base_db):
     def get_flaky_conn():
         return FlakyConn(real_get_conn())
 
-    db._get_conn = get_flaky_conn
+    db_conn_mod._get_conn = get_flaky_conn
     try:
         with pytest.raises(RuntimeError):
             db.update_app_settings_bulk({
@@ -248,7 +252,7 @@ def test_bulk_write_rolls_back_all_keys_when_one_fails(base_db):
                 "memory.inject_budget_tokens": "4444",
             })
     finally:
-        db._get_conn = real_get_conn
+        db_conn_mod._get_conn = real_get_conn
 
     assert db.get_app_setting("memory.max_items") is None
     assert db.get_app_setting("memory.inject_budget_tokens") is None

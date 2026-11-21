@@ -7,7 +7,7 @@ unprotect_secret 属凭据信封域（计划中的 db/_secrets.py），暂从 da
 """
 from typing import Optional
 
-from db._conn import _get_conn
+from db import _conn as _conn_mod
 from db._util import _now
 
 __all__ = [
@@ -36,7 +36,7 @@ def get_app_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     # 模块级引用会形成循环导入）。凭据信封域收敛后此处改从 db._secrets 引用。
     from database import unprotect_secret
 
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         row = conn.execute(
             "SELECT value FROM app_settings WHERE key = ?", (key,)
@@ -50,7 +50,7 @@ def get_app_setting(key: str, default: Optional[str] = None) -> Optional[str]:
 def set_app_setting(key: str, value: str) -> None:
     """写入/更新应用设置"""
     now = _now()
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         conn.execute(
             "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) "
@@ -71,7 +71,7 @@ def update_app_settings_bulk(settings: dict[str, str]) -> None:
     回滚并抛出，由调用方以 500 结束、内存策略保持旧值。
     """
     now = _now()
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         for key, value in settings.items():
             conn.execute(
@@ -91,7 +91,7 @@ def update_app_settings_bulk(settings: dict[str, str]) -> None:
 
 def list_app_settings() -> dict:
     """全部应用设置键值（诊断面板用）。只读，脱敏由调用方负责。"""
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         rows = conn.execute(
             "SELECT key, value FROM app_settings ORDER BY key"
@@ -110,7 +110,7 @@ _DIAG_COUNT_TABLES = ("conversations", "messages", "agent_runs", "models_config"
 def count_rows(table: str) -> Optional[int]:
     if table not in _DIAG_COUNT_TABLES:
         return None
-    conn = _get_conn()
+    conn = _conn_mod._get_conn()
     try:
         # {table} 已被上方 _DIAG_COUNT_TABLES 白名单收窄（见其注释），剩余
         # 风险只剩「白名单值本身写坏」，字面量元组由 review 兜底，无需再断言
