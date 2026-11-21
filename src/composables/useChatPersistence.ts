@@ -43,7 +43,7 @@ export function useChatPersistence(options: {
   function loadConversations(): ModeConversation[] {
     try {
       const raw = localStorage.getItem(storageKey)
-      const parsed = raw ? JSON.parse(raw) : []
+      const parsed: unknown = raw ? JSON.parse(raw) : []
       // 审查R2修复：JSON.parse 成功不等于形态合法——非数组值（如被写进 `{}`/字符串）
       // 或条目缺 messages 会让 messages computed / .find / 分组渲染整个任务台抛错白屏。
       // 按条目形状过滤，坏数据降级为空列表。
@@ -55,14 +55,16 @@ export function useChatPersistence(options: {
       // 期间有意义（ssh-ai 的终态 watch 负责把它换成真结果或移除）。页面重载后那场
       // run 必然已经没了 ⇒ 复原回来的占位永远等不到回填，界面上是一只永久空白的
       // 助手气泡。读侧直接丢弃，比让它挂着再由 UI 猜要诚实。
-      return parsed
-        .filter((c: any) => c && typeof c === 'object' && Array.isArray(c.messages))
-        .map((c: any) => ({
-          ...c,
-          messages: c.messages.filter(
-            (m: any) => !(m?.role === 'assistant' && String(m?.id).startsWith('temp-agent-')),
-          ),
-        }))
+      const list = (parsed as unknown[]).filter(
+        (c): c is ModeConversation =>
+          !!c && typeof c === 'object' && Array.isArray((c as { messages?: unknown }).messages),
+      )
+      return list.map((c) => ({
+        ...c,
+        messages: c.messages.filter(
+          (m) => !(m?.role === 'assistant' && String(m?.id).startsWith('temp-agent-')),
+        ),
+      }))
     } catch (e) {
       // m3 修复：JSON 解析失败时输出警告，便于排查数据损坏问题
       logWarn('useChatPersistence', `解析 ${storageKey} 失败，重置为空列表:`, e)

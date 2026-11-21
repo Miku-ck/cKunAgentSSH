@@ -168,7 +168,7 @@ async function toggle(rule: TunnelRule) {
   try {
     if (state === 'active') await tunnelStore.stop(rule.id)
     else await tunnelStore.start(rule.id)
-  } catch (err: any) {
+  } catch (err) {
     toast.error(toFriendlyMessage(err, '隧道操作失败'))
   } finally {
     busyId.value = ''

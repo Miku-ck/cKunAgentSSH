@@ -378,7 +378,7 @@ async function handleTest() {
     // 测试期间目标被改过（或被那个 watch 清过结果）⇒ 这一笔已不属于当前表单
     if (mySeq !== testSeq) return
     testResult.value = result
-  } catch (err: any) {
+  } catch (err) {
     if (mySeq !== testSeq) return
     testResult.value = { ok: false, message: toFriendlyMessage(err, '测试失败'), latencyMs: 0 }
   } finally {
@@ -417,7 +417,7 @@ async function handleSave() {
       savedId = await store.addConnection(payload)
     }
     emit('saved', { savedId, connectNow: form.connectNow })
-  } catch (err: any) {
+  } catch (err) {
     logError('ConnectionModal', 'save failed:', err)
     errorMsg.value = toFriendlyMessage(err, '保存失败')
   } finally {

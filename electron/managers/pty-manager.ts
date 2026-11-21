@@ -255,8 +255,8 @@ export class PtyManager {
           LS_COLORS: LS_COLORS_NO_BACKGROUND,
         } as Record<string, string>,
       })
-    } catch (err: any) {
-      const raw = String(err?.message || err)
+    } catch (err) {
+      const raw = String((err as Error | null)?.message || err)
       if (/enoent|file not found|找不到/i.test(raw)) {
         throw new Error(`无法启动 ${shellLabel}：未找到可执行文件，请确认已安装并检查路径`)
       }

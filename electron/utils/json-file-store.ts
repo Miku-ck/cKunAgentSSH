@@ -102,8 +102,9 @@ export class JsonFileStore<T extends { id: string }> {
     await writeFile(tmpPath, this.serialize(records), 'utf-8')
     try {
       await rename(tmpPath, this.path)
-    } catch (err: any) {
-      if (err && (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY')) {
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | null)?.code
+      if (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY') {
         await new Promise(r => setTimeout(r, 200))
         try {
           await rename(tmpPath, this.path)

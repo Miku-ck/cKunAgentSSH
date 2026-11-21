@@ -260,9 +260,9 @@ async function loadPreview(fileName: string) {
     // 防竞态：若期间已有更新的请求发起，丢弃本次结果
     if (mySeq !== previewLoadSeq) return
     previewUrl.value = newUrl
-  } catch (e: any) {
+  } catch (e) {
     if (mySeq !== previewLoadSeq) return
-    toast.error(e.message || '加载预览失败')
+    toast.error((e as Error | null)?.message || '加载预览失败')
     previewUrl.value = ''
   }
 }
@@ -283,8 +283,8 @@ async function selectBackgroundImage() {
       // 预览图由下方 watch 监听 [backgroundImage, backgroundVersion] 自动刷新，无需显式调用
       settings.appearance.backgroundVersion++
     }
-  } catch (e: any) {
-    toast.error(e.message || '选择图片失败')
+  } catch (e) {
+    toast.error((e as Error | null)?.message || '选择图片失败')
   }
 }
 
@@ -293,9 +293,9 @@ async function clearBackgroundImage() {
   if (fileName && window.electronAPI?.fsDeleteBackgroundImage) {
     try {
       await window.electronAPI.fsDeleteBackgroundImage(fileName)
-    } catch (e: any) {
+    } catch (e) {
       // Bug 3 修复：删除文件失败时中止清空操作，保持设置与磁盘文件一致，避免磁盘残留且 UI 指向空
-      toast.error(e.message || '删除背景图文件失败，已中止清空')
+      toast.error((e as Error | null)?.message || '删除背景图文件失败，已中止清空')
       return
     }
   }

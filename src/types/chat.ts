@@ -25,9 +25,10 @@ export interface BaseConversation<M extends BaseMessage = BaseMessage> {
   updated_at: string
 }
 
-/** SSH 模式会话消息（context 为 store 注入的 SSH/AI 上下文对象，见 ssh-ai.SshAiContext） */
+/** SSH 模式会话消息（context 为 store 注入的 SSH/AI 上下文对象；通用层保持开放，
+ *  具体结构由 ssh-ai 的 SshAiMessage 收窄为 SshAiContext） */
 export interface ModeMessage extends BaseMessage {
-  context?: any
+  context?: unknown
 }
 
 export type ModeConversation = BaseConversation<ModeMessage>

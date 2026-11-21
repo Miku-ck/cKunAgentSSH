@@ -228,7 +228,7 @@ async function loadFile(): Promise<void> {
     // 必须 await：initEditor 内 loadMonaco 失败要落进本函数的 catch 显示错误，
     // 用 void 会让拒绝变成 unhandled rejection，编辑器区静默空白
     await initEditor(seq, path, side)
-  } catch (err: any) {
+  } catch (err) {
     if (!isFreshLoad(seq, path, side)) return
     error.value = toFriendlyMessage(err, '打开失败')
   } finally {
@@ -328,7 +328,7 @@ async function save(): Promise<void> {
     dirty.value = false
     toast.success('已保存')
     emit('saved')
-  } catch (err: any) {
+  } catch (err) {
     toast.error(toFriendlyMessage(err, '保存失败'))
   } finally {
     saving.value = false

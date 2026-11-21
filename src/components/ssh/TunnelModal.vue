@@ -237,7 +237,7 @@ async function save(): Promise<void> {
     await tunnelStore.save(rule)
     toast.success(isEdit.value ? '隧道已更新' : '隧道已创建')
     emit('saved')
-  } catch (err: any) {
+  } catch (err) {
     toast.error(toFriendlyMessage(err, '保存失败'))
   } finally {
     saving.value = false

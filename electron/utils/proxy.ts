@@ -14,6 +14,8 @@
 import net from 'net'
 import tls from 'tls'
 import https from 'https'
+import type { ClientRequestArgs } from 'http'
+import type { Duplex } from 'stream'
 import { execFile } from 'child_process'
 import { resolvePowerShell } from './powershell-path'
 
@@ -98,8 +100,13 @@ export function tunnelAgentFor(spec: ProxySpec): https.Agent {
       super({ keepAlive: false })
     }
 
-    // https.Agent 期望这里返回 TLS socket；先 CONNECT 再在隧道上握手
-    createConnection(options: any, cb: any): any {
+    // https.Agent 期望这里返回 TLS socket；先 CONNECT 再在隧道上握手。
+    // 运行时走 cb 回调注入 TLS socket（返回值不被消费），类型与 http.ClientRequestArgs
+    // 的 createConnection 契约对齐。
+    createConnection(
+      options: ClientRequestArgs,
+      cb: (err: Error | null, socket?: Duplex) => void,
+    ): Duplex | null | undefined {
       const targetHost = String(options.host ?? '')
       const targetPort = Number(options.port) || 443
       const sock = net.connect(spec.port, spec.host)
@@ -146,6 +153,8 @@ export function tunnelAgentFor(spec: ProxySpec): https.Agent {
         }
         sock.on('data', onData)
       })
+      // 返回值不被 http.Agent 消费（socket 经 cb 注入），显式返回 undefined 满足契约类型
+      return undefined
     }
   }
 

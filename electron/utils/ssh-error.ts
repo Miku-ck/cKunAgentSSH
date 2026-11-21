@@ -44,7 +44,7 @@ export function classifyRawError(raw: unknown, authType?: 'password' | 'privateK
 
   // 认证层（ssh2 的 client-authentication 级错误是可靠信号，消息匹配作兜底）
   if (/authentication|auth.*fail|all configured authentication methods failed/.test(msg)
-      || (raw as any)?.level === 'client-authentication') {
+      || (raw as { level?: unknown } | null | undefined)?.level === 'client-authentication') {
     // 消息级细分优先（极少数场景消息本身带方法名）
     if (/passphrase/.test(msg)) return 'AUTH_PASSPHRASE'
     if (/password/.test(msg)) return 'AUTH_PASSWORD'

@@ -770,8 +770,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
             [att.file_id]: URL.createObjectURL(file),
           }
         }
-      } catch (e: any) {
-        const detail = e?.detail || e?.message || String(e)
+      } catch (e) {
+        const box = e as { detail?: unknown; message?: unknown } | null
+        const detail = box?.detail || box?.message || String(e)
         toast.error(`上传 ${file.name} 失败：${detail}`)
       }
     }

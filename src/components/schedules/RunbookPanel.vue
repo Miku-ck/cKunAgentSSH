@@ -314,7 +314,7 @@ async function runNow(r: RunbookRecord) {
     }, RUN_POLL_MS)
     runPollTimers.add(t)
     await load()
-  } catch (e: any) {
+  } catch (e) {
     toast.error(toFriendlyMessage(e, '触发失败'))
   }
 }

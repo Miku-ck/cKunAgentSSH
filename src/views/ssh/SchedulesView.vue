@@ -653,7 +653,7 @@ async function runNow(s: ScheduleRecord) {
       } catch { /* 忽略轮询错误 */ }
     }, 3000)
     runPollTimers.add(t)
-  } catch (e: any) {
+  } catch (e) {
     toast.error(toFriendlyMessage(e, '触发失败'))
   }
 }

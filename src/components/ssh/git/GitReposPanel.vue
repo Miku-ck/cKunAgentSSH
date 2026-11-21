@@ -1118,8 +1118,8 @@ async function submitToken(): Promise<void> {
     toast.success(exists ? '令牌已更新' : '令牌已添加')
     showTokenForm.value = false
     resetTokenDraft()
-  } catch (e: any) {
-    tokenError.value = e?.message || '保存失败'
+  } catch (e) {
+    tokenError.value = (e as Error | null)?.message || '保存失败'
   }
 }
 
@@ -1128,8 +1128,8 @@ async function removeToken(id: string): Promise<void> {
     await accelStore.saveTokens(accelStore.privateTokens.filter(t => t.id !== id))
     if (tokenEditingId.value === id) cancelTokenEdit()
     toast.success('令牌已删除')
-  } catch (e: any) {
-    toast.error(e?.message || '删除失败')
+  } catch (e) {
+    toast.error((e as Error | null)?.message || '删除失败')
   }
 }
 

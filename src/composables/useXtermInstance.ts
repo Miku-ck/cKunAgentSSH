@@ -339,7 +339,7 @@ export function useXtermInstance(opts: UseXtermInstanceOptions): XtermInstance {
     }
     const docHandler = (terminal as unknown as { __docKeyHandler?: (e: KeyboardEvent) => void })?.__docKeyHandler
     if (docHandler) {
-      document.removeEventListener('keydown', docHandler, { capture: true } as any)
+      document.removeEventListener('keydown', docHandler, { capture: true })
     }
     resizeObserver?.disconnect()
     // 组件侧的数据面退订 / 额外清理：必须早于 dispose，否则 dispose 后

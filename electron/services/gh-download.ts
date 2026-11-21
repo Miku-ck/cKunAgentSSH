@@ -383,8 +383,9 @@ export class GhDownloadManager {
       try {
         await rename(partialPath, finalPath)
         h2.status.path = finalPath
-      } catch (e: any) {
-        this.finish(id, 'error', `重命名下载文件失败: ${e?.message ?? e}`)
+      } catch (e) {
+        const message = (e as Error | null)?.message
+        this.finish(id, 'error', `重命名下载文件失败: ${message ?? e}`)
         return
       }
       // 分片已被 rename 带走，元数据留在目录里就是孤儿；下次同名下载会因
@@ -501,8 +502,9 @@ export class GhDownloadManager {
             // ——finish() 不执行、取消读不到、active 表里的条目也无界增长。
             next = new URL(res.headers.location, url).toString()
             this.assertUrl(next)
-          } catch (e: any) {
-            this.finish(id, 'error', e?.message ?? '重定向地址非法')
+          } catch (e) {
+            const message = (e as Error | null)?.message
+            this.finish(id, 'error', message ?? '重定向地址非法')
             return resolvePromise('error')
           }
           this.fetchLoop(id, next, partialPath, resumeFrom, gunzip, meta, redirectsLeft - 1).then(resolvePromise)

@@ -374,7 +374,7 @@ async function handleDuplicate(id: string) {
   try {
     await store.duplicateConnection(id)
     toast.success('已复制连接')
-  } catch (err: any) {
+  } catch (err) {
     toast.error(toFriendlyMessage(err, '复制失败'))
   }
 }
@@ -394,7 +394,7 @@ async function handleDelete(id: string) {
     selectedIds.value.delete(id)
     triggerRef(selectedIds)
     toast.success('已删除')
-  } catch (err: any) {
+  } catch (err) {
     toast.error(toFriendlyMessage(err, '删除失败'))
   }
 }
@@ -419,7 +419,7 @@ async function handleDeleteBatch() {
     }
     clearSelection()
     toast.success(`已删除 ${count} 个连接`)
-  } catch (err: any) {
+  } catch (err) {
     toast.error(toFriendlyMessage(err, '删除失败'))
   } finally {
     deleting.value = false

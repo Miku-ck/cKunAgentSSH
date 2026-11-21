@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, session, nativeImage } from 'electron'
 import http from 'http'
 import { safeSend } from './utils/safe-send'
+import type { IpcInvokeHandler } from './utils/ipc-handler'
 import { join, resolve as pathResolve, dirname, basename } from 'path'
 import { pathToFileURL } from 'url'
 import { readdir } from 'fs/promises'
@@ -121,7 +122,7 @@ type ConnectPayload = SSHConnectionConfig & { cols?: number; rows?: number }
 /** 带 sender 校验 + SSHError 序列化的 IPC handler 注册（所有 ipcMain.handle 一律走此）。 */
 function handleTrusted(
   channel: string,
-  fn: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => any,
+  fn: IpcInvokeHandler,
 ): void {
   ipcMain.handle(channel, (event, ...args) => {
     assertTrustedSender(event)

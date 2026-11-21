@@ -19,10 +19,10 @@ import type { Theme } from '@/utils/appearance-tokens'
 // 默认深色：与拆分前"启动即 setTheme('ckun-dark')"的初始效果一致
 let loadedInstance: { editor: { setTheme(name: string): void } } | null = null
 let desiredTheme: AppTheme = 'dark'
-let loading: Promise<unknown> | null = null
+let loading: Promise<{ editor: { setTheme(name: string): void } }> | null = null
 
 /** 动态加载 Monaco 运行时并返回 monaco 实例 — 供 SftpFileEditor 调用 */
-export function loadMonaco(): Promise<any> {
+export function loadMonaco(): Promise<{ editor: { setTheme(name: string): void } }> {
   if (!loading) {
     loading = import('./monaco-runtime').then((mod) => {
       const inst = mod.default as unknown as { editor: { setTheme(name: string): void } }

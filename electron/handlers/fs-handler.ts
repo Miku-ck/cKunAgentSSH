@@ -21,10 +21,11 @@ import { execFile, execFileSync } from 'child_process'
 import { assertSafePath, allowDialogKeyPath, isCopyTargetSelfNested, rejectSymlinkTarget } from '../utils/path-guard'
 import { beginCopy, endCopy } from '../utils/copy-cancel'
 import { resolvePowerShell } from '../utils/powershell-path'
+import type { IpcInvokeHandler } from '../utils/ipc-handler'
 
 export interface FsHandlerDeps {
   /** 带 sender 校验 + SSHError 序列化的 handler 注册器（main.ts 的 handleTrusted） */
-  handleTrusted: (channel: string, fn: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => any) => void
+  handleTrusted: (channel: string, fn: IpcInvokeHandler) => void
   /** 背景图目录：userData/backgrounds。注入而非自己算 —— main.ts 已有同一口径 */
   backgroundDir: () => string
   /** 取当前主窗口（fs:selectFile / fs:selectImage 要拿它当对话框父窗口） */

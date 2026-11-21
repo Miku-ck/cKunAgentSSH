@@ -34,11 +34,13 @@ const SSH_ERROR_NAME_PREFIX = 'SSHError:'
  */
 export function extractSSHError(err: unknown): SSHErrorTransport | null {
   if (!err || typeof err !== 'object') return null
-  const e = err as any
+  const e = err as { __sshError?: unknown; name?: unknown; message?: unknown }
 
   // 优先：__sshError 完整 transport（Electron 32+ 直接映射）
-  if (e.__sshError && typeof e.__sshError === 'object' && e.__sshError.__sshError === true) {
-    const t = e.__sshError as SSHErrorTransport
+  const sentinel: unknown = e.__sshError
+  if (sentinel && typeof sentinel === 'object'
+      && (sentinel as { __sshError?: unknown }).__sshError === true) {
+    const t = sentinel as SSHErrorTransport
     // code 不认账时降级而不是丢弃：message 本身是有效的用户文案
     return isSSHErrorCode(t.code) ? t : { ...t, code: 'UNKNOWN' }
   }
@@ -46,10 +48,11 @@ export function extractSSHError(err: unknown): SSHErrorTransport | null {
   if (typeof e.name === 'string' && e.name.startsWith(SSH_ERROR_NAME_PREFIX)) {
     const candidate = e.name.slice(SSH_ERROR_NAME_PREFIX.length)
     if (!isSSHErrorCode(candidate)) return null
+    const message = typeof e.message === 'string' && e.message ? e.message : toFriendlySshMessage(candidate)
     return {
       __sshError: true,
       code: candidate,
-      message: e.message || toFriendlySshMessage(candidate),
+      message,
       retryable: isRetryable(candidate),
       detail: undefined,
     }
