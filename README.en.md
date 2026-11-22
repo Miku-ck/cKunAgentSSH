@@ -33,7 +33,7 @@ The app has no separate "chat mode". Conversations and executions in the task co
 
 **Task console and run flow**
 
-- The task console is the AI's only conversation surface: the input area carries the target host, target / plan posture, skills, text attachments, and model selection; while running, the send button becomes a stop button and the draft is preserved.
+- The task console is the AI's only conversation surface: the input area carries the target host, skills, text attachments, and model selection, with the structured goal/plan progress panel (approve, reset, abandon) pinned above it; while running, the send button becomes a stop button and the draft is preserved.
 - The AI icon in the title bar and `Ctrl+Shift+B` switch between the task console and any page; the badge prioritizes "pending approval > running > unread".
 - Execution does not flood the screen: approvals and clarifications are collected above the input box; routine run status and tool-call details are not expanded in the message stream and are replayed by `run_id` on the ops traces page. At the end of the message stream, the run notice area keeps only task plans, warnings, human-help requests, and errors.
 - Supports chain-of-thought display, streaming Markdown rendering, copy, and conversation history; long conversations render in batches to avoid mounting all messages at once.
@@ -68,11 +68,11 @@ The app has no separate "chat mode". Conversations and executions in the task co
 - Dangerous operations in production still pop cards for confirmation one by one in interactive sessions, but only offer "allow once" and "always allow"; clicking "always allow" writes to the allowlist, and model adjudication does not apply. Unattended runs (scheduled tasks, headless execution, runbooks) cannot show cards and only honor pre-registered allowlists. After an approval times out, the pending item is retained and never silently allowed; after approval the AI must still re-issue the same command.
 - When write steps are added to a structured task, auto-approval falls back to per-step confirmation.
 
-**Posture, clarification, and structuring**
+**Goal / plan, clarification, and structuring**
 
-- The target and plan postures are shown as chips. The plan posture sends `workflow_mode=plan` and `permission_mode=plan` together, and write operations are hard-blocked as read-only before approval.
+- Structured goals/plans are persisted per conversation (SQLite three-table store): the model proposes a goal draft via `goal_propose` and a step plan via `plan_propose`; the user approves / resets / abandons from the progress panel — the model side has no approval entry, and `approved_by` is always the user. When a conversation has a plan awaiting approval / approved / active, the run is forced into the read-only mode server-side (`permission_mode=plan`, the client is not trusted), and write operations are hard-blocked before approval.
 - When intent is insufficient, a multi-step clarification card appears with options, custom input, and skip, avoiding execution on wrong assumptions; the clarification wizard is not triggered in production or non-interactive runs.
-- Long instructions can be structured once before sending: without tools, the original text is decomposed into explicit steps with ops fields filled in, marking original text, inferences, completions, and additions; the draft is bound to the current target host, and the plan posture strips write steps. Adoption and fallback are decided explicitly by the user, and a structuring failure does not affect sending the original draft.
+- Long instructions can be structured once before sending: without tools, the original text is decomposed into explicit steps with ops fields filled in, marking original text, inferences, completions, and additions; the draft is bound to the current target host. Adoption and fallback are decided explicitly by the user, and a structuring failure does not affect sending the original draft.
 
 **Model management**
 

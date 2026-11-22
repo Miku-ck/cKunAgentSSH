@@ -101,7 +101,6 @@ def coerce_structure_payload(
     *,
     active_host: str,
     environment: str,
-    posture: Optional[str],
     allowed_hosts: Optional[list[str]] = None,
 ) -> dict:
     """把 LLM 原始返回收敛成受护栏约束的结构化结构（纯函数，可脱离模型单测）。
@@ -109,8 +108,7 @@ def coerce_structure_payload(
     护栏（对应 spec §1.3）：
     1. 主机字段无条件锁死 active_host，丢弃模型返回的任何主机值 → 翻转 prod 的路径被封。
     2. write + (inferred|completed) 的步骤一律收敛为 added + requires_confirm → 范围蔓延显式化。
-    3. posture=='plan' 时剔除所有 write 步骤（对齐 resolveRunModes 的 plan=只读）。
-    4. 步骤 / 字段文本里出现允许集合外的主机字面量 → 该步骤标 added + 需确认（不静默放行外机）。
+    3. 步骤 / 字段文本里出现允许集合外的主机字面量 → 该步骤标 added + 需确认（不静默放行外机）。
     """
     allowed = _allowed_host_set(active_host, allowed_hosts)
     raw_steps = llm_payload.get("steps") or [] if isinstance(llm_payload, dict) else []
@@ -145,10 +143,6 @@ def coerce_structure_payload(
             "provenance": prov,
             "requires_confirm": requires_confirm,
         })
-
-    # 护栏 3：plan 姿态只留只读步骤
-    if posture == "plan":
-        steps = [s for s in steps if s["op_kind"] == "read"]
 
     has_added_write_steps = any(s["requires_confirm"] for s in steps)
 

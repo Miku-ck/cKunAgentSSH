@@ -35,7 +35,7 @@ def test_host_field_locked_to_active_target_regardless_of_llm():
         "fields": {"host": {"value": "root@evil-prod.example", "provenance": "verbatim"}},
     }
     out = coerce_structure_payload(
-        payload, active_host="web-01", environment="test", posture=None,
+        payload, active_host="web-01", environment="test",
         allowed_hosts=["web-01"],
     )
     host = out["fields"]["host"]
@@ -51,7 +51,7 @@ def test_write_step_with_inferred_provenance_coerced_to_added():
         _step("清理日志", op_kind="write", provenance="completed"),
     ]}
     out = coerce_structure_payload(payload, active_host="web-01", environment="test",
-                                   posture=None, allowed_hosts=["web-01"])
+                                   allowed_hosts=["web-01"])
     assert all(s["provenance"] == "added" for s in out["steps"])
     assert all(s["requires_confirm"] for s in out["steps"])
     assert out["has_added_write_steps"] is True
@@ -61,22 +61,10 @@ def test_verbatim_write_step_not_forced_to_added():
     """用户原话里就有的写动作保持 verbatim，不被误伤成"需确认"（回退基准来自原文）。"""
     payload = {"steps": [_step("重启 nginx", op_kind="write", provenance="verbatim")]}
     out = coerce_structure_payload(payload, active_host="web-01", environment="test",
-                                   posture=None, allowed_hosts=["web-01"])
+                                   allowed_hosts=["web-01"])
     s = out["steps"][0]
     assert s["provenance"] == "verbatim"
     assert s["requires_confirm"] is False
-    assert out["has_added_write_steps"] is False
-
-
-def test_plan_posture_drops_all_write_steps():
-    """plan 姿态只读：任何写步骤都被剔除，只留 read。"""
-    payload = {"steps": [
-        _step("看状态", op_kind="read", provenance="verbatim"),
-        _step("重启服务", op_kind="write", provenance="added"),
-    ]}
-    out = coerce_structure_payload(payload, active_host="web-01", environment="prod",
-                                   posture="plan", allowed_hosts=["web-01"])
-    assert all(s["op_kind"] == "read" for s in out["steps"])
     assert out["has_added_write_steps"] is False
 
 
@@ -85,7 +73,7 @@ def test_foreign_host_in_step_text_flags_needs_confirm():
     payload = {"steps": [_step("在 10.9.9.9 上执行 systemctl restart nginx",
                                op_kind="write", provenance="verbatim")]}
     out = coerce_structure_payload(payload, active_host="web-01", environment="test",
-                                   posture=None, allowed_hosts=["web-01"])
+                                   allowed_hosts=["web-01"])
     s = out["steps"][0]
     assert s["provenance"] == "added"
     assert s["requires_confirm"] is True
@@ -96,7 +84,7 @@ def test_allowed_host_token_not_flagged():
     payload = {"steps": [_step("重启 root@web-01 上的 nginx",
                                op_kind="write", provenance="verbatim")]}
     out = coerce_structure_payload(payload, active_host="web-01", environment="test",
-                                   posture=None, allowed_hosts=["web-01"])
+                                   allowed_hosts=["web-01"])
     assert out["steps"][0]["requires_confirm"] is False
 
 
@@ -105,7 +93,7 @@ def test_foreign_host_in_read_step_keeps_provenance():
     payload = {"steps": [_step("查看 10.9.9.9 上的 nginx 状态",
                                op_kind="read", provenance="verbatim")]}
     out = coerce_structure_payload(payload, active_host="web-01", environment="test",
-                                   posture=None, allowed_hosts=["web-01"])
+                                   allowed_hosts=["web-01"])
     s = out["steps"][0]
     assert s["provenance"] == "verbatim"
     assert s["requires_confirm"] is False
@@ -115,7 +103,7 @@ def test_unknown_op_kind_defaults_to_write_fail_closed():
     """模型没给合法 op_kind → 保守按 write 处理（宁可多问也不把写当只读放过）。"""
     payload = {"steps": [{"text": "改一下配置", "provenance": "inferred"}]}
     out = coerce_structure_payload(payload, active_host="web-01", environment="test",
-                                   posture=None, allowed_hosts=["web-01"])
+                                   allowed_hosts=["web-01"])
     s = out["steps"][0]
     assert s["op_kind"] == "write"
     assert s["requires_confirm"] is True
@@ -125,7 +113,7 @@ def test_empty_host_active_still_verbatim_and_no_execution_fields():
     """无远程目标（local）：host 空串但来源仍 verbatim；装配文本不含主机行。"""
     payload = {"steps": [_step("查本地进程", op_kind="read", provenance="verbatim")]}
     out = coerce_structure_payload(payload, active_host="", environment="test",
-                                   posture=None, allowed_hosts=[])
+                                   allowed_hosts=[])
     assert out["fields"]["host"]["value"] == ""
     assert out["fields"]["host"]["provenance"] == "verbatim"
     assert "主机：" not in out["structured_text"]

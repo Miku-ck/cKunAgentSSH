@@ -87,9 +87,9 @@ def create_default_reins(
     interceptors.append(ClarificationInterceptor(saddle=saddle))
 
     # ── 计划模式（Plan Mode）──
-    # 制品落盘（spec/plan/goal.md）与 system prompt 注入由 agent/workflow.py 承担；
-    # 这里补的是它明确不做的另一半 —— **只读强制**。workflow.py 自述「不做验收机…
-    # 阶段推进与成功判定交由模型 + 用户决定，本模块不越权」，于是 plan_write 的
+    # 制品落盘与 system prompt 注入由结构化 goal/plan 承担（SQLite 三表 +
+    # routes/_goal_plan_setup 注入段，M3 起取代旧 agent/workflow.py）；
+    # 这里补的是那条链明确不做的另一半 —— **只读强制**。旧 plan_write 的
     # description 里那句「应等待用户批准计划后再动手执行」只是自觉、不是机制。
     # 本模块把「当前处于 plan 阶段」从提示词约定升级成会被强制执行的权限状态。
     #

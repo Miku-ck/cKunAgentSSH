@@ -50,8 +50,11 @@ ALLOWED_TOOLS = [
     ("web_search", {"query": "nginx 超时排查"}),
     ("load_skill", {"name": "x"}),
     ("memory_search", {"query": "上次怎么重启的"}),
-    # todo_write 是唯一放行的「写」工具：写的是计划自身的表示，不是目标机状态
+    # 放行的「写」工具全是计划自身的表示（M3 结构化三工具取代旧 spec/plan/goal_write）
     ("todo_write", {"todos": []}),
+    ("goal_propose", {"statement": "服务恢复且 502 归零"}),
+    ("plan_propose", {"steps": [{"title": "改配置"}]}),
+    ("step_transition", {"step_id": "s1", "to_status": "in_progress"}),
 ]
 
 
@@ -257,7 +260,7 @@ def test_拒绝文案自带纠偏指令():
     d = _decide("file_write", {"path": "/etc/x", "content": "y"})
     assert d.intercepted is True
     assert "计划模式" in d.intercept_reason
-    assert "plan_write" in d.intercept_reason, "要告诉模型调研完后用 plan_write 产出计划"
+    assert "plan_propose" in d.intercept_reason, "要告诉模型调研完后用 plan_propose 产出计划"
     assert "不要重试" in d.intercept_reason
 
 
@@ -334,7 +337,7 @@ def test_纪律每轮注入一次():
     assert len(d.inject_messages) == 1
     content = d.inject_messages[0]["content"]
     assert content.startswith("[计划模式]")
-    assert "只读" in content and "plan_write" in content
+    assert "只读" in content and "plan_propose" in content
 
 
 # ── 5. 未启用计划模式：逐字段零差异（最重要的回归）──────────────────────────
@@ -632,16 +635,16 @@ def test_HTTP_层把_permission_mode_交给_run_运行时通路():
 # 而生产路径（harness.py 装配 saddle → ctx.metadata）是有 registry 的。
 # 实测带真实 registry 时：白名单里的 file_read 每条都被拒（模板动词 base64 不在
 # 计划动词表里 ⇒ 走 safety 的「未知动词默认审批」），而 PLAN_DISCIPLINE 命令模型
-# 用来产出计划的 plan_write/spec_write/goal_write 干脆不在工具白名单里 ⇒ 计划模式
-# 永远产不出计划。两条都是 BLOCKER 级：一个是只读阶段连读都读不了，一个是模式自相矛盾。
+# 用来产出计划的 plan_propose/goal_propose/step_transition 不在工具白名单里 ⇒ 计划
+# 模式永远产不出计划。两条都是 BLOCKER 级：一个是只读阶段连读都读不了，一个是模式自相矛盾。
 
 from agent.tools import create_registry  # noqa: E402  放在本组开头，保持上面用例零改动
 
 
 @pytest.mark.parametrize("tool,args", [
-    ("plan_write", {"steps": ["读配置", "改 nginx.conf", "reload 验证"]}),
-    ("spec_write", {"content": "# 验收标准\n- 站点可访问"}),
-    ("goal_write", {"objective": "把 nginx 502 排查清楚"}),
+    ("plan_propose", {"steps": [{"title": "改 nginx.conf"}, {"title": "reload 验证"}]}),
+    ("goal_propose", {"statement": "把 nginx 502 排查清楚", "criteria": ["站点可访问"]}),
+    ("step_transition", {"step_id": "s1", "to_status": "in_progress"}),
 ])
 def test_计划模式的计划工件必须可用(tool, args):
     ok, why = pm.classify_plan_action(tool, args, create_registry())

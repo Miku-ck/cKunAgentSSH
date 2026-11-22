@@ -1,7 +1,8 @@
 """goal/plan 结构化存储 — goal_plan_goals / plans / steps 三表（一等公民）。
 
-替代原 Spec/Plan/Goal markdown 文件工件（backend/agent/workflow.py）的唯一
-持久化域。工程约定与 ``db/run_checkpoints.py`` 同风格：
+替代 Spec/Plan/Goal markdown 文件工件（backend/agent/workflow.py，M3 已删除）的
+唯一持久化域；旧工件的读取逻辑内联在本模块迁移器里。工程约定与
+``db/run_checkpoints.py`` 同风格：
 
 - 建表 ``CREATE TABLE IF NOT EXISTS`` 幂等、首用即建；memo 按库路径记忆
   （测试切库必须重走 DDL），**不进 database.py 的 _SCHEMA_VERSION 迁移链**
@@ -27,6 +28,7 @@ import logging
 import re
 import sqlite3
 import threading
+from pathlib import Path
 from typing import Any
 
 import db._conn as _conn_mod
@@ -627,6 +629,48 @@ def get_last_superseded_steps(conversation_id: str) -> list[dict[str, Any]]:
 # 旧 markdown 工件的编号行拆分：1. / 1、 / 1) / - / * 开头的行视为一步
 _STEP_LINE_RE = re.compile(r"^\s*(?:\d+[.、)]|[-*])\s+")
 
+# ── 旧工件读取（内联自已删除的 agent/workflow.py，仅迁移器使用） ─────────────
+
+_LEGACY_BASE_DIR = Path.home() / ".ckunagentic" / "workflow"
+_LEGACY_FILES = {"spec": "spec.md", "plan": "plan.md", "goal": "goal.md"}
+
+
+def _legacy_checked_path(base_dir: Path, conversation_id: str, name: str) -> Path | None:
+    """旧工件路径的 containment 判据（原 _checked_path，注释保留原义）。
+
+    resolve 后要求路径仍落在 base 内：带 ".." 的会话 id 不能越目录读到
+    他人会话工件。非法入参返回 None，调用方按"工件不存在"处理（绝不抛）。
+    """
+    if not conversation_id:
+        return None
+    try:
+        base_root = Path(base_dir).resolve()
+        path = (base_root / conversation_id / name).resolve()
+    except (OSError, ValueError):
+        # 非法路径字符（如 Windows 保留名、嵌入 \0）：视作非法入参，不抛
+        return None
+    if not path.is_relative_to(base_root):
+        return None
+    return path
+
+
+def _read_legacy_artifacts(conversation_id: str, base_dir: str | None) -> dict[str, str]:
+    """读取旧三工件原文。缺失字段返回空串；入参非法也返回空串。"""
+    base = Path(base_dir) if base_dir else _LEGACY_BASE_DIR
+
+    def _one(name: str) -> str:
+        path = _legacy_checked_path(base, conversation_id, name)
+        if path is None:
+            return ""
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    return {"spec": _one(_LEGACY_FILES["spec"]),
+            "plan": _one(_LEGACY_FILES["plan"]),
+            "goal": _one(_LEGACY_FILES["goal"])}
+
 
 def migrate_legacy_artifacts(conversation_id: str,
                              base_dir: str | None = None) -> dict[str, Any] | None:
@@ -643,9 +687,8 @@ def migrate_legacy_artifacts(conversation_id: str,
         return None
     if get_goal_by_conversation(conversation_id) is not None:
         return None  # 已有结构化 goal：视为迁移完成（幂等）
-    from agent import workflow  # M0/M1 局部导入旧模块；M3 内联后删除此依赖
 
-    arts = workflow.read_artifacts(conversation_id, base_dir)
+    arts = _read_legacy_artifacts(conversation_id, base_dir)
     goal_text = (arts.get("goal") or "").strip()
     plan_text = (arts.get("plan") or "").strip()
     spec_text = (arts.get("spec") or "").strip()

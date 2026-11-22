@@ -255,10 +255,13 @@ def test_chunk_callback_restored():
 
 
 def test_goal_anchor_exclusive():
-    """有 workflow goal 的 run 走 goal 自检锚，guard 不重复裁决"""
-    import agent.workflow as wf_mod
-    orig = wf_mod.goal_self_check_prompt
-    wf_mod.goal_self_check_prompt = lambda goal: "请对照目标自检"
+    """有结构化 goal 的 run 走 goal 自检锚，guard 不重复裁决
+
+    （换宿主：自检提示已由 fsm.resolve_self_check_from_metadata 产出，
+    driver 顶层导入 —— patch driver 的名字即可命中调用点）。"""
+    import agent.harness.driver as drv_mod
+    orig = drv_mod.resolve_self_check_from_metadata
+    drv_mod.resolve_self_check_from_metadata = lambda metadata: "请对照目标自检"
     try:
         judge = _JudgeClient(["FAIL\n不该被调到"])
         ctx = RunContext.new(
@@ -270,7 +273,7 @@ def test_goal_anchor_exclusive():
         assert len(judge.calls) == 0
         assert ctx.state == State.COMPLETED
     finally:
-        wf_mod.goal_self_check_prompt = orig
+        drv_mod.resolve_self_check_from_metadata = orig
 
 
 def test_disabled_config_skips():

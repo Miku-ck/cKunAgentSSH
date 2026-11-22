@@ -3,14 +3,14 @@
 ## 为什么需要这个模块
 
 主流工具里 plan 不是「一个选项」或「一段提示词」，而是**权限状态 + 可评审制品 +
-显式批准门**三者。本仓库的制品与注入已由 `agent/workflow.py` 承担（`spec.md` /
-`plan.md` / `goal.md` 落盘 + `hydrate_for_session` 渲染注入段），但那个模块自述
-「不做验收机…阶段推进与成功判定交由模型 + 用户决定，本模块不越权」——
+显式批准门**三者。本仓库的制品与注入由结构化 goal/plan 承担（SQLite 三表 +
+`routes/_goal_plan_setup.py` 渲染注入段，M3 起取代旧 markdown 工件），但那条链
+自述「不做验收机…阶段推进与成功判定交由模型 + 用户决定，本模块不越权」——
 也就是说：**plan 阶段没有任何机制阻止 agent 直接动手**。
 
-`plan_write` 的 description 里那句「应等待用户批准计划后再动手执行」是**自觉，不是机制**。
+旧 `plan_write` 的 description 里那句「应等待用户批准计划后再动手执行」是**自觉，不是机制**。
 本模块补的就是这一层：把「当前处于 plan 阶段」从一个提示词约定升级成**会被强制执行的
-权限状态**。
+权限状态**（现在由批准门服务端推导：活动 plan 存在时 run 强制进入本模式）。
 
 对齐 Claude Code 的两条官方口径（`code.claude.com/docs/en/permission-modes`）：
 
@@ -111,12 +111,13 @@ PLAN_READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "web_search", "web_fetch",
     # 自身只读 / 计划表示
     "load_skill", "memory_search", "todo_write",
-    # 计划工件本身：与 todo_write 同一类，写的是"计划怎么表达"，不是目标机的状态。
-    # 这三条必须在白名单里 —— PLAN_DISCIPLINE 每轮都命令模型「调研完成后用 plan_write
-    # 输出有序步骤」，而本表原本不含它们：实测 classify_plan_action("plan_write", …)
-    # 直接回「在计划模式下不可用」，于是计划模式永远产不出计划（模型照命令再调一次
-    # 就是重复调用，第三次被 LoopDetector terminate 掉整个 run）。spec/goal 同一条路径。
-    "plan_write", "spec_write", "goal_write",
+    # goal/plan 结构化（M3 取代旧 spec_write/plan_write/goal_write）：三只工具写的
+    # 都是「计划的表示」（目标草案 / 计划草案 / 步骤状态），不是目标机的状态。
+    # 这三条必须在白名单里 —— PLAN_DISCIPLINE 每轮都命令模型「调研完成后用
+    # plan_propose 输出有序步骤」，白名单缺了它计划模式就永远产不出计划
+    # （模型照命令再调一次被拒，重复调用第三次被 LoopDetector terminate）。
+    # 批准门不在工具面：goal/plan 的批准/裁决只经 REST 用户侧入口。
+    "goal_propose", "plan_propose", "step_transition",
 })
 
 # ── 命令级白名单：严格子集，逐项都是「读了不会改」 ──────────────────────────
@@ -201,9 +202,11 @@ PLAN_DISCIPLINE = (
     "这些调用会被直接拒绝，写「始终允许」也没用。\n"
     "· 被拒时不要重试同一条命令或换等价写法，改用只读手段取证"
     "（status / show / 查日志 / 读配置）。\n"
-    "· 调研完成后，把方案写成计划：用 plan_write 输出有序步骤"
-    "（每步写清改什么、用什么命令、怎么验证），可配合 todo_write 建任务清单。\n"
-    "· 计划要等用户批准后才动手。批准前不要宣称任务已完成。"
+    "· 调研完成后，把方案写成计划：用 plan_propose 输出有序步骤"
+    "（每步写清改什么、用什么命令、怎么验证），可配合 todo_write 建任务清单；"
+    "尚无目标时先用 goal_propose 写明成功标准。\n"
+    "· 计划要等用户批准后才动手（批准在前端，模型没有批准入口）。"
+    "批准前不要宣称任务已完成；批准后用 step_transition 推进步骤，完成必须附证据。"
 )
 
 

@@ -1,4 +1,11 @@
-"""goal 验收锚 — 自检提示 helper 的单测（backend/agent/workflow.py）。"""
+"""goal 验收锚 — 自检提示与达成粗判的单测（换宿主：agent/workflow.py 已退役，
+自检提示现由 agent/harness/goal_plan_fsm.resolve_self_check_from_metadata 产出）。
+
+三组取值断言原样保留（措辞是跨端契约的一部分，前端/注入文案依赖）：
+- 前缀 ``[目标验收]``；
+- 「已**全部达成**」/「仍有未达成」两个分支措辞；
+- 只 trim 首尾空白，不改写 goal 原文。
+"""
 import sys
 from pathlib import Path
 
@@ -6,27 +13,32 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent.harness.driver import _goal_acknowledged
-from agent.workflow import goal_self_check_prompt
+from agent.harness.goal_plan_fsm import resolve_self_check_from_metadata
 
 
-def test_goal_self_check_prompt_empty():
+def _prompt(goal_text: str) -> str:
+    """与 driver 收尾锚同形：metadata 只带 goal 原文，无 criteria。"""
+    return resolve_self_check_from_metadata({"_goal_text": goal_text})
+
+
+def test_self_check_empty():
     """无 goal 内容 → 返回空串，调用方据此跳过自检（保持原收尾行为）。"""
-    assert goal_self_check_prompt("") == ""
-    assert goal_self_check_prompt("   \n ") == ""
+    assert _prompt("") == ""
+    assert _prompt("   \n ") == ""
 
 
-def test_goal_self_check_prompt_basic():
+def test_self_check_basic():
     """有 goal → 返回含成功标准原文与已达成/未达成分支的提示。"""
-    prompt = goal_self_check_prompt("将 CPU 使用率降至 30% 以下")
+    prompt = _prompt("将 CPU 使用率降至 30% 以下")
     assert "将 CPU 使用率降至 30% 以下" in prompt
     assert "已**全部达成**" in prompt
     assert "仍有未达成" in prompt
     assert prompt.startswith("[目标验收]")
 
 
-def test_goal_self_check_prompt_trims():
+def test_self_check_trims():
     """只 trim 首尾空白，不改写 goal 原文。"""
-    prompt = goal_self_check_prompt("  修复登录失败   ")
+    prompt = _prompt("  修复登录失败   ")
     assert "修复登录失败" in prompt
     assert "修复登录失败 " not in prompt  # 原文内部空白保留（仅首尾去）
 

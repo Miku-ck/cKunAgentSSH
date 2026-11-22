@@ -34,7 +34,6 @@ class StructureRequest(BaseModel):
     # 仅作展示提示（前端读当前主机判定）；结构化端点不据此放行任何操作，
     # 真正的 prod 审批强化仍发生在下游真实 run（见 task_structure §0 不变量）。
     environment: Literal["test", "prod"] = "test"
-    posture: Optional[Literal["goal", "plan"]] = None
     # 已连接主机白名单：结构化文本里出现集合外的主机 = 臆测 → 逼用户确认。
     allowed_hosts: list[str] = []
     model_id: str = ""
@@ -137,7 +136,6 @@ async def structure_task(req: StructureRequest):
         payload,
         active_host=req.active_target.host,
         environment=req.environment,
-        posture=req.posture,
         allowed_hosts=req.allowed_hosts,
     )
     coerced["meta"] = {

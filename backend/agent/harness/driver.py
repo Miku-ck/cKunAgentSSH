@@ -468,7 +468,7 @@ class Driver:
                         continue
 
                 # ── 假完成强校验（CompletionGuard）──
-                # goal 锚只覆盖有 workflow goal 的 run；无 goal 时「宣告完成」的
+                # goal 锚只覆盖有结构化 goal 的 run；无 goal 时「宣告完成」的
                 # 唯一凭据是模型自己不调工具了。这里用一次轻量 LLM 裁决把钉扎任务
                 # 原文与最终答案对表（详见 _completion_guard docstring）。
                 guard_bounce, guard_events = await self._completion_guard(
