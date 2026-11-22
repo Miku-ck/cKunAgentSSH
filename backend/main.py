@@ -560,11 +560,15 @@ if __name__ == "__main__":
         host=args.host,
         port=args.port,
         reload=False,
-        log_level="info",
+        # uvicorn 自有 logger 压到 warning：它的 INFO（Started server process /
+        # Waiting for application startup / Application startup complete / Uvicorn
+        # running on ...，以及 WS 的 "connection open" / "[accepted]"）在嵌入式 GUI
+        # 里是框架噪音，就绪时机已由 _log_startup_summary 汇总行表达；真正的故障
+        # （端口占用、绑定失败）走 ERROR，不受影响。
+        log_level="warning",
         # S-B1②：关访问日志 —— BackendManager 以 150-500ms 轮询 /api/health，
         # 每次轮询一条 access 行把启动日志刷成健康检查流水账（与 Electron 侧
-        # [Python] 行缓冲 relay 配套的统一口径）。业务可观测性走 root handler，
-        # uvicorn.error（启动/停止事件）仍保留在 info。
+        # [Python] 行缓冲 relay 配套的统一口径）。
         access_log=False,
         # Bridge WS 单帧上限（显式化默认值）：远程命令输出可能较大
         ws_max_size=16 * 1024 * 1024,

@@ -132,6 +132,18 @@ def test_uvicorn_config_receives_app_object():
             raise AssertionError(f"main.py:{lineno} 仍以字符串形式指定入口: {line.strip()}")
 
 
+def test_uvicorn_own_loggers_pinned_to_warning():
+    """uvicorn 自有 logger 压到 warning：它的 INFO 在嵌入式 GUI 里是纯框架噪音。
+
+    那几个 logger 不经 root 的级别门（uvicorn.Config 自配 logger + handler），
+    只能在 log_level 上压 —— 否则启动事件与 WS 握手的 INFO 会重新刷进日志。
+    """
+    text = (BACKEND / "main.py").read_text(encoding="utf-8")
+    assert re.search(r'log_level="warning"', text), (
+        "uvicorn 自有 logger 未被压到 warning —— 启动事件 INFO 会重新刷进日志"
+    )
+
+
 def test_init_db_marks_schema_version(base_db):
     """全量初始化后必须把结构版本落到库里，否则下次启动仍会重跑 DDL。"""
     import database as db
