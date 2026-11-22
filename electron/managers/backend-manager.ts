@@ -14,7 +14,7 @@ import { clearPythonCache, loadPythonCache, savePythonCache } from './backend-py
 /** [BackendManager] 消息。启动链路的时序问题（解释器探测、健康轮询、
  *  重启冷却都以秒计）只有带毫秒时间戳才排得动——时间戳与级别前缀由 main-logger
  *  的 console 劫持层统一加，这里只带来源标签，避免双份。 */
-function bmLog(level: 'log' | 'warn' | 'error', msg: string): void {
+function bmLog(level: 'warn' | 'error', msg: string): void {
   console[level](`[BackendManager] ${msg}`)
 }
 
@@ -881,7 +881,6 @@ export class BackendManager {
     const cached = loadPythonCache(app.getPath('userData'))
     if (cached && (!isAbsolute(cached.cmd) || existsSync(cached.cmd))) {
       perfMark('backend: python cache hit')
-      bmLog('log', `解释器缓存命中: ${[cached.cmd, ...cached.prefixArgs].join(' ')}`)
       return cached
     }
 
@@ -905,11 +904,7 @@ export class BackendManager {
       ),
     )
     for (const r of results) {
-      if (r.ok) {
-        const label = [r.c.cmd, ...r.c.prefixArgs].join(' ')
-        bmLog('log', `Using Python interpreter: ${label}`)
-        return r.c
-      }
+      if (r.ok) return r.c
     }
 
     const failures = candidates.map((c) => [c.cmd, ...c.prefixArgs].join(' '))
