@@ -19,6 +19,7 @@ vi.mock('@/api/client', () => ({
     replanPlan: vi.fn(async () => ({ superseded_plan_id: 'p1', archived_steps: [] })),
     abandonPlan: vi.fn(async () => ({ abandoned: true, plan_id: 'p1' })),
     adjudicateGoal: vi.fn(async () => ({})),
+    reviseGoal: vi.fn(async () => ({})),
   },
   subscribeGoalPlanProgress: vi.fn((handler: (event: unknown) => void) => {
     capturedHandler = handler
@@ -188,6 +189,39 @@ describe('goal-plan 用户侧动作', () => {
     const store = useGoalPlanStore()
     await store.attach('c1')
     await store.abandonPlan('p1')
+    expect(store.hasContent).toBe(true)
+  })
+
+  it('裁决目标后重新拉快照（user_confirmed → achieved）', async () => {
+    vi.mocked(goalPlanApi.state)
+      .mockResolvedValueOnce({ goal: goalFixture(), plan: null, steps: [], progress: emptyProgress() })
+      .mockResolvedValueOnce({
+        goal: { ...goalFixture(), status: 'achieved', adjudication: 'user_confirmed' },
+        plan: null, steps: [], progress: emptyProgress(),
+      })
+    const store = useGoalPlanStore()
+    await store.attach('c1')
+    await store.adjudicateGoal('g1', { adjudication: 'user_confirmed', achieved: true })
+    expect(goalPlanApi.adjudicateGoal).toHaveBeenCalledWith(
+      'g1', { adjudication: 'user_confirmed', achieved: true })
+    expect(store.snapshot.goal?.status).toBe('achieved')
+  })
+
+  it('修订目标走乐观锁并刷新；失败不清空快照', async () => {
+    vi.mocked(goalPlanApi.state).mockResolvedValue({
+      goal: goalFixture(), plan: null, steps: [], progress: emptyProgress(),
+    })
+    const store = useGoalPlanStore()
+    await store.attach('c1')
+    await store.reviseGoal('g1', {
+      expected_version: 1, statement: '新陈述', criteria: ['标准 A'],
+    })
+    expect(goalPlanApi.reviseGoal).toHaveBeenCalledWith('g1', {
+      expected_version: 1, statement: '新陈述', criteria: ['标准 A'],
+    })
+
+    vi.mocked(goalPlanApi.reviseGoal).mockRejectedValueOnce(new Error('版本已过期'))
+    await store.reviseGoal('g1', { expected_version: 99, statement: '过期修订' })
     expect(store.hasContent).toBe(true)
   })
 })

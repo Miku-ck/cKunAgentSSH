@@ -41,6 +41,20 @@ describe('GoalPlanProgress 挂载边界', () => {
     expect(panel).toContain("danger: true")
   })
 
+  it('目标裁决与修订按钮经二次确认，且走乐观锁与 achieved 语义', () => {
+    expect(panel).toContain('>确认达成</button>')
+    expect(panel).toContain('>修订标准</button>')
+    expect(panel).toContain('onConfirmAchieved')
+    expect(panel).toContain("adjudication: 'user_confirmed', achieved: true")
+    expect(panel).toContain('expected_version: goal.version')
+    // 达成由用户裁决，与 criteria 逐条自检解耦（不得用 allCriteriaMet 阻断；
+    // 只匹配实际调用，别被注释里提到的同名符号误伤）
+    expect(panel).not.toMatch(/\ballCriteriaMet\s*\(/)
+    // 修订表单保留用户原文，criteria 一行一条
+    expect(panel).toContain('v-model="editStatement"')
+    expect(panel).toContain("editCriteria.value.split('\\n')")
+  })
+
   it('进度条与步骤列表消费 store 投影，不自行计算业务状态', () => {
     expect(panel).toContain('gp.snapshot.progress.completed')
     expect(panel).toContain('v-for="s in gp.snapshot.steps"')

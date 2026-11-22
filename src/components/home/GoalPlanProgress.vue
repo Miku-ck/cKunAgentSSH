@@ -1,6 +1,6 @@
 <template>
   <div v-if="gp.hasContent" class="gp-panel" data-testid="goal-plan-progress">
-    <!-- 目标卡：陈述 + 逐条标准勾选态（裁决语义由徽标呈现，只读） -->
+    <!-- 目标卡：陈述 + 逐条标准勾选态；裁决与修订由用户显式操作 -->
     <div v-if="gp.snapshot.goal" class="gp-goal">
       <div class="gp-goal-head">
         <span class="gp-badge" :class="goalBadgeClass">{{ goalStatusLabel }}</span>
@@ -22,6 +22,30 @@
           <span class="gp-criterion-text">{{ c.text }}</span>
         </li>
       </ul>
+      <div v-if="!editing" class="gp-actions gp-goal-actions">
+        <button
+          v-if="goalAdjudicable"
+          class="gp-btn primary"
+          :disabled="gp.busy"
+          @click="onConfirmAchieved"
+        >确认达成</button>
+        <button class="gp-btn" :disabled="gp.busy" @click="onBeginRevise">修订标准</button>
+      </div>
+      <!-- 修订表单：statement + 逐行标准；提交走乐观锁（expected_version） -->
+      <div v-else class="gp-edit">
+        <label class="gp-edit-label">
+          目标陈述
+          <textarea v-model="editStatement" class="gp-input" rows="2" />
+        </label>
+        <label class="gp-edit-label">
+          成功标准（每行一条）
+          <textarea v-model="editCriteria" class="gp-input" rows="3" />
+        </label>
+        <div class="gp-actions">
+          <button class="gp-btn primary" :disabled="gp.busy || !canSubmitRevise" @click="onSubmitRevise">保存</button>
+          <button class="gp-btn" :disabled="gp.busy" @click="onCancelRevise">取消</button>
+        </div>
+      </div>
     </div>
 
     <!-- 计划卡：状态徽标 + 进度条 + 步骤列表 + 用户侧动作 -->
@@ -67,13 +91,25 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useGoalPlanStore } from '@/stores/goal-plan'
 import type { GoalStatus, PlanStatus, StepStatus } from '@/utils/goal-plan-core'
 
 const gp = useGoalPlanStore()
 const { confirm } = useConfirm()
+
+const editing = ref(false)
+const editStatement = ref('')
+const editCriteria = ref('')
+
+const goalAdjudicable = computed(() => {
+  const status = gp.snapshot.goal?.status
+  return status !== undefined && status !== 'achieved' && status !== 'abandoned'
+})
+
+const canSubmitRevise = computed(() =>
+  editStatement.value.trim().length > 0 && editCriteria.value.trim().length > 0)
 
 const GOAL_LABELS: Record<GoalStatus, string> = {
   draft: '草案', active: '进行中', achieved: '已达成', revised: '已修订', abandoned: '已放弃',
@@ -103,6 +139,49 @@ const progressPct = computed(() => {
 
 function statusMark(status: StepStatus): string {
   return { pending: '○', in_progress: '▶', completed: '✓', blocked: '!', skipped: '−' }[status]
+}
+
+async function onConfirmAchieved(): Promise<void> {
+  const goal = gp.snapshot.goal
+  if (!goal) return
+  const met = goal.criteria.filter(c => c.met).length
+  // 目标达成由用户最终裁决，与逐条自检解耦（criteria.met 当前无生产写入路径）；
+  // 文案说出实情，而不是拿 allCriteriaMet 硬阻断裁决。
+  const ok = await confirm({
+    title: '确认目标达成',
+    message: `目标达成由你最终裁决，与逐条标准自检独立。当前 ${goal.criteria.length} 条标准中 ${met} 条标记已满足。确认此目标已达成？`,
+    confirmText: '确认达成',
+  })
+  if (ok) void gp.adjudicateGoal(goal.goal_id, { adjudication: 'user_confirmed', achieved: true })
+}
+
+function onBeginRevise(): void {
+  const goal = gp.snapshot.goal
+  if (!goal) return
+  editStatement.value = goal.statement
+  editCriteria.value = goal.criteria.map(c => c.text).join('\n')
+  editing.value = true
+}
+
+function onCancelRevise(): void {
+  editing.value = false
+}
+
+async function onSubmitRevise(): Promise<void> {
+  const goal = gp.snapshot.goal
+  if (!goal || !canSubmitRevise.value) return
+  const ok = await confirm({
+    title: '修订目标标准',
+    message: '保存后目标版本递增，成功标准的勾选态重置为未满足，需要重新验收。确认保存？',
+    confirmText: '保存修订',
+  })
+  if (!ok) return
+  await gp.reviseGoal(goal.goal_id, {
+    expected_version: goal.version,
+    statement: editStatement.value.trim(),
+    criteria: editCriteria.value.split('\n').map(s => s.trim()).filter(Boolean),
+  })
+  editing.value = false
 }
 
 async function onApprove(): Promise<void> {
@@ -155,6 +234,43 @@ async function onAbandon(): Promise<void> {
 }
 
 .gp-goal-head,
+.gp-goal-actions {
+  margin-top: var(--spacing-8);
+}
+
+.gp-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+  margin-top: var(--spacing-8);
+}
+
+.gp-edit-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  color: var(--text-secondary);
+  font-size: 0.8462rem;
+}
+
+.gp-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--spacing-6) var(--spacing-8);
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.8462rem;
+  line-height: var(--line-height-normal);
+  resize: vertical;
+}
+
+.gp-input:focus-visible {
+  outline: 1px solid var(--accent-primary);
+}
+
 .gp-plan-head {
   display: flex;
   align-items: center;

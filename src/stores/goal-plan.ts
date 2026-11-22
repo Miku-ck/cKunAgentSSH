@@ -12,7 +12,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { goalPlanApi, subscribeGoalPlanProgress, type AgentSSEEvent } from '@/api/client'
-import { applyDelta, emptySnapshot, type GoalPlanSnapshot } from '@/utils/goal-plan-core'
+import { applyDelta, emptySnapshot, type GoalAdjudication, type GoalPlanSnapshot } from '@/utils/goal-plan-core'
 import { logWarn } from '@/utils/logger'
 import { useToastStore } from './toast'
 
@@ -108,6 +108,26 @@ export const useGoalPlanStore = defineStore('goal-plan', () => {
     return _runAction('放弃计划', () => goalPlanApi.abandonPlan(planId))
   }
 
+  /** 用户裁决目标：achieved 仅 adjudication='user_confirmed' 下可达（后端硬校验）。
+   *  与 criteria 逐条自检是两条独立判定 —— UI 不得拿 criteria.met 硬阻断裁决。 */
+  function adjudicateGoal(goalId: string, payload: {
+    adjudication: GoalAdjudication
+    achieved: boolean
+  }): Promise<void> {
+    return _runAction('裁决目标', () => goalPlanApi.adjudicateGoal(goalId, payload))
+  }
+
+  /** 修订目标标准（乐观锁）：criteria 传字符串列表，后端重建后勾选态归零。 */
+  function reviseGoal(goalId: string, payload: {
+    expected_version: number
+    title?: string
+    statement?: string
+    context?: string
+    criteria?: string[]
+  }): Promise<void> {
+    return _runAction('修订目标', () => goalPlanApi.reviseGoal(goalId, payload))
+  }
+
   return {
     snapshot,
     conversationId,
@@ -122,5 +142,7 @@ export const useGoalPlanStore = defineStore('goal-plan', () => {
     approvePlan,
     replanPlan,
     abandonPlan,
+    adjudicateGoal,
+    reviseGoal,
   }
 })
