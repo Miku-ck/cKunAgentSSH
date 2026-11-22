@@ -411,6 +411,19 @@ def test_log_level_default_matches_previous_effective_output(clean_loglevel):
     assert logconfig.normalize_level(None) == "warning"
 
 
+def test_install_early_does_not_lift_root_level(clean_loglevel):
+    """入口只装 handler，不抬级别：启动期 INFO 一律不落地。
+
+    抬到 info 的机制已删 —— 它服务的 init_db 横幅与初始化进度已删（默认级别下
+    纯噪音），且抬升与 lifespan 的 load_from_db 回填并发，会让启动 INFO 时有时无。
+    """
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)          # 模拟被别的导入改乱过
+    assert logconfig.install_early() == "warning"
+    assert root.level == logging.WARNING
+    assert logconfig.get_level() == "warning"
+
+
 def test_log_level_apply_installs_single_handler_and_sets_root(clean_loglevel):
     root = logging.getLogger()
     before = len(root.handlers)

@@ -125,12 +125,12 @@ def _log_startup_summary() -> None:
 
 
 # ── S-B1①：入口最早安装 root handler ─────────────────────────────────────────
-# 必须先于下方模块级 token 警告与 __main__ 里的启动横幅执行：此前前者经
-# lastResort 裸打（无时间戳无级别）、后者是 root 默认 WARNING 丢 INFO 的死日志。
-# 安装后二者按统一 `%(asctime)s %(levelname)-7s %(name)s` 格式落地，且出口
-# 脱敏（SecretRedactionFilter）随 handler 同步生效 —— 早期日志没有脱敏真空期。
-# 启动窗口用 info 级（横幅与初始化进度必须落地）；用户配置级别由 lifespan
-# 的 logconfig.load_from_db 回填接管，运行期默认仍是 warning。
+# 必须先于下方模块级 token 警告执行：此前它经 lastResort 裸打（无时间戳无级别）。
+# 安装后按统一 `%(asctime)s %(levelname)-7s %(name)s` 格式落地，且出口脱敏
+# （SecretRedactionFilter）随 handler 同步生效 —— 早期日志没有脱敏真空期。
+# 不抬级别：root 钉在默认 WARNING，启动期 INFO 一律不落地（init_db 横幅与初始化
+# 进度那类噪音已删）；用户配置级别由 lifespan 的 logconfig.load_from_db 回填接管，
+# 运行期默认仍是 warning。
 logconfig.install_early()
 
 # ── API Token 认证 ────────────────────────────────────────────────────────────

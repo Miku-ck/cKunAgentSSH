@@ -37,7 +37,8 @@ export interface CrashReporterStartOptionsLike {
 export interface CrashReporterOptions {
   userDataDir: string
   productName?: string
-  log?: (level: 'info' | 'warn' | 'error', message: string) => void
+  // 只有 warn/error 两条通道：启用横幅已删（默认级别下纯噪音），没有 info 级事件
+  log?: (level: 'warn' | 'error', message: string) => void
   /** 注入点：单测替换真实启动（真调需要 Electron 运行时） */
   startCrashReporter?: (options: CrashReporterStartOptionsLike) => void
 }
@@ -53,12 +54,11 @@ export function setupCrashReporter(opts: CrashReporterOptions): string {
   if (started) return dir
   started = true
 
-  const log = opts.log ?? ((level: 'info' | 'warn' | 'error', message: string) => {
+  const log = opts.log ?? ((level: 'warn' | 'error', message: string) => {
     // 显式落到全局 console：本函数可能早于 main.ts 的 logWarn/logError 定义被调用，
     // 但 installMainLogger 已经劫持了 console，这里照样进 main.log。
     if (level === 'error') console.error(`[crash] ${message}`)
-    else if (level === 'warn') console.warn(`[crash] ${message}`)
-    else console.log(`[crash] ${message}`)
+    else console.warn(`[crash] ${message}`)
   })
 
   try {

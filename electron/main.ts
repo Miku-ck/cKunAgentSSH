@@ -57,7 +57,7 @@ perfMark('main module loaded')
 // ─── 日志来源标签 ────────────────────────────────
 // 时间戳与级别前缀由 main-logger.ts 的 console 劫持层统一加（[HH:MM:SS.mmm] [LEVEL]），
 // 这里的 logWarn/logError 只负责带一个 [domain] 来源标签、不再自己加时间戳（否则双份）。
-// 级别语义与落盘策略见 docs 的「统一日志级别规范」表。
+// 级别前缀语义见 main-logger.ts；后端日志级别由 backend/logconfig.py 决定。
 function logWarn(domain: string, msg: string): void { console.warn(`[${domain}] ${msg}`) }
 function logError(domain: string, msg: string): void { console.error(`[${domain}] ${msg}`) }
 
@@ -71,8 +71,7 @@ const CRASH_DUMPS_DIR = (() => {
       userDataDir: app.getPath('userData'),
       log: (level, message) => {
         if (level === 'error') logError('crash', message)
-        else if (level === 'warn') logWarn('crash', message)
-        else console.log(`[crash] ${message}`)
+        else logWarn('crash', message)
       },
     })
   } catch (e) {

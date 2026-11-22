@@ -64,21 +64,22 @@ def _install_handler_locked() -> None:
 def install_early() -> str:
     """进程入口最早安装 root handler（S-B1①，main.py 模块级调用）。
 
-    目标：token 警告、启动横幅这类「handler 安装之前」发生的日志也走统一的
-    asctime/level/name 格式与出口脱敏 —— 之前它们要么经 lastResort 裸打
-    （无时间戳无级别），要么因 root 默认 WARNING 把 INFO 丢成死日志。
+    目标：token 警告这类「handler 安装之前」发生的日志也走统一的
+    asctime/level/name 格式与出口脱敏 —— 之前它们经 lastResort 裸打
+    （无时间戳无级别）。
 
-    启动窗口先用 info 级：启动横幅与初始化进度（logger.info）必须落地。
-    用户配置级别由 lifespan 的 load_from_db 回填接管（缺行/脏值回 DEFAULT
-    warning）—— 所以 info 只在启动窗口多出来，运行期可观测面不变。
+    不抬级别：root 钉在默认 WARNING，启动期 INFO 一律不落地。原先抬到 info
+    是为了让 init_db 横幅与初始化进度可见，那些横幅已删（默认级别下纯噪音）；
+    而且抬升与 lifespan 的 load_from_db 回填并发，会让启动 INFO 时有时无。
+    用户配置级别仍由 lifespan 回填接管（缺行/脏值回 DEFAULT warning）。
 
-    脱敏随 handler 同步生效：提前安装让早期日志出现的同时，early INFO 里若
-    混有凭据形态同样过 SecretRedactionFilter，不存在脱敏真空期。
+    脱敏随 handler 同步生效：提前安装让早期日志出现的同时，早期 WARNING+
+    里若混有凭据形态同样过 SecretRedactionFilter，不存在脱敏真空期。
     """
     global _current
     _install_handler_locked()
-    logging.getLogger().setLevel(logging.INFO)
-    _current = "info"
+    logging.getLogger().setLevel(logging.WARNING)
+    _current = DEFAULT_LEVEL
     return _current
 
 
@@ -105,9 +106,9 @@ def get_level() -> str:
 def load_from_db() -> str:
     """启动回填：读 app_settings('log.level')，脏值/缺行回默认级别。
 
-    读取本身失败也回 DEFAULT：install_early 把启动窗口抬到 info，若这里因
-    DB 故障沿用 _current，info 就会泄漏成运行期级别 —— 运行期默认必须是
-    warning，宁可牺牲一次读失败时的个性化级别。
+    读取本身失败也回 DEFAULT：运行期默认必须是 warning，这一点不能依赖
+    「启动路径恰好把 _current 留在 warning」—— 宁可牺牲一次读失败时的个性化
+    级别。
     """
     try:
         import database as db
