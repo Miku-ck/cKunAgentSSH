@@ -125,3 +125,33 @@ def test_gate_state_machine_store_side(gp_db):
     assert approved is not None and approved["approved_by"] == "user"
     # 批准只能发生一次：第二次批准被拒
     assert gp.approve_plan(plan["plan_id"]) is None
+
+
+def test_批准后解除只读强制(gp_db):
+    """批准门端到端：awaiting_approval 强制 plan 档；用户批准后放行执行。
+
+    回归根因：_PLAN_STATUS_FORCE_PLAN 曾把 approved/active 也纳入强制集合，
+    而 store 从不落 plan=completed（步骤完成 ≠ 目标达成）—— 批准永远不能
+    解锁写操作，PlanModeGuard 会拦掉执行步骤的 shell_exec/file_write。
+    """
+    from db import goal_plan_store as gp
+    from routes._goal_plan_setup import load_goal_plan_state
+
+    goal = gp.create_goal("conv-release", title="验收", statement="服务可用")
+    plan = gp.create_plan_with_steps("conv-release", goal["goal_id"],
+                                     [{"title": "检查"}])
+    assert plan is not None
+    assert load_goal_plan_state("conv-release")["force_plan"] is True
+
+    gp.approve_plan(plan["plan_id"])
+    state_after = load_goal_plan_state("conv-release")
+    assert state_after["force_plan"] is False
+    assert state_after["plan_id"] == plan["plan_id"]  # 注入段仍在，只是不再强制只读
+
+    # active 态同样放行（首个 step 进入 in_progress 后 approved→active）
+    from db import goal_plan_store as gp_store
+    steps = gp_store.get_steps(plan["plan_id"])
+    step, reason = gp_store.update_step_status(steps[0]["step_id"], "in_progress")
+    assert step is not None, reason
+    assert gp_store.get_plan(plan["plan_id"])["status"] == "active"
+    assert load_goal_plan_state("conv-release")["force_plan"] is False

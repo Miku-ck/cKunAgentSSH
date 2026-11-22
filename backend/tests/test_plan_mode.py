@@ -536,8 +536,8 @@ def test_请求字段与_run_传参成对存在():
 
 
 def test_plan_批准门服务端强制_permission_mode():
-    """P1 回归换宿主（M1 结构化重构）：会话存在等待批准 / 已批准 / 执行中的
-    结构化 plan 时，服务端必须把 permission_mode 压成 'plan'。
+    """P1 回归换宿主（M1 结构化重构）：会话存在等待批准的结构化 plan 时，
+    服务端必须把 permission_mode 压成 'plan'；用户批准后恢复审批档。
 
     旧实现是 _paired_permission_mode(workflow_mode, permission_mode) 配对归一；
     新实现的推导面是 routes/_goal_plan_setup._PLAN_STATUS_FORCE_PLAN ——
@@ -550,8 +550,8 @@ def test_plan_批准门服务端强制_permission_mode():
 
     from routes._goal_plan_setup import _PLAN_STATUS_FORCE_PLAN as FORCE
 
-    # 三种活动状态都强制只读；draft / completed / abandoned / superseded 不强制
-    assert FORCE == ("awaiting_approval", "approved", "active")
+    # 只 awaiting_approval 强制只读；approved / active / 终态一律放行
+    assert FORCE == ("awaiting_approval",)
 
     # AST 钉推导链本身：丢失即批准门服务端强制静默失效
     src = (Path(__file__).resolve().parents[1] / "routes/agent.py").read_text(encoding="utf-8")

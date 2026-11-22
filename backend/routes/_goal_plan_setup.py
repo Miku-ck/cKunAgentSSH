@@ -21,8 +21,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# 等待批准 / 已批准 / 执行中 → 本次 run 只读（批准门的服务端推导面）
-_PLAN_STATUS_FORCE_PLAN = ("awaiting_approval", "approved", "active")
+# 等待批准 → 本次 run 只读（批准门的服务端推导面；用户批准后恢复审批档）
+# approved / active 刻意不在此集合：批准动作（approved_by='user'）本身就是
+# 解除只读的合法判据；若继续强制，执行步骤需要的写操作会被 PlanModeGuard
+# 永远拦住，而 plan 从不落 completed（步骤完成 ≠ 目标达成）。
+_PLAN_STATUS_FORCE_PLAN = ("awaiting_approval",)
 
 
 def load_goal_plan_state(conversation_id: str) -> dict[str, Any]:
