@@ -95,14 +95,14 @@ export interface GoalPlanSnapshot {
   progress: GoalPlanProgress
 }
 
-/** SSE `goal_plan_progress` 事件 payload（mode=snapshot 整体替换 / mode=delta 局部更新）。 */
+/** SSE `goal_plan_progress` 事件 payload。mode=snapshot 是「重新拉 REST 全量」
+ *  的信号（事件刻意不带完整 steps —— `steps` 键已被澄清向导占用）；mode=delta
+ *  携带单条 step 由前端按 id 归并。 */
 export interface GoalPlanDelta {
   mode: 'snapshot' | 'delta'
   goal?: GoalInfo | null
   plan?: PlanInfo | null
   step?: StepInfo | null
-  /** 仅 snapshot 分支携带：服务端 get_snapshot 的完整步骤列表。 */
-  steps?: StepInfo[]
   progress?: GoalPlanProgress
 }
 
@@ -159,25 +159,17 @@ export function allCriteriaMet(criteria: GoalCriterion[]): boolean {
 }
 
 /**
- * 把一条 `goal_plan_progress` 事件归并进当前快照：
- * - `mode=snapshot`：整体替换（run 启动时对齐服务端真值）；
- * - `mode=delta`：局部更新 goal / plan / step / progress 任一存在的字段，
- *   step 按 step_id 定位替换，找不到时追加（保证 UI 不丢新步骤）。
+ * 把一条 `goal_plan_progress` 事件归并进当前快照（字段级替换 + step 按 id 归并）：
+ * - `goal` / `plan` / `progress`：字段存在即整体替换（服务端真值优先）；
+ * - `step`：按 step_id 原位替换，未知 id 追加（UI 不丢新步骤）并重算 progress；
+ * - 完整步骤列表不在事件里（`steps` 键已被澄清向导占用）：mode=snapshot 时
+ *   store 应重新拉取 REST 全量后再归并。
  * 返回新对象，不修改入参快照。
  */
-export function mergeSnapshotDelta(
+export function applyDelta(
   snapshot: GoalPlanSnapshot,
   delta: GoalPlanDelta,
 ): GoalPlanSnapshot {
-  if (delta.mode === 'snapshot') {
-    const steps = delta.steps ?? []
-    return {
-      goal: delta.goal ?? null,
-      plan: delta.plan ?? null,
-      steps,
-      progress: delta.progress ?? computeProgress(steps),
-    }
-  }
   const next: GoalPlanSnapshot = {
     goal: delta.goal !== undefined ? delta.goal : snapshot.goal,
     plan: delta.plan !== undefined ? delta.plan : snapshot.plan,

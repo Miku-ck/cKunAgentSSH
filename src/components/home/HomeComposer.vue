@@ -501,29 +501,11 @@ function pickPerm(key: ApprovalKey) {
   showPermMenu.value = false
 }
 
-/** 「计划」与「目标」都是开关不是单选：点亮即表态，再点退出回到**未表态**，
- *  而不是替用户选另一个姿态。两者共用 posture 这一个槽位
- *  （run-modes.ts 的 PostureKey = 'goal' | 'plan'），所以点一个会顶掉
- *  另一个，而不是叠出第三种状态。 */
-function togglePlan() {
-  sshAi.setPosture(sshAi.posture === 'plan' ? null : 'plan')
-  showPlusMenu.value = false
-}
-
-function toggleGoal() {
-  sshAi.setPosture(sshAi.posture === 'goal' ? null : 'goal')
-  showPlusMenu.value = false
-}
-
-const isPlan = computed(() => sshAi.posture === 'plan')
-const isGoal = computed(() => sshAi.posture === 'goal')
 /** 档位只算一次：标签与图标都从它派生，避免"字写着自动、图标还是那张盾"。 */
-const permMode = computed(() =>
-  resolveRunModes(sshAi.posture ?? undefined, approvalMode.value).permissionMode,
-)
-/** 审批档按钮上那一行字与发送装配同源：plan 姿态下 resolveRunModes 恒压出 'plan'
- *  （permission-mode.test.ts 锁着），所以这里显示「只读计划」而不是用户原档 ——
- *  界面不能宣称一个不会生效的选择。禁用是**展示**层，用户的 approvalMode 没被改写。 */
+const permMode = computed(() => resolveRunModes(undefined, approvalMode.value).permissionMode)
+/** 审批档按钮上那一行字与发送装配同源（permission-mode.test.ts 锁着）。
+ *  旧「目标/计划」chip 已随结构化 goal/plan 重构移除：plan 只读档改为
+ *  服务端按待批准计划推导，进度与批准入口在 GoalPlanProgress 组件。 */
 const permLabel = computed(() => PERMISSION_LABELS[permMode.value])
 
 /** 图标与审批档共用一份（run-modes 的 PERM_SHIELD / PERM_MARKS），档位记号
@@ -853,30 +835,6 @@ onMounted(() => {
               </svg>
               <span class="ol">附件</span>
             </button>
-            <button
-              type="button"
-              class="hcc-opt casc-opt"
-              :class="{ on: isGoal }"
-              title="本次要达成什么、怎么算成功"
-              @click="toggleGoal"
-            >
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
-                <circle cx="8" cy="8" r="5.5" /><circle cx="8" cy="8" r="2" />
-              </svg>
-              <span class="ol">目标<span v-if="isGoal" class="ot">✓</span></span>
-            </button>
-            <button
-              type="button"
-              class="hcc-opt casc-opt"
-              :class="{ on: isPlan }"
-              title="只读拆解步骤，写操作被直接拒绝"
-              @click="togglePlan"
-            >
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
-                <path d="M3 4.5h10M3 8h10M3 11.5h7" />
-              </svg>
-              <span class="ol">计划<span v-if="isPlan" class="ot">✓</span></span>
-            </button>
             <div class="hcc-rule"></div>
             <button
               type="button"
@@ -1034,9 +992,8 @@ onMounted(() => {
         <button
           type="button"
           class="hcc-btn"
-          :disabled="running || isPlan"
+          :disabled="running"
           :aria-expanded="showPermMenu"
-          :title="isPlan ? '计划姿态下写操作被直接拒绝，「谁来批准」不参与本次裁决' : ''"
           @click.stop="showPermMenu = !showPermMenu"
         >
           <!-- 图标 + 档位名，不再写「审批 ·」：这三枚并排在底栏，各自是什么已经由
@@ -1449,22 +1406,6 @@ onMounted(() => {
           class="hcc-chip-x"
           :aria-label="`移除专家 ${pickedExpert.name}`"
           @click="sshAi.setSelectedExpert('')"
-        >×</button>
-      </span>
-
-      <!-- 故事 6：加进来的每一项都在底栏留一枚可移除的 chip。姿态这枚必须连目标态
-           一起显形 —— ＋ 菜单里两个都能点亮，只显计划就是从中间截走的故事。 -->
-      <span
-        v-if="sshAi.posture"
-        class="hcc-chip"
-        :title="isPlan ? '本轮只读：写操作会被直接拒绝' : '本轮聚焦要达成什么、怎么算成功'"
-      >
-        {{ isPlan ? '计划' : '目标' }}
-        <button
-          type="button"
-          class="hcc-chip-x"
-          aria-label="移除该姿态"
-          @click="sshAi.setPosture(null)"
         >×</button>
       </span>
 

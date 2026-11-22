@@ -1,8 +1,9 @@
 /**
- * ＋ 菜单六项级联结构的版面守卫（?raw 静态契约，与 HomeWorkspace.layout.test.ts 同风格）
+ * ＋ 菜单四项级联结构的版面守卫（?raw 静态契约，与 HomeWorkspace.layout.test.ts 同风格）
  *
- * 钉住：左栏六项且常驻（附件在目标上面 —— 用户 2026-11-10 指定；
- * 附件点击直达文件选择对话框、远端文件入口移除 —— 用户 2026-11-15 指定）；
+ * 钉住：左栏四项且常驻（附件在技能上面 —— 用户 2026-11-10 指定；附件点击直达
+ * 文件选择对话框、远端文件入口移除 —— 用户 2026-11-15 指定；目标/计划两枚
+ * 姿态 chip 随 M1 结构化重构退役 —— 改由会话内结构化 goal/plan 驱动）；
  * 技能 / 专家 / 插件在右栏级联展开（带搜索 + 图标/标题列表，说明一律走 title
  * 悬浮 —— 用户 2026-11-16 指定「只显示列表，不要冗余信息和小字」）；
  * 技能不显示条数数字；一级卡片静止、动效只允许出现在二级面板；落点切换留在底栏 chip。
@@ -16,7 +17,7 @@ const composer = rawComposer.replace(/\r\n/g, '\n')
 const menuStart = composer.indexOf('class="hcc-menu cascade"')
 const plusRoot = composer.slice(menuStart, composer.indexOf('ref="permRef"', menuStart))
 
-describe('＋ 菜单左栏六项', () => {
+describe('＋ 菜单左栏四项', () => {
   it('子面板的 v-else-if 链有前导 v-if（丢了会让整个 SFC 编译失败）', () => {
     const firstIf = composer.indexOf('v-if="plusPane')
     const firstElseIf = composer.indexOf('v-else-if="plusPane')
@@ -25,8 +26,10 @@ describe('＋ 菜单左栏六项', () => {
     expect(firstIf).toBeLessThan(firstElseIf)
   })
 
-  it('左栏附件 / 目标 / 计划 / 技能 / 专家 / 插件按序出现，且左栏常驻不整卡替换', () => {
-    const tokens = ['>附件</span>', '>目标<', '>计划<', '>技能<', '>专家<', '>插件</span>']
+  it('左栏附件 / 技能 / 专家 / 插件按序出现，且左栏常驻不整卡替换', () => {
+    // 目标 / 计划两枚姿态 chip 已随 M1 结构化重构退役（goal/plan 改由会话内
+    // 结构化 store 驱动），左栏只剩附件与三个级联入口
+    const tokens = ['>附件</span>', '>技能<', '>专家<', '>插件</span>']
     let last = -1
     for (const token of tokens) {
       const i = plusRoot.indexOf(token)
@@ -75,8 +78,9 @@ describe('＋ 菜单左栏六项', () => {
 
   it('每项只留一行主标题，说明小字改成 title（hover 才提示）', () => {
     expect(plusRoot).not.toContain('class="od"')
-    expect(plusRoot).toContain('title="本次要达成什么、怎么算成功"')
-    expect(plusRoot).toContain('title="只读拆解步骤，写操作被直接拒绝"')
+    // 姿态 chip 的两行 title 随 chip 一并退役，不得残留
+    expect(plusRoot).not.toContain('本次要达成什么、怎么算成功')
+    expect(plusRoot).not.toContain('只读拆解步骤，写操作被直接拒绝')
     expect(plusRoot).toContain(':title="pickedExpert ? `当前：${pickedExpert.name}` : \'运行策略配置包\'"')
     expect(composer).not.toContain('.hcc-opt .od {')
   })

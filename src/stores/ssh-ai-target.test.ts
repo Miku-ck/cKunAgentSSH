@@ -31,7 +31,6 @@ vi.mock('@/api/client', () => ({
     createConversation: vi.fn(async () => ({ id: 'b1' })),
     uploadChatFile: vi.fn(async () => ({ file_id: 'x', filename: 'x', content: '', truncated: false })),
   },
-  workflowApi: { read: vi.fn(async () => ({ phase: '', spec: '', plan: '', goal: '' })) },
   agentApi: { grantPermission: vi.fn(async () => ({})), denyCommand: vi.fn(async () => ({})) },
   streamAgentRun: vi.fn(() => () => {}),
 }))

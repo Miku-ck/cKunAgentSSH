@@ -73,7 +73,6 @@ export function useTaskStructuring() {
         raw_text: rawText,
         active_target: { host: targetPayload().host, session_type: targetPayload().session_type },
         environment: targetPayload().environment,
-        posture: sshAi.posture ?? undefined,
         allowed_hosts: targetPayload().allowed_hosts,
         model_id: sshAi.selectedModelId || undefined,
       })

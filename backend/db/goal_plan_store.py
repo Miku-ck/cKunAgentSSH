@@ -50,6 +50,7 @@ __all__ = [
     "abandon_plan",
     "update_step_status",
     "get_snapshot",
+    "get_last_superseded_steps",
     "migrate_legacy_artifacts",
     "empty_snapshot",
     "_reset_memo_for_tests",
@@ -593,6 +594,34 @@ def get_snapshot(conversation_id: str) -> dict[str, Any]:
         "steps": steps,
         "progress": compute_progress(steps),
     }
+
+
+def get_last_superseded_steps(conversation_id: str) -> list[dict[str, Any]]:
+    """最近一次被重置 plan 的已完成步骤（含 evidence），供重新规划参考。
+
+    无活动 plan 但存在归档时，run 装配把这份证据注入提示词 —— 重规划不是
+    从零开始，已完成步骤的证据是输入材料。
+    """
+    if not conversation_id:
+        return []
+    ensure_tables()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT plan_id FROM goal_plan_plans WHERE conversation_id = ?"
+            " AND status = 'superseded' ORDER BY version DESC LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        if row is None:
+            return []
+        rows = conn.execute(
+            "SELECT * FROM goal_plan_steps WHERE plan_id = ? AND status IN"
+            " ('completed','skipped') ORDER BY ordinal",
+            (row["plan_id"],),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_step(r) for r in rows]
 
 
 # 旧 markdown 工件的编号行拆分：1. / 1、 / 1) / - / * 开头的行视为一步

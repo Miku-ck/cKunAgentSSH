@@ -328,6 +328,26 @@ class Harness:
             saddle=self._saddle,
         )
 
+        # goal/plan 进度 Rein（M1 结构化重构）：会话存在结构化 goal 时才注册
+        # 快照 / 增量 / 步骤上下文三个挂点。刻意不进 defaults.py 默认装配清单
+        # （test_plan_mode 钉住默认优先级与零差异语义），且三个 Rein 永不拦截、
+        # 事件只走 decision.events —— 注册与否对既有运行零影响。
+        # 注册失败只降级（无进度事件），绝不拖垮 run。
+        if conversation_id:
+            try:
+                from db import goal_plan_store as _gp_store
+                _has_goal = _gp_store.get_goal_by_conversation(conversation_id) is not None
+            except Exception as e:  # 存储不可用 = 无 goal/plan，行为与引入前一致
+                logger.warning("goal/plan Rein 装配读取失败（跳过注册）: %s", e)
+                _has_goal = False
+            if _has_goal:
+                from agent.harness.reins.goal_plan import (
+                    GoalPlanDeltaRein, GoalPlanSnapshotRein, GoalPlanStepContextRein,
+                )
+                self.reins.register(GoalPlanSnapshotRein())
+                self.reins.register(GoalPlanDeltaRein())
+                self.reins.register(GoalPlanStepContextRein())
+
         # 构建 RunContext
         ctx = RunContext.new(
             task=task,
@@ -396,6 +416,15 @@ class Harness:
             )
             _pm = "normal"
         ctx.metadata[PERMISSION_MODE_KEY] = _pm
+        # goal/plan per-run 指针缓存（M1 结构化重构）：真值恒在 SQLite，这里只填
+        # completion guard 与 driver 收尾锚消费的兼容快照（_goal_text 等）。
+        # load_goal_plan_state 内部已降级不抛；万一填充失败，driver 收尾会兜底读库。
+        if conversation_id:
+            try:
+                from routes._goal_plan_setup import fill_run_metadata, load_goal_plan_state
+                fill_run_metadata(ctx.metadata, load_goal_plan_state(conversation_id))
+            except Exception as e:  # 注入/自检增强降级，不影响 run 本体
+                logger.warning("goal/plan metadata 填充失败（收尾将兜底读库）: %s", e)
         # 审批卡片的"迟到增益"通道：拦截器在卡片发出后异步补发事件（如命令的
         # LLM 后果解释），无法从 ReinsDecision.events 返回值搭车，需要主动向
         # chunk 队列投递。run 终态把 _chunk_queue 置 None（见下方 finally），

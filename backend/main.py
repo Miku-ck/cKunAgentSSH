@@ -48,7 +48,7 @@ from routes.agent_trace import router as agent_trace_router
 from routes.terminal import router as terminal_router
 from routes.audit import router as audit_router
 from routes.schedules import router as schedules_router
-from routes.workflow import router as workflow_router
+from routes.goal_plan import router as goal_plan_router
 from routes.rollbacks import router as rollbacks_router
 from routes.runbooks import router as runbooks_router
 from agent.audit import AuditWriteError
@@ -525,7 +525,7 @@ app.include_router(agent_trace_router, prefix="/api")
 app.include_router(terminal_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(schedules_router, prefix="/api")
-app.include_router(workflow_router, prefix="/api")
+app.include_router(goal_plan_router, prefix="/api")
 app.include_router(rollbacks_router, prefix="/api")
 app.include_router(runbooks_router, prefix="/api")
 

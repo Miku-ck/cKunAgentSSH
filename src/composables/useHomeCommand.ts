@@ -57,11 +57,10 @@ export function useHomeCommand() {
       toast.info('AI 正在运行中，请等待完成')
       return false
     }
-    // 审批档、姿态、技能都取自 store：＋ 菜单点亮的东西必须真的随这次下达出去，
+    // 审批档、技能都取自 store：＋ 菜单点亮的东西必须真的随这次下达出去，
     // 否则它只是首页的装饰。
     if (!await sshAi.sendMessage(text, {
       approval: sshAi.approvalMode,
-      mode: sshAi.posture ?? undefined,
       skillIds: [...sshAi.selectedSkillIds],
       // 逐 run 插件收紧：null = 未表态（不传字段），数组 = 显式选择。
       // 常驻选择，发送后不清空（与专家同语义）

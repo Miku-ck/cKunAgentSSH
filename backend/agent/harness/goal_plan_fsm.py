@@ -11,7 +11,11 @@ goal / plan / step 的状态取值与转移规则在此**唯一定义**（前端
 """
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # ── 状态取值集合（与 goal_plan_store 的 DDL 约束、前端 core 同值）─────────────
 
@@ -150,3 +154,53 @@ def build_goal_self_check_prompt(statement: str,
         "不要在此轮直接宣布完成；若受限于迭代次数确实无法全部达成，请如实说明差距。"
     )
     return "\n".join(lines)
+
+
+def criteria_summary(metadata: dict[str, Any]) -> dict[str, int]:
+    """从 metadata 统计 criteria 达成情况（done 载荷用）。
+
+    兼容两种来源：``_gp_criteria``（list，driver 兜底路径直存对象）与
+    ``_gp_criteria_json``（JSON 串，routes 装配路径）。均缺失时全零。
+    """
+    criteria = (metadata or {}).get("_gp_criteria")
+    if not isinstance(criteria, list):
+        try:
+            criteria = json.loads((metadata or {}).get("_gp_criteria_json") or "[]")
+        except Exception as e:  # 坏 JSON 不该打断收尾
+            logger.debug("[goal_plan] criteria_json 解析失败，按空统计: %s", e)
+            criteria = []
+    if not isinstance(criteria, list):
+        criteria = []
+    met = sum(1 for item in criteria if isinstance(item, dict) and bool(item.get("met")))
+    return {"met": met, "total": len(criteria)}
+
+
+def criteria_summary_safe(metadata: dict[str, Any]) -> dict[str, int]:
+    """criteria_summary 的免异常包装（driver done 载荷用）：统计是增强信息，
+    任何意外失败按全零降级，绝不阻断收尾。"""
+    try:
+        return criteria_summary(metadata)
+    except Exception as e:
+        logger.debug("[goal_plan] criteria 统计失败，按全零处理: %s", e)
+        return {"met": 0, "total": 0}
+
+
+def resolve_self_check_from_metadata(metadata: dict[str, Any]) -> str:
+    """从 per-run metadata 解析收尾自检提示（供 driver 收尾锚调用）。
+
+    - ``_goal_text`` 为空 → 返回空串（无 goal run 走原收尾）；
+    - criteria 兼容 ``_gp_criteria``（list）与 ``_gp_criteria_json``（串）；
+    - 纯函数：driver 不依赖 store，解析失败时降级为空串走原收尾。
+    """
+    statement = str((metadata or {}).get("_goal_text") or "").strip()
+    if not statement:
+        return ""
+    criteria = (metadata or {}).get("_gp_criteria")
+    if not isinstance(criteria, list):
+        try:
+            criteria = json.loads((metadata or {}).get("_gp_criteria_json") or "[]")
+        except Exception as e:  # 坏 JSON 不该打断收尾，按无逐条标准自检
+            logger.debug("[goal_plan] criteria_json 解析失败，按空列表自检: %s", e)
+            criteria = []
+    return build_goal_self_check_prompt(
+        statement, criteria if isinstance(criteria, list) else [])

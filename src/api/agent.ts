@@ -87,7 +87,6 @@ export const agentApi = {
     raw_text: string
     active_target: { host: string; session_type: 'local' | 'remote' }
     environment: 'test' | 'prod'
-    posture?: 'goal' | 'plan' | null
     allowed_hosts?: string[]
     model_id?: string
   }) =>
@@ -623,4 +622,4 @@ export const agentAdminApi = {
 
 // ── Goal（实现目标）API 已移除 ──
 // 旧 goalApi/goalsApi（目标 CRUD + goal_progress SSE）随 runbook 重构移除，
-// 由 core.ts 的 workflowApi（Spec/Plan/Goal 只读，经 client.ts barrel 导出）取代。
+// 由 core.ts 的 goalPlanApi（goal/plan 结构化 CRUD，经 client.ts barrel 导出）取代。

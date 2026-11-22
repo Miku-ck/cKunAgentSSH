@@ -2,6 +2,7 @@
 
 import { PERMISSION_MODE_DEFAULT, type PermissionModeKey } from '@/utils/run-modes'
 import type { RunTerminalState } from '@/utils/agent-run-status'
+import type { GoalInfo, GoalPlanProgress, PlanInfo, StepInfo } from '@/utils/goal-plan-core'
 import { backendErrorDetail, ensureApiToken, getBaseUrl, toFriendlyMessage, withApiToken } from './base'
 import { createConnectTimeout } from './connect-timeout'
 import { logError } from '@/utils/logger'
@@ -18,7 +19,7 @@ export interface AgentClarificationStep {
 export interface AgentSSEEvent {
   // 全集由后端 SSEAdapter._KIND_MAP 决定，两侧一致性由
   // backend/tests/test_trace_projection_keys.py 钉住（新增事件先补后端清单）
-  type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'permission_explain' | 'intention' | 'tool_deliver' | 'budget_extended' | 'reflection_request' | 'plan_mode_block' | 'clarification_needed' | 'clarification_done' | 'expert_suggestion' | 'done'
+  type: 'state' | 'content' | 'reasoning' | 'tool_call_start' | 'tool_call_result' | 'warning' | 'error' | 'human_help_needed' | 'permission_needed' | 'permission_expired' | 'permission_explain' | 'intention' | 'tool_deliver' | 'budget_extended' | 'reflection_request' | 'plan_mode_block' | 'goal_plan_progress' | 'clarification_needed' | 'clarification_done' | 'expert_suggestion' | 'done'
   state?: string
   iteration?: number
   /** done(state=waiting_confirmation) 专用：挂起的待确认点快照，
@@ -113,6 +114,21 @@ export interface AgentSSEEvent {
   /** expert_suggestion 专用：建议切换的专家 slug 与展示名 */
   slug?: string
   name?: string
+  // goal_plan_progress 事件专用字段（reins.goal_plan）：mode=snapshot 是
+  // 「重新拉 REST 全量」的信号；mode=delta 携带单条 step 按 id 归并。
+  mode?: string
+  goal?: GoalInfo | null
+  plan?: PlanInfo | null
+  step?: StepInfo
+  progress?: GoalPlanProgress
+  // done 事件专用：goal 验收闭环信息（键名 workflow_goal 是跨端契约）
+  workflow_goal?: {
+    goal_id: string
+    version: number
+    criteria_met: { met: number; total: number }
+    self_checked: boolean
+    acknowledged: boolean | null
+  }
 }
 
 export interface AgentCostSnapshot {
@@ -214,14 +230,8 @@ export interface StreamAgentOptions {
   contextWindow?: number
   visibleTerminal?: boolean
   /**
-   * 对话姿态（goal/plan）—— 后端据此注入对应的姿态 system prompt。
-   * undefined = 未表态，字段省略、后端不注入任何姿态段（chip 的 × 走这条）。
-   */
-  workflowMode?: 'goal' | 'plan'
-  /**
-   * 权限模式（normal=手动审批 / auto=模型代判 / plan=只读强制）。
-   * 'plan' 必须与 workflowMode **成对**下发：只发姿态提示词时，用户以为进了
-   * 计划模式，写操作却照样执行（「亮的空开关」）。
+   * 权限模式（normal=手动审批 / auto=模型代判）。plan 只读档已改为服务端推导：
+   * 会话存在待批准 / 执行中的结构化 plan 时后端强制 'plan'，前端不再下发该档。
    * 'auto' 仅放宽审批卡的「谁来点头」那一维（fail-closed 在后端裁决器），
    * 不越过 hardline / prod 预授权 / 用户拒绝记忆任何一条边界。缺省 normal。
    */
@@ -304,12 +314,6 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
           auto_skill_match: options.autoSkillMatch ?? true,
           context_window: options.contextWindow ?? 20,
           visible_terminal: options.visibleTerminal ?? false,
-          // 未表态时省略该字段（后端 None = 不注入任何姿态段）。
-          // 与上方 enable_thinking 同一教训：`?? 'goal'` 会把「用户按 × 关掉了」
-          // 压成「又选了一次目标」，chip 消失了但行为什么都没变 —— 能关、关的是摆设。
-          ...(options.workflowMode === undefined
-            ? {}
-            : { workflow_mode: options.workflowMode }),
           permission_mode: options.permissionMode ?? PERMISSION_MODE_DEFAULT,
           // 结构化增强：仅在有意义时发（未增强不污染既有请求体）。raw 只在 enhanced 时带。
           ...(options.enhanced ? { enhanced: true } : {}),

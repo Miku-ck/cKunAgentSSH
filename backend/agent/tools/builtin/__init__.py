@@ -56,11 +56,11 @@ from agent.tools.builtin.memory_tools import (
 )
 # Runbook 知识库（排障经验沉淀 / 检索，复用 memories 表 kind='runbook'）
 from agent.tools.builtin.runbook_tools import RunbookSaveTool, RunbookSearchTool
-# Spec/Plan/Goal 三阶段工作流（文档落盘，非 runbook）
-from agent.tools.builtin.workflow_tools import (
-    SpecWriteTool,
-    PlanWriteTool,
-    GoalWriteTool,
+# goal/plan 结构化工作流（SQLite 三表，替代旧 markdown 工件）
+from agent.tools.builtin.goal_plan_tools import (
+    GoalProposeTool,
+    PlanProposeTool,
+    StepTransitionTool,
 )
 
 _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
@@ -101,10 +101,10 @@ _ALL_TOOL_CLASSES: list[type[BaseTool]] = [
     # Runbook 知识库（经验沉淀 / 检索）
     RunbookSaveTool,
     RunbookSearchTool,
-    # Spec/Plan/Goal 三阶段工作流
-    SpecWriteTool,
-    PlanWriteTool,
-    GoalWriteTool,
+    # goal/plan 结构化工作流（目标锚 / 计划批准门 / 步骤状态机）
+    GoalProposeTool,
+    PlanProposeTool,
+    StepTransitionTool,
 ]
 
 

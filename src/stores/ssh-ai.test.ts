@@ -40,8 +40,6 @@ vi.mock('@/api/client', () => ({
     getMessages: vi.fn(async () => []),
     uploadChatFile: (...args: unknown[]) => uploadChatFile(...(args as [string, File])),
   },
-  // 契约是「无工件返回空字符串字段，不是 null / 404」（client.ts:396），桩照此写
-  workflowApi: { read: vi.fn(async () => ({ phase: '', spec: '', plan: '', goal: '' })) },
   agentApi: { grantPermission: vi.fn(async () => ({})), denyCommand: vi.fn(async () => ({})) },
   streamAgentRun: vi.fn(() => () => {}),
 }))
@@ -75,48 +73,8 @@ describe('ssh-ai 审批档', () => {
 })
 
 /**
- * 对话姿态（目标/计划）—— 故事 5 的 ＋ 菜单项要落在首页，而它原先是
- * 已退役的 AI 侧栏组件的私有 ref。与审批档同一条理由：两处各存一份
- * 就是第二条通路，用户在首页点「计划」、另一处仍按未表态发送。
- */
-describe('ssh-ai 姿态轴', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-    lsMap.clear()
-  })
-
-  it('默认未表态（null），不是 goal —— 缺省 goal 会让「目标」chip 关不掉', () => {
-    expect(useSshAiStore().posture).toBeNull()
-  })
-
-  it('setPosture 点亮与退出', () => {
-    const store = useSshAiStore()
-    store.setPosture('plan')
-    expect(store.posture).toBe('plan')
-    store.setPosture(null)
-    expect(store.posture).toBeNull()
-  })
-
-  it('点亮计划不覆写审批档：休眠只发生在发送装配时，退出计划回到用户原档', () => {
-    const store = useSshAiStore()
-    store.setApprovalMode('auto')
-    store.setPosture('plan')
-    expect(store.approvalMode).toBe('auto')
-    store.setPosture(null)
-    expect(store.approvalMode).toBe('auto')
-  })
-
-  it('姿态与审批档互不落 localStorage（本次会话的意图，重启回默认）', () => {
-    const store = useSshAiStore()
-    store.setPosture('plan')
-    store.setApprovalMode('auto')
-    expect([...lsMap.keys()].filter(k => /approval|posture|mode/i.test(k))).toHaveLength(0)
-  })
-})
-
-/**
  * 技能选择（故事 5/6 第二项）。原先是已退役的 AI 侧栏组件的私有 ref，
- * 首页 ＋ 菜单要点它，就同审批档/姿态一样得提进 store。
+ * 首页 ＋ 菜单要点它，就同审批档一样得提进 store。
  * API 只给"覆写整份"：chip 的 ×、发送后清空，若各配一个
  * add/remove 动作，去重逻辑就会被抄成三份。
  */
@@ -300,9 +258,8 @@ describe('ssh-ai 远端文件附件', () => {
  * 换会话必须带走暂存输入（技能 chip + 待发送附件）。
  *
  * 这两份是 store 级共享状态（任务台 Composer 挂的就是这一份），
- * 而 switch/create/delete 三条切会话路径原先只清 workflowSnapshot —— 同一处注释里
- * 已经写清理由（「否则界面会显示上一个会话的 Spec/Plan/Goal，而它们并没有被注入本轮
- * 上下文」），暂存的技能与附件是同一个症状的另一半：chip 还亮着，用户按发送就把上一
+ * 而换会话路径本就统一清上一会话的瞬态状态（「否则界面会显示上一个会话的
+ * 状态，而它们并没有被注入本轮上下文」），暂存的技能与附件是同一个症状的另一半：chip 还亮着，用户按发送就把上一
  * 会话选的技能与文件发进了这一会话。附件更硬一层 —— /chat/upload 是按 backendConvId
  * 归档的（uploadFiles 的注释），A 会话上传的文件挂在 B 会话头上既落不进 B 的目录，
  * 也不会随 B 删除而清理。
@@ -338,12 +295,11 @@ describe('ssh-ai 换会话带走暂存输入', () => {
     expect(store.pendingAttachments).toEqual([])
   })
 
-  it('删掉当前会话后不留上一会话的工件与暂存输入', async () => {
+  it('删掉当前会话后不留上一会话的暂存输入', async () => {
     const store = useSshAiStore()
     const a = await store.createConversation('A')
     const b = await store.createConversation('B')
     stage(store)
-    store.workflowSnapshot = { phase: 'plan', spec: 'S', plan: 'P', goal: 'G' }
 
     await store.deleteConversation(b.id)
 
@@ -352,7 +308,6 @@ describe('ssh-ai 换会话带走暂存输入', () => {
     expect(ids).toContain(a.id)
     expect(store.selectedSkillIds).toEqual([])
     expect(store.pendingAttachments).toEqual([])
-    expect(store.workflowSnapshot.phase).toBe('')
   })
 
   it('反向锁：删的不是当前会话时，暂存输入必须留着', async () => {
@@ -391,14 +346,12 @@ describe('ssh-ai beginNewTask', () => {
     lsMap.clear()
   })
 
-  it('清掉草稿/技能/附件/姿态/工作流/未读，保留审批档、模型', async () => {
+  it('清掉草稿/技能/附件/未读，保留审批档、模型', async () => {
     const store = useSshAiStore()
     await store.createConversation('A')
     store.setSharedDraft('打了一半的指令')
     store.addSelectedSkill('s1')
     store.addRemoteAttachment({ path: '/etc/hosts', content: 'x', source: 'root@web-1' })
-    store.setPosture('plan')
-    store.workflowSnapshot = { phase: 'plan', spec: 'S', plan: 'P', goal: 'G' }
     store.unreadReply = true
     store.setApprovalMode('auto')
     store.setSelectedModel('m9')
@@ -409,8 +362,6 @@ describe('ssh-ai beginNewTask', () => {
     expect(store.sharedDraft).toBe('')
     expect(store.selectedSkillIds).toEqual([])
     expect(store.pendingAttachments).toEqual([])
-    expect(store.posture).toBeNull()
-    expect(store.workflowSnapshot).toEqual({ phase: '', spec: '', plan: '', goal: '' })
     expect(store.unreadReply).toBe(false)
     expect(store.approvalMode).toBe('auto')
     expect(store.selectedModelId).toBe('m9')

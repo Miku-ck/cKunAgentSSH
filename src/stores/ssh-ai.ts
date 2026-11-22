@@ -11,7 +11,7 @@
  * - agent.ts：单次 run 的执行态 —— SSE 事件流、工具调用、中止、成本、trace。
  * 一次 run 的产出经 agent.ts 流回来后，由本 store 写进对应消息。
  */
-import { computed, ref, triggerRef, watch } from 'vue'
+import { ref, triggerRef, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useSSHStore } from './ssh'
 import { useExecTargetStore } from './exec-target'
@@ -19,11 +19,11 @@ import { useAgentStore } from './agent'
 import { useAppStore } from './app'
 import { useSettingsStore } from './settings'
 import { useToastStore } from './toast'
-import { api, workflowApi, type ChatAttachment, type WorkflowSnapshot } from '@/api/client'
+import { api, type ChatAttachment } from '@/api/client'
 import { useChatPersistence } from '@/composables/useChatPersistence'
 import { useModelsStore } from './models'
 import { finalizeAgentMessage, type AgentMessage } from '@/utils/finalize-agent-message'
-import { resolveRunModes, type ApprovalKey, type PostureKey } from '@/utils/run-modes'
+import { resolveRunModes, type ApprovalKey } from '@/utils/run-modes'
 import type { ModeConversation, ModeMessage } from '@/types/chat'
 
 // 后端 AgentRunRequest.task 的 max_length（routes/agent.py），与聊天输入框的
@@ -161,20 +161,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     approvalMode.value = mode
   }
 
-  // ── 对话姿态（纵向轴，与审批档互不覆写） ──
-
-  /**
-   * 对话姿态（goal / plan）只此一份：首页 ＋ 菜单点亮它，发送装配读它。
-   * 缺省是 null 而不是 'goal'：'goal' 起步配上 chip 的 × 写回 'goal'，chip 消失了
-   * 但后端一字未变（能关、关的是摆设）。未表态时 workflow_mode 省略、后端不注入
-   * 任何姿态段，与"用户没选"一致。刻意不持久化 —— 本次会话的意图，重启回默认。
-   */
-  const posture = ref<PostureKey | null>(null)
-
-  function setPosture(mode: PostureKey | null) {
-    posture.value = mode
-  }
-
   // ── 附到下一条消息的技能 ──
 
   /** 附到下一条消息的技能。只给"覆写整份"这一个动作：chip 的 ×、发送后清空若各配
@@ -308,9 +294,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   async function createConversation(title?: string): Promise<ModeConversation> {
     const conv = await persistence.createConversation(title)
     notifyConversationsChanged()
-    // 工作流按会话存储：新会话没有工件，清掉上一会话的缓存（否则界面会显示
-    // 上一个会话的 Spec/Plan/Goal，而它们并没有被注入本轮上下文）
-    workflowSnapshot.value = { phase: '', spec: '', plan: '', goal: '' }
     _clearStagedInput()
     return conv
   }
@@ -352,8 +335,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // 上一轮 run 的通知（含黄色告警）属于被切走的那条会话，不能跟到新会话上
     agentStore.clearRunNotice()
     _clearStagedInput()
-    // 工作流随会话切换重新加载：工件按会话落盘，界面必须与之一致
-    void loadWorkflow()
     // P2 修复：启动合并进来的后端会话本地无消息缓存（messages:[]），
     // 切到时按需从后端拉取一次并固化到本地，避免"选中了却是空对话"。
     // 同一入口也接「回复被吞」的旧账：本地有消息却一条助手回复都没有时回填，
@@ -373,7 +354,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       _clearStagedInput()
       // 删掉的正是当前会话 —— 它的运行通知跟着一起走
       agentStore.clearRunNotice()
-      void loadWorkflow()
     }
   }
 
@@ -423,9 +403,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     const isTerminal = oldStatus === 'running' && (newStatus === 'completed' || newStatus === 'failed')
     const isAbort = oldStatus === 'running' && newStatus === 'idle' && agentStore.aborted
     if (!isTerminal && !isAbort) return
-    // run 终态（含 abort）：agent 可能在运行中经 goal_write/plan_write/spec_write
-    // 落盘了工作流工件 → 刷新当前会话的阶段指示，让界面与注入保持一致。
-    if (isTerminal) void loadWorkflow()
     {
       // 审查 M-19 修复：优先固化为本次运行的【源会话】（agentStore 在 runAgent
       // 时记录的 conversationId）。原实现取"完成时刻的当前会话" — 用户在 Agent
@@ -666,53 +643,8 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
 
   /** 发送消息（固定 Agent 路径：AI 自主意图识别并调用工具，无需手动切换模式） */
   // M18：返回是否被接受（true=已入会话，false=早退拒绝），供组件回滚草稿
-  // ── 会话工作流（Spec/Plan/Goal）──
-  // 权威在后端落盘的 markdown 工件（backend/agent/workflow.py），前端只缓存与
-  // 展示。内容仍由 agent 经 spec_write/plan_write/goal_write 维护；唯一的写是
-  // 删除（clearWorkflowArtifact），只绑在工具条「目标」/「计划」chip 的 × 上。
-  const workflowSnapshot = ref<WorkflowSnapshot>({ phase: '', spec: '', plan: '', goal: '' })
-  const workflowPhase = computed(() => workflowSnapshot.value.phase)
-
-  /** 加载当前会话工作流阶段与工件；失败/无会话按空处理（不沿用上一个会话） */
-  async function loadWorkflow(): Promise<void> {
-    const cid = persistence.currentConversation.value?.backendConvId
-    if (!cid) {
-      workflowSnapshot.value = { phase: '', spec: '', plan: '', goal: '' }
-      return
-    }
-    try {
-      const snap = await workflowApi.read(cid)
-      // 审查R2修复：await 后校验会话未切换——快速切会话时旧响应晚到，
-      // 无条件赋值会把上一个会话的工作流快照挂到新会话头上
-      if (persistence.currentConversation.value?.backendConvId !== cid) return
-      workflowSnapshot.value = snap
-    } catch (e) {
-      logWarn('ssh', '加载会话工作流失败（按空处理）:', e)
-      // 审查R2修复：同上，会话已切换时旧请求的失败不应清空新会话的快照
-      if (persistence.currentConversation.value?.backendConvId !== cid) return
-      workflowSnapshot.value = { phase: '', spec: '', plan: '', goal: '' }
-    }
-  }
-
-  /**
-   * 删除工件（chip 的 × 走这里），返回删除后的阶段供调用方提示。
-   * null = 没做成（无会话或请求失败）：此时不伪造空串，因为空串是一个合法阶段
-   * （「无任何工件」），把失败说成「已清空」会让用户以为 × 生效了。
-   */
-  async function clearWorkflowArtifact(
-    kind: 'spec' | 'plan' | 'goal',
-  ): Promise<{ phase: string } | null> {
-    const cid = persistence.currentConversation.value?.backendConvId
-    if (!cid) return null
-    try {
-      const r = await workflowApi.clearArtifact(cid, kind)
-      await loadWorkflow()
-      return { phase: r.phase }
-    } catch (e) {
-      logWarn('ssh', '删除工作流工件失败:', e)
-      return null
-    }
-  }
+  // （旧 Spec/Plan/Goal markdown 工作流快照已随结构化 goal/plan 重构移除，
+  //  会话级进度改由 src/stores/goal-plan.ts 承载。）
 
   /**
    * 进入空白任务（spec 2026-10-20 故事 8/9）：
@@ -733,14 +665,12 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // 挂着一枚「已增强·可回退」徽标，点下去回退到的是上一轮的原文。
     clearStructuringState()
     _clearStagedInput()
-    posture.value = null
-    workflowSnapshot.value = { phase: '', spec: '', plan: '', goal: '' }
     unreadReply.value = false
     return true
   }
 
-  async function sendMessage(content: string, options?: { skillIds?: string[]; attachments?: ChatAttachment[]; mode?: string; approval?: string; pluginIds?: string[] | null }): Promise<boolean> {
-    return sendAgentMessage(content, options?.skillIds || [], options?.attachments || [], options?.mode, options?.approval, options?.pluginIds ?? null)
+  async function sendMessage(content: string, options?: { skillIds?: string[]; attachments?: ChatAttachment[]; approval?: string; pluginIds?: string[] | null }): Promise<boolean> {
+    return sendAgentMessage(content, options?.skillIds || [], options?.attachments || [], options?.approval, options?.pluginIds ?? null)
   }
 
   /** 上传文件（对话附件）：逐个调用后端 /chat/upload，失败项 toast 提示并跳过 */
@@ -782,17 +712,17 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
   /** Agent 模式：多步工具调用，支持远程命令执行 */
   // 发送锁，防止快速连点创建多个会话
   let _agentSendLock = false
-  async function sendAgentMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], mode?: string, approval?: string, pluginIds: string[] | null = null): Promise<boolean> {
+  async function sendAgentMessage(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], approval?: string, pluginIds: string[] | null = null): Promise<boolean> {
     if (_agentSendLock) return false
     _agentSendLock = true
     try {
-      return await _sendAgentMessageInner(content, skillIds, attachments, mode, approval, pluginIds)
+      return await _sendAgentMessageInner(content, skillIds, attachments, approval, pluginIds)
     } finally {
       _agentSendLock = false
     }
   }
 
-  async function _sendAgentMessageInner(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], agentMode?: string, approval?: string, pluginIds: string[] | null = null): Promise<boolean> {
+  async function _sendAgentMessageInner(content: string, skillIds: string[] = [], attachments: ChatAttachment[] = [], approval?: string, pluginIds: string[] | null = null): Promise<boolean> {
     // 附带文件拼入任务文本：Agent 走 /agent/run，直接注入内容让 LLM 读取。
     // 预算必须卡在这里：后端 AgentRunRequest.task 有 max_length=50000（与输入框
     // maxlength 同值），而每个附件各自可达 5 万字符——原样拼接会让整条消息在第一个
@@ -934,10 +864,9 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
       enableDynamicBudget: useSettingsStore().settings.agent.dynamicBudget,
       // E1：意图识别 + 思考预算控制。关闭 → 后端跳过规划阶段/引导语注入
       enableIntentionGuide: useSettingsStore().settings.agent.enableIntentionGuide,
-      // 对话姿态 + 审批档 + 权限模式：三字段单一口径见 resolveRunModes。
-      // 姿态=plan 时 permissionMode 恒为 'plan'（审批档休眠）；否则取审批轴
-      // （'auto' 模型代判 / 其余手动）。
-      ...resolveRunModes(agentMode, approval),
+      // 审批档 + 权限模式：单一口径见 resolveRunModes。permissionMode 取审批轴
+      //（'auto' 模型代判 / 其余手动）；goal/plan 活动时的 'plan' 强制由服务端推导。
+      ...resolveRunModes(undefined, approval),
       // 长任务结构化（spec 2026-10-24）：本轮草稿若是"已采用的结构稿"，把原文与
       // "含新增写步骤"透传后端 —— 原文落审计双文本，added 写步骤触发 auto→normal 回落。
       ...(enhancedActive.value
@@ -990,9 +919,6 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     // ── 审批档 ──
     approvalMode,
     setApprovalMode,
-    // ── 对话姿态 ──
-    posture,
-    setPosture,
     // ── 技能选择 ──
     selectedSkillIds,
     setSelectedSkillIds,
@@ -1038,10 +964,5 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     askAi,
     sendMessage,
     uploadFiles,
-    // ── 会话工作流（Spec/Plan/Goal）──
-    workflowSnapshot,
-    workflowPhase,
-    loadWorkflow,
-    clearWorkflowArtifact,
   }
 })

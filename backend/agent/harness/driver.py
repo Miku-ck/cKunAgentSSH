@@ -48,6 +48,7 @@ from .contracts import (
     TraceEvent,
 )
 from .command_explain import explain_compound, explain_for_reason, maybe_explain_via_llm
+from .goal_plan_fsm import criteria_summary_safe, resolve_self_check_from_metadata
 from .readonly_policy import is_provably_readonly
 from .reins import approval_wait, release_clarification_run, wait_for_clarification_answer
 from .reins.core import (
@@ -438,34 +439,30 @@ class Driver:
 
             # ── 判断是否结束 ──
             if not llm_out.tool_calls:
-                # goal 验收锚：agent 声称完成（不再调工具）时，先对照成功标准自检一轮。
-                # 已有 goal 且本次 run 尚未自检 → 注入自检提示并 continue（下一轮 agent
-                # 必须给出「已达成/未达成」结论；未达成则继续）。自检过或本无 goal → 正常收尾。
+                # goal 验收锚：agent 声称完成时先对照成功标准自检一轮 —— 注入自检
+                # 提示并 continue（未达成则继续干）；自检过或本无 goal → 正常收尾。
                 goal_text = ctx.metadata.get("_goal_text", "")
                 if ctx.conversation_id and not goal_text:
-                    # driver 不依赖预注入：收尾时才读一次 goal 原文（文件 I/O 只在
-                    # 需要自检的这一刻发生，不进每轮热路径）。读取失败保持空串 → 走原收尾。
+                    # 收尾时才读一次结构化 goal（SQLite 单行，不进每轮热路径）；
+                    # 失败保持空串 → 走原收尾。
                     try:
-                        from agent.workflow import read_artifacts
-                        goal_text = read_artifacts(ctx.conversation_id)["goal"]
+                        from db import goal_plan_store
+                        goal = goal_plan_store.get_goal_by_conversation(ctx.conversation_id)
+                        if goal is not None:
+                            goal_text = goal["statement"]
+                            ctx.metadata["_gp_criteria"] = goal.get("criteria") or []
                         ctx.metadata["_goal_text"] = goal_text
                     except Exception:
                         goal_text = ""
                 if goal_text and not ctx.metadata.get("_goal_self_checked") \
                         and iteration + 1 < ctx.config.max_iterations:
-                    # 仅当还有下一轮预算时才注入自检：continue 回 while 需 iteration+1<max
-                    # 成立，否则在最后一轮 continue 会直接落到 loop-else → 误判 MAX_REACHED
-                    # 且自检永不被回答（agent 已声明完成，这里应正常收尾为 COMPLETED）。
+                    # 仅当还有下一轮预算时才注入自检（最后一轮 continue 会误判 MAX_REACHED）。
                     try:
-                        from agent.workflow import goal_self_check_prompt
-                        self_check = goal_self_check_prompt(goal_text)
+                        self_check = resolve_self_check_from_metadata(ctx.metadata)
                     except Exception:
                         self_check = ""
                     if self_check:
-                        # 置位必须在自检真的注入之后：原先写在 try 之前，于是
-                        # goal 为纯空白（prompt 返回 ""）或 workflow 导入失败时，
-                        # 标记照样落下而自检从未发生 —— done 里的
-                        # workflow_goal.self_checked 因此会谎报「已对照成功标准自检」。
+                        # 置位必须在自检真的注入之后，否则 self_checked 谎报「已自检」。
                         ctx.metadata["_goal_self_checked"] = True
                         ctx.messages.append({"role": "user", "content": self_check})
                         continue
@@ -2009,12 +2006,12 @@ class Driver:
                 # spec §8：run 内滚动摘要随 done 出栈，由 routes 落到 agent_runs 行，
                 # 否则摘要随 ctx 一起消亡，轨迹回放与 episodic job 都拿不到
                 "context_summary": ctx.metadata.get("context_summary") or "",
-                # goal 验收闭环：随 done 透出本 run 的目标状态，闭环信息才可见。
-                # goal_text=目标原文（无目标为空）；self_checked=收尾时是否做过「对照
-                # 成功标准自检」；acknowledged=agent 最终文本是否显式承认"全部达成"
-                # （仅关键词粗判，供前端提示；未检出置 None，不强断成败）。
+                # goal 验收闭环：键名 workflow_goal 保留（跨端契约），内部演进为
+                # 结构化 goal 标识 + criteria 统计；acknowledged 仍是关键词粗判提示。
                 "workflow_goal": {
-                    "goal_text": ctx.metadata.get("_goal_text", ""),
+                    "goal_id": ctx.metadata.get("_gp_goal_id", ""),
+                    "version": int(ctx.metadata.get("_gp_plan_version") or 0),
+                    "criteria_met": criteria_summary_safe(ctx.metadata),
                     "self_checked": bool(ctx.metadata.get("_goal_self_checked")),
                     "acknowledged": _goal_acknowledged(full_content),
                 },

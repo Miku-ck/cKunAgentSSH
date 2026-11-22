@@ -130,6 +130,9 @@ class SSEAdapter:
         "clarification_done": "clarification_done",
         # plan 档下写操作被拦：只落 trace，前端暂无 case（新增事件请一并补 agent.ts）
         "plan_mode_block": "plan_mode_block",
+        # goal/plan 结构化进度（reins.goal_plan 发出）：snapshot 整体替换 /
+        # delta 局部更新，前端 goal-plan store 消费
+        "goal_plan_progress": "goal_plan_progress",
         # 路由层直发（routes/agent.py，不经 harness TraceEvent）：运维专家建议 chip
         "expert_suggestion": "expert_suggestion",
     }
@@ -247,6 +250,11 @@ class SSEAdapter:
             # 本投影是白名单——不补这行，该键在 SSE 线上恒缺失（与上面 context_summary
             # 同一族：两头都在、中间断了，不报错不告警）。
             result["undo_recorded"] = bool(payload.get("undo_recorded", False))
+            # goal 验收闭环信息（driver done 载荷写入的纯透传 dict）。生产者一直
+            # 在写、本白名单一直没搬 —— workflow_goal 在 SSE 线上恒缺失，前端
+            # 永远拿不到目标自检结论。同一族缺陷的收尾修复。
+            if payload.get("workflow_goal"):
+                result["workflow_goal"] = payload["workflow_goal"]
         # H13 修复 B3：补全三种事件类型的字段提取
         elif kind == "intention":
             # H14: 嵌套在 intention 字段下，与前端 AgentIntentionInfo 接口对齐
@@ -324,4 +332,17 @@ class SSEAdapter:
             # payload 的 tool/reason 全部丢失 → 前端 warning 退化成一句空话。
             result["tool"] = payload.get("tool", "")
             result["block_reason"] = payload.get("reason", "")
+        elif kind == "goal_plan_progress":
+            # goal/plan 结构化进度（reins.goal_plan）：键严格取生产者实写键
+            # （mode/goal/plan/step/progress；刻意无完整 steps —— `steps` 键已被
+            # 澄清向导占用，snapshot 由前端拉 REST 全量）。缺省键保持缺席。
+            result["mode"] = payload.get("mode", "")
+            if payload.get("goal") is not None:
+                result["goal"] = payload["goal"]
+            if payload.get("plan") is not None:
+                result["plan"] = payload["plan"]
+            if payload.get("step") is not None:
+                result["step"] = payload["step"]
+            if payload.get("progress") is not None:
+                result["progress"] = payload["progress"]
         return result

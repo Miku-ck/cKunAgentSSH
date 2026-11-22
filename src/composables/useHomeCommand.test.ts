@@ -27,7 +27,6 @@ const uploadAttachments = vi.fn(async (files: File[]) => {
   }
 })
 const approvalMode = ref<'normal' | 'auto'>('normal')
-const posture = ref<'goal' | 'plan' | null>(null)
 const selectedSkillIds = ref<string[]>([])
 const setSelectedSkillIds = vi.fn((ids: string[]) => { selectedSkillIds.value = ids })
 const setPendingAttachments = vi.fn((list: typeof pendingAttachments.value) => { pendingAttachments.value = list })
@@ -50,7 +49,6 @@ vi.mock('@/stores/ssh-ai', () => ({
     setSharedDraft,
     get sharedDraft() { return sharedDraft.value },
     get approvalMode() { return approvalMode.value },
-    get posture() { return posture.value },
     get selectedSkillIds() { return selectedSkillIds.value },
     get pendingAttachments() { return pendingAttachments.value },
     get uploadingAttachments() { return uploadingAttachments.value },
@@ -74,7 +72,6 @@ describe('useHomeCommand', () => {
     info.mockClear()
     error.mockClear()
     approvalMode.value = 'normal'
-    posture.value = null
     selectedSkillIds.value = []
     pendingAttachments.value = []
     uploadingAttachments.value = false
@@ -84,7 +81,7 @@ describe('useHomeCommand', () => {
   })
 
   it('技能是随消息的一次性附加：发出去之后清空，下一条不静默复用', async () => {
-    // 审批档与姿态是常驻档（发完保留），技能不是 —— 留着会让下一条指令带上
+    // 审批档是常驻档（发完保留），技能不是 —— 留着会让下一条指令带上
     // 没人再要过的技能目录，而那会真改变后端装配（lifecycle.py:46）。
     selectedSkillIds.value = ['sk-log']
     const c = useHomeCommand()
@@ -117,7 +114,7 @@ describe('useHomeCommand', () => {
     expect(c.canSend.value).toBe(true)
     expect(await c.submit()).toBe(true)
     expect(sendMessage).toHaveBeenCalledWith('', {
-      approval: 'normal', mode: undefined, skillIds: [],
+      approval: 'normal', skillIds: [],
       attachments: [{ file_id: 'f1', filename: 'nginx.log', content: 'boom', truncated: false }],
     })
   })
@@ -129,20 +126,7 @@ describe('useHomeCommand', () => {
     expect(await c.submit()).toBe(true)
     expect(sendMessage).toHaveBeenCalledWith(
       '把 nginx worker_connections 提到 4096',
-      { approval: 'auto', mode: undefined, skillIds: [], attachments: [] },
-    )
-  })
-
-  it('＋ 菜单点亮的姿态随同一次下达出去', async () => {
-    // 审批档先例（be13504）已经证明：状态存在 store 里但下达时不带上，
-    // 首页选的东西就只是首页的装饰 —— 姿态这条轴要防的就是同一个错。
-    posture.value = 'plan'
-    const c = useHomeCommand()
-    c.draft.value = '看看 nginx 配置为什么报错'
-    expect(await c.submit()).toBe(true)
-    expect(sendMessage).toHaveBeenCalledWith(
-      '看看 nginx 配置为什么报错',
-      { approval: 'normal', mode: 'plan', skillIds: [], attachments: [] },
+      { approval: 'auto', skillIds: [], attachments: [] },
     )
   })
 
@@ -153,7 +137,7 @@ describe('useHomeCommand', () => {
     expect(await c.submit()).toBe(true)
     expect(sendMessage).toHaveBeenCalledWith(
       '查一下磁盘',
-      { approval: 'normal', mode: undefined, skillIds: ['sk-log', 'sk-disk'], attachments: [] },
+      { approval: 'normal', skillIds: ['sk-log', 'sk-disk'], attachments: [] },
     )
   })
 
@@ -166,7 +150,6 @@ describe('useHomeCommand', () => {
       '这份日志说明了什么',
       {
         approval: 'normal',
-        mode: undefined,
         skillIds: [],
         attachments: [{ file_id: 'f1', filename: 'nginx.log', content: 'boom', truncated: false }],
       },

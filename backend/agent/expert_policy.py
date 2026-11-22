@@ -213,8 +213,9 @@ def resolve_expert(expert: Optional[Mapping[str, object]]) -> ResolvedRunPolicy:
 def clamp_permission_mode(current: str, ceiling: str) -> str:
     """取「当前姿态 vs 专家上限」中更严格者。ceiling=inherit 时原样返回。
 
-    调用时序必须在现有姿态配对（_paired_permission_mode）与结构化 auto→normal
-    回落之后：专家是最后一道收紧，不会把已经回落的 normal 抬回 auto。
+    调用时序必须在批准门服务端推导（routes/_goal_plan_setup 的 force_plan →
+    permission_mode=plan）与结构化 auto→normal 回落之后：专家是最后一道收紧，
+    不会把已经回落的 normal 抬回 auto。
     """
     if not ceiling or ceiling == "inherit":
         return current

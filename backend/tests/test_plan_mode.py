@@ -525,36 +525,50 @@ def test_请求字段与_run_传参成对存在():
         ast.unparse(kw.value) for c in calls for kw in c.keywords
         if kw.arg == "permission_mode"
     ]
-    # P1 修复（2026-10-11）：改传经 _paired_permission_mode 归一的局部变量，
-    # 不再直传 req.permission_mode —— 直传会绕开 plan 姿态的配对强制。
+    # M1 结构化重构：改传经批准门服务端推导的局部变量，
+    # 不再直传 req.permission_mode —— 直传会绕开活动 plan 的只读强制。
     assert passed == ["permission_mode"], (
-        f"harness.run 应传配对归一后的局部变量 permission_mode，实际 {passed} —— "
-        "直传 req.permission_mode 会绕开 plan 配对强制")
+        f"harness.run 应传推导后的局部变量 permission_mode，实际 {passed} —— "
+        "直传 req.permission_mode 会绕开批准门强制")
 
 
-def test_plan_姿态强制配对_permission_mode():
-    """P1 回归：workflow_mode='plan' 时服务端必须把 permission_mode 压成 'plan'。
+def test_plan_批准门服务端强制_permission_mode():
+    """P1 回归换宿主（M1 结构化重构）：会话存在等待批准 / 已批准 / 执行中的
+    结构化 plan 时，服务端必须把 permission_mode 压成 'plan'。
 
-    前端 resolveRunModes 恒成对下发，但 HTTP 边界不信任客户端 —— prompt 按
-    workflow_mode 注入「写操作会被直接拒绝」，PlanModeGuard 按 permission_mode
-    激活真正的拦截，只改一半就是「prompt 声称只读、强制不存在」的空开关。
+    旧实现是 _paired_permission_mode(workflow_mode, permission_mode) 配对归一；
+    新实现的推导面是 routes/_goal_plan_setup._PLAN_STATUS_FORCE_PLAN ——
+    force_plan 由活动 plan 的状态表驱动，agent_run 以
+    `permission_mode = "plan" if gp_force_plan else req.permission_mode` 落地。
+    前端不再下发姿态字段，HTTP 边界不信任客户端这条不变量没变。
     """
-    from routes.agent import _paired_permission_mode as pair
+    import ast
+    from pathlib import Path
 
-    assert pair("plan", "normal") == "plan"
-    assert pair("plan", "auto") == "plan"
-    assert pair("plan", "plan") == "plan"
-    # 反向是合法的纯只读请求：只读强制可以没有 plan 姿态 prompt
-    assert pair("goal", "auto") == "auto"
-    assert pair(None, "normal") == "normal"
-    assert pair(None, "plan") == "plan"
+    from routes._goal_plan_setup import _PLAN_STATUS_FORCE_PLAN as FORCE
+
+    # 三种活动状态都强制只读；draft / completed / abandoned / superseded 不强制
+    assert FORCE == ("awaiting_approval", "approved", "active")
+
+    # AST 钉推导链本身：丢失即批准门服务端强制静默失效
+    src = (Path(__file__).resolve().parents[1] / "routes/agent.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    hits = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.IfExp) and isinstance(n.body, ast.Constant)
+        and n.body.value == "plan" and isinstance(n.orelse, ast.Attribute)
+        and n.orelse.attr == "permission_mode"
+    ]
+    assert hits, (
+        'routes/agent.py 丢了 `permission_mode = "plan" if gp_force_plan '
+        "else req.permission_mode` 推导 —— 批准门服务端强制失效")
 
 
 def test_harness_run_不再直传_req_permission_mode():
     """AST 防回归：harness.run 的 permission_mode 关键字不得是 req 属性直传。
 
-    _paired_permission_mode 的行为由上一条测试钉住；这条钉「调用点真的走了它」
-    —— 若有人把 agent_run 里的局部变量改回 req.permission_mode，配对强制静默失效。
+    批准门服务端推导的行为由上一条测试钉住；这条钉「调用点真的走了它」
+    —— 若有人把 agent_run 里的局部变量改回 req.permission_mode，强制静默失效。
     """
     import ast
     from pathlib import Path

@@ -146,39 +146,64 @@ export interface Skill extends SkillBase {
   mode_enabled?: boolean
 }
 
-// ── 会话工作流（Spec/Plan/Goal）──
-// 三阶段工作流：spec（规格）→ plan（计划）→ goal（成功标准/执行锚），产物为
-// 会话目录下 spec.md / plan.md / goal.md，内容只由 agent 用 spec_write/plan_write/
-// goal_write 工具维护。前端唯一的写操作是删除（「目标」chip 的 ×）：一个只能
-// 开启、无法关闭的开关等于没有开关。
-export interface WorkflowSnapshot {
-  /** 当前阶段：''(无) / spec / plan / goal */
-  phase: string
-  spec: string
-  plan: string
-  goal: string
-}
+// ── 结构化 goal/plan（M1 替代旧 Spec/Plan/Goal markdown 工件）──
+// goal（目标/验收锚）与 plan（步骤计划）为 SQLite 结构化实体；写内容只由模型
+// 的 goal_propose/plan_propose/step_transition 工具维护，本文件的写端点全部是
+// **用户显式动作**（批准 / 裁决 / 修订 / 重规划 / 放弃），服务端硬置 approved_by='user'。
+export type {
+  GoalInfo,
+  GoalPlanProgress,
+  GoalPlanSnapshot,
+  PlanInfo,
+  StepInfo,
+} from '@/utils/goal-plan-core'
 
-/** Spec/Plan/Goal 工作流 API —— 对接 backend/routes/workflow.py */
-export const workflowApi = {
-  /** 读取某会话工作流阶段与三份工件；无会话/无工件返回空字符串字段（不是 404） */
-  read: (conversationId: string) => {
+import type { GoalPlanSnapshot } from '@/utils/goal-plan-core'
+
+/** goal/plan 结构化 API —— 对接 backend/routes/goal_plan.py */
+export const goalPlanApi = {
+  /** 会话级快照（goal + 活动 plan + steps + 进度）；无会话返回空快照（不是 404） */
+  state: (conversationId: string) => {
     const q = new URLSearchParams()
     if (conversationId) q.set('conversation_id', conversationId)
-    return request<WorkflowSnapshot>(`/workflow?${q.toString()}`)
+    return request<GoalPlanSnapshot>(`/goal-plan/state?${q.toString()}`)
   },
 
-  /**
-   * 删除某个工件（幂等：本就不存在也返回成功）。
-   * 返回删除后的 phase —— 阶段取已存在的最高阶，删掉 goal 会回落到 plan，
-   * 调用方据此提示用户连带后果，别让一次点击看起来"什么都没发生却被拦截了"。
-   */
-  clearArtifact: (conversationId: string, kind: 'spec' | 'plan' | 'goal') => {
-    const q = new URLSearchParams({ conversation_id: conversationId, kind })
-    return request<{ deleted: boolean; phase: string }>(`/workflow/artifact?${q.toString()}`, {
-      method: 'DELETE',
-    })
-  },
+  /** 新建目标草案（同会话已存在 → 409，走修订入口） */
+  createGoal: (payload: {
+    conversation_id: string
+    title?: string
+    statement: string
+    context?: string
+    criteria?: string[]
+  }) => request('/goal-plan/goal', { method: 'POST', body: JSON.stringify(payload) }),
+
+  /** 修订目标（乐观锁：expected_version 不匹配 → 409，刷新重试） */
+  reviseGoal: (goalId: string, payload: {
+    expected_version: number
+    title?: string
+    statement?: string
+    context?: string
+    criteria?: string[]
+    status?: string
+  }) => request(`/goal-plan/goal/${goalId}/revise`, { method: 'POST', body: JSON.stringify(payload) }),
+
+  /** 用户裁决目标（achieved 仅在 adjudication='user_confirmed' 下可达） */
+  adjudicateGoal: (goalId: string, payload: { adjudication: string; achieved: boolean }) =>
+    request(`/goal-plan/goal/${goalId}/adjudicate`, { method: 'POST', body: JSON.stringify(payload) }),
+
+  /** 批准计划（awaiting_approval → approved；只能批准一次） */
+  approvePlan: (planId: string) =>
+    request(`/goal-plan/plan/${planId}/approve`, { method: 'POST' }),
+
+  /** 重置计划（旧 plan 归档为 superseded，返回已完成步骤与证据供重新规划参考） */
+  replanPlan: (planId: string) =>
+    request<{ superseded_plan_id: string; archived_steps: Array<{ ordinal: number; title: string; status: string; evidence: string }> }>(
+      `/goal-plan/plan/${planId}/replan`, { method: 'POST' }),
+
+  /** 放弃计划 */
+  abandonPlan: (planId: string) =>
+    request<{ abandoned: boolean; plan_id: string }>(`/goal-plan/plan/${planId}/abandon`, { method: 'POST' }),
 }
 
 export const api = {

@@ -9,11 +9,10 @@ import { describe, expect, it } from 'vitest'
 
 import {
   allCriteriaMet,
+  applyDelta,
   canTransition,
   computeProgress,
   emptySnapshot,
-  mergeSnapshotDelta,
-  type GoalPlanDelta,
   type StepInfo,
 } from './goal-plan-core'
 
@@ -90,28 +89,32 @@ describe('allCriteriaMet', () => {
   })
 })
 
-describe('mergeSnapshotDelta', () => {
+describe('applyDelta', () => {
   const base = emptySnapshot()
 
-  it('snapshot 模式整体替换并推导 progress', () => {
-    const steps = [
-      makeStep({ step_id: 'a', status: 'completed' }),
-      makeStep({ step_id: 'b', status: 'pending' }),
-    ]
-    const delta: GoalPlanDelta = { mode: 'snapshot', steps }
-    const merged = mergeSnapshotDelta(base, delta)
-    expect(merged.steps).toHaveLength(2)
+  it('goal/plan/progress 字段存在即替换，steps 由 REST 全量提供', () => {
+    const snapshot = {
+      ...base,
+      steps: [makeStep({ step_id: 'a', status: 'completed' })],
+    }
+    const merged = applyDelta(snapshot, {
+      mode: 'snapshot',
+      goal: null,
+      plan: null,
+      progress: { total: 1, pending: 0, in_progress: 0, completed: 1, blocked: 0, skipped: 0 },
+    })
+    expect(merged.steps).toHaveLength(1) // steps 不被事件清空
     expect(merged.progress.completed).toBe(1)
-    expect(merged.progress.total).toBe(2)
     expect(merged.goal).toBeNull()
+    expect(snapshot.steps).toHaveLength(1) // 入参不被修改
   })
 
   it('delta 模式按 step_id 原位替换并重算 progress，不修改入参', () => {
-    const snapshot = mergeSnapshotDelta(base, {
-      mode: 'snapshot',
+    const snapshot = {
+      ...base,
       steps: [makeStep({ step_id: 'a' }), makeStep({ step_id: 'b' })],
-    })
-    const updated = mergeSnapshotDelta(snapshot, {
+    }
+    const updated = applyDelta(snapshot, {
       mode: 'delta',
       step: makeStep({ step_id: 'b', status: 'completed', evidence: 'ok' }),
     })
@@ -121,15 +124,13 @@ describe('mergeSnapshotDelta', () => {
   })
 
   it('delta 未知 step 追加（UI 不丢新步骤）', () => {
-    const snapshot = mergeSnapshotDelta(base, {
-      mode: 'snapshot',
-      steps: [makeStep({ step_id: 'a' })],
-    })
-    const merged = mergeSnapshotDelta(snapshot, {
+    const snapshot = { ...base, steps: [makeStep({ step_id: 'a' })] }
+    const merged = applyDelta(snapshot, {
       mode: 'delta',
       step: makeStep({ step_id: 'new', ordinal: 2 }),
     })
     expect(merged.steps).toHaveLength(2)
     expect(merged.steps[1].step_id).toBe('new')
+    expect(merged.progress.total).toBe(2)
   })
 })

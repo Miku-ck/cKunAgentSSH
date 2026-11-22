@@ -2,7 +2,7 @@
 
 通用 harness 化后的新契约（spec §5/§8）：
   - 核心中性：general（identity_section=""）下不含运维身份/方法论/运维工具纪律；
-  - 组装新序：时间 → 任务性质提示（仅非对话）→ 中性基础身份 → 专家身份段 → 姿态 → goal → 画像 → 用户 prompt → 分支引导；
+  - 组装新序：时间 → 任务性质提示（仅非对话）→ 中性基础身份 → 专家身份段 → goal → 画像 → 用户 prompt → 分支引导；
   - 专家身份段紧随基础身份、先于 goal/画像（不再末尾追加）；
   - 任务性质提示：非对话含且先于身份段，None→按变更，对话分支不含；
   - 运维语义等价：传入运维身份段时角色 + 方法论两变体 + 工具纪律齐全；
@@ -152,29 +152,18 @@ def test_user_system_prompt_appended_and_no_backdoor_params():
     assert "host_profile_text" not in params
 
 
-# ── 对话姿态（workflow_mode）──────────────────────────────────────────────
+# ── 姿态退役（M1 结构化重构）──────────────────────────────────────────────
 
-def test_goal_posture_injects_goal_prompt():
-    prompt = _build_agent_system_prompt(_req(workflow_mode="goal"), "", False)
-    assert "「目标」姿态" in prompt
-    assert "「计划」姿态" not in prompt
+def test_workflow_mode_field_retired():
+    """AgentRunRequest 不再有 workflow_mode 字段。
 
-
-def test_plan_posture_injects_plan_prompt():
-    prompt = _build_agent_system_prompt(_req(workflow_mode="plan"), "", False)
-    assert "「计划」姿态" in prompt
-    assert "「目标」姿态" not in prompt
+    goal/plan 语义改由结构化 store（db/goal_plan_store + routes/_goal_plan_setup
+    注入段）驱动，前端不再下发姿态字段 —— 字段复活即旧双通路回归。"""
+    assert "workflow_mode" not in AgentRunRequest.model_fields
 
 
-def test_absent_posture_injects_neither():
+def test_retired_posture_prompt_sections_gone():
+    """旧「目标/计划」姿态提示段已随 _WORKFLOW_MODE_PROMPTS 删除，装配不得残留。"""
     prompt = _build_agent_system_prompt(_req(), "", False)
     assert "「目标」姿态" not in prompt
     assert "「计划」姿态" not in prompt
-
-
-def test_workflow_mode_field_accepts_null_and_rejects_unknown():
-    from pydantic import ValidationError
-    assert _req(workflow_mode=None).workflow_mode is None
-    for junk in ("Goal", "goals", "any"):
-        with pytest.raises(ValidationError):
-            _req(workflow_mode=junk)

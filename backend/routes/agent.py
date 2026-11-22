@@ -163,36 +163,6 @@ async def _run_reflection_and_evolution(
 
 # ── Helper Functions ──
 
-# 对话姿态提示：由前端模式选择器选中项决定，注入到 system prompt 前部。
-# goal = 主流「目标姿态」，聚焦"这次要达成什么、怎么算成功"；
-# plan = 「计划/方案姿态」，强调先给方案与影响面、批准后再动手。
-_WORKFLOW_MODE_PROMPTS = {
-    "goal": (
-        "本会话处于「目标」姿态：请始终把用户这一次要达成的目标放在第一位，"
-        "主动澄清并锁定『达成什么、怎么算成功』，执行围绕该目标收敛，避免被枝叶问题带偏。"
-    ),
-    "plan": (
-        "本会话处于「计划」姿态：请先给出解决方案与影响面评估，"
-        "在用户明确批准前不要直接动手更改环境；如需读取/调研以支撑方案，可正常进行。"
-    ),
-}
-
-def _paired_permission_mode(workflow_mode: Optional[str], permission_mode: str) -> str:
-    """plan 姿态 ⇒ 只读强制的配对强制（P1 修复，审批审查 2026-10-11）。
-
-    前端 resolveRunModes 恒成对下发，但 HTTP 边界不能信任客户端：system prompt
-    按 workflow_mode 注入「写操作会被直接拒绝」，PlanModeGuard 按 permission_mode
-    激活真正的拦截 —— 客户端只发前者就是「prompt 声称只读、强制不存在」的空开关。
-    故 workflow_mode='plan' 时强制 permission_mode='plan' 并留痕。
-    反向（permission_mode='plan' 而姿态非 plan）是合法的纯只读请求，不改写。
-    """
-    if workflow_mode == "plan" and permission_mode != "plan":
-        logger.warning(
-            "workflow_mode=plan 与 permission_mode=%r 不配对，强制为 plan", permission_mode)
-        return "plan"
-    return permission_mode
-
-
 def _structure_aware_permission_mode(has_added_write_steps: bool, permission_mode: str) -> str:
     """结构化增强含新增写步骤时，auto 回落 normal（spec 2026-10-24 fail-closed）。
 
@@ -216,13 +186,16 @@ def _build_agent_system_prompt(
     """构建 Agent 系统提示（通用 harness 新序，spec §5）
 
     拼装顺序：时间 → 任务性质提示（仅非对话）→ 中性基础身份 → 专家身份段
-              → workflow 姿态 → goal → 画像块 → 用户 system_prompt
+              → goal/criteria/当前 step（结构化 goal/plan 注入段）→ 画像块
+              → 用户 system_prompt
               → [对话引导 | 通用工具纪律 + 记忆/拆分/子Agent/输出格式]
 
     identity_section: 专家身份段（build_identity_section(policy) 的结果），空串不追加任何字节。
         紧随基础身份注入（身份层放最靠前以获得最高注意力），不再末尾追加。
     is_change: 任务是否可能改变状态。None=未做意图识别，提示文案按「未判定（按变更对待）」，
         不对称取舍保留（运维包选择规则消费该提示）。
+    goal_text: 结构化 goal/plan 注入段（routes._goal_plan_setup.load_goal_plan_state
+        渲染），空串不追加；纯对话任务由调用方不传（保持旧判据）。
     """
     from prompts import BASE_IDENTITY_PROMPT, GENERAL_TOOL_DISCIPLINE
 
@@ -247,9 +220,8 @@ def _build_agent_system_prompt(
     if identity_section:
         parts.append(identity_section)
 
-    # workflow 姿态：仅非对话 + 用户显式表态（None=未表态不注入，× 才能真关掉）
-    if not is_conversation_task and req.workflow_mode is not None:
-        parts.append(_WORKFLOW_MODE_PROMPTS[req.workflow_mode])
+    # 结构化 goal/plan 注入段（_goal_plan_setup 渲染）：goal 是执行锚，
+    # 空 = 会话无结构化 goal（不追加任何字节）
     if goal_text:
         parts.append(goal_text)
     if profile_text and not is_conversation_task:
@@ -292,21 +264,6 @@ def _build_agent_system_prompt(
 
     return "\n\n".join(parts)
 
-
-def _load_active_goal_text(conversation_id: str) -> str:
-    """读取会话当前工作流阶段（Spec/Plan/Goal）并渲染为注入文本，无内容一律返回空串。
-
-    调用方在 async 上下文里经 asyncio.to_thread 执行。注入是增强项，
-    任何失败都必须降级为空串，绝不让它把整轮对话拖垮（500 / run 起不来）。
-    """
-    if not conversation_id:
-        return ""
-    try:
-        from agent.workflow import hydrate_for_session
-        return hydrate_for_session(conversation_id)
-    except Exception as e:
-        logger.warning("读取会话工作流阶段失败（跳过注入）: %s", e)
-        return ""
 
 
 def _load_evolved_config(evolution_mgr: "EvolutionEngine") -> Optional[dict]:
@@ -571,14 +528,6 @@ class AgentRunRequest(BaseModel):
     # 视频附件（ImageRef 复用同形态：file_id + filename）。模型无法直接观看，
     # 后端把存储路径与 ffprobe 分析提示注入任务文本（见 _load_run_video_note）。
     videos: Optional[list[ImageRef]] = None
-    # 对话姿态（goal/plan 单选，来自前端模式选择器）。驱动 _build_agent_system_prompt
-    # 注入对应的姿态前缀。
-    # 可空是「目标」chip 的 × 能真正关掉的前提：前端 activeMode 允许 null 后，若这里
-    # 仍默认 "goal"，× 只是把同一个 'goal' 又发一遍 —— 用户看到 chip 消失而行为毫无
-    # 变化，那是「能关、但关的是个摆设」。缺省改为 None = 不注入任何姿态段；
-    # 老客户端不传该字段时行为随之变化（原先默认注入 goal 前缀），这是有意的：
-    # 没表态 ≠ 选了目标姿态。
-    workflow_mode: Optional[Literal["goal", "plan"]] = None
     # 专家（运行策略配置包）。None = 完全沿用现有行为；服务端按 id 读 DB，
     # 禁用/不存在/配置损坏一律报错，不静默回落成默认专家（否则用户以为
     # 在收紧，实际跑的是全权限默认档）。
@@ -1025,9 +974,11 @@ async def agent_run(req: AgentRunRequest, request: Request):
         return ms
 
     async def _setup_goal():
-        # 会话目标：用户声明的结构化目标随每轮 run 复现（防漂移的主手段）。查询走
-        # to_thread（与其它 db 访问一致），失败/无目标降级为空串，不影响 run。
-        return await asyncio.to_thread(_load_active_goal_text, req.conversation_id or "")
+        # 结构化 goal/plan 装配（M1）：注入段 + 只读强制推导 + per-run 指针。
+        # load_goal_plan_state 内部已降级（失败返空态、不抛），与旧
+        # _load_active_goal_text 的「绝不拖垮 run」语义一致。
+        from routes._goal_plan_setup import load_goal_plan_state
+        return await asyncio.to_thread(load_goal_plan_state, req.conversation_id or "")
 
     evolution_mgr = EvolutionEngine()
 
@@ -1049,7 +1000,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
     is_conversation_task = _intention["is_conv"]
     mem_settings = _setup_results[3]
     memory_enabled = mem_settings["enabled"]
-    goal_text = _setup_results[4]
+    goal_text = _setup_results[4]["injection"]
+    gp_force_plan = bool(_setup_results[4]["force_plan"])
     _evolved_cfg = _setup_results[5]
 
     # embedding 客户端（与 run 模型同源，LRU 缓存单例；失败仅无向量，不造伪向量）
@@ -1127,9 +1079,12 @@ async def agent_run(req: AgentRunRequest, request: Request):
     memory_contents: list[str] = _profile_results[0] or []
     profile_text = _profile_results[1] or ""
 
-    # P1 修复（审批审查 2026-10-11）：plan 姿态配对强制（理由见
-    # _paired_permission_mode docstring）；此局部变量是 harness.run 的唯一来源。
-    permission_mode = _paired_permission_mode(req.workflow_mode, req.permission_mode)
+    # 批准门服务端推导（M1，取代 _paired_permission_mode）：存在等待批准 /
+    # 已批准 / 执行中的结构化 plan 时，本次 run 强制只读档 —— HTTP 边界不信任
+    # 客户端字段（前端只发审批档），PlanModeGuard 才是真正的强制。
+    permission_mode = "plan" if gp_force_plan else req.permission_mode
+    if gp_force_plan and req.permission_mode != "plan":
+        logger.warning("会话存在待批准计划，permission_mode=%r 强制为 plan", req.permission_mode)
     # 结构化增强含新增写步骤时，auto 回落 normal（fail-closed，服务端不信任前端）。
     permission_mode = _structure_aware_permission_mode(
         req.enhanced_has_added_write_steps, permission_mode)
