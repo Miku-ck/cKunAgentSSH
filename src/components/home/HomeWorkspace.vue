@@ -81,6 +81,8 @@
     <div class="composer-wrap">
       <!-- 审批面钉在输入区上方：待决请求不属于消息流，不能跟着历史滚走 -->
       <ApprovalDock />
+      <!-- goal/plan 进度面板（M2）：同样钉在输入区上方 —— 结构化状态不属于消息流 -->
+      <GoalPlanProgress />
       <HomeComposer @bulk="emit('bulk')" @remote-mgr="emit('remote-mgr')" />
     </div>
   </div>
@@ -104,6 +106,8 @@ import HomeComposer from '@/components/home/HomeComposer.vue'
 import HomeHistoryDialog from '@/components/home/HomeHistoryDialog.vue'
 import AgentRunPanel from '@/components/agent/AgentRunPanel.vue'
 import ApprovalDock from '@/components/agent/ApprovalDock.vue'
+import GoalPlanProgress from '@/components/home/GoalPlanProgress.vue'
+import { useGoalPlanStore } from '@/stores/goal-plan'
 
 const emit = defineEmits<{
   bulk: []
@@ -115,6 +119,7 @@ const sshAi = useSshAiStore()
 const agentStore = useAgentStore()
 const settingsStore = useSettingsStore()
 const toast = useToastStore()
+const goalPlan = useGoalPlanStore()
 
 const scrollRef = ref<HTMLElement | null>(null)
 
@@ -248,11 +253,20 @@ function requestFollow() {
 
 watch(() => displayMessages.value.length, () => { scheduleScrollToBottom() }, { immediate: true })
 // 切会话时消息条数可能恰好相同，length watch 不会动 —— 单独跟一次，避免停在上一段的位置
+/** 当前会话的后端 id（goal/plan 快照的归属键；无后端会话为空串）。 */
+function currentBackendCid(): string {
+  return sshAi.conversations.find(c => c.id === sshAi.currentConvId)?.backendConvId || ''
+}
+
 watch(() => sshAi.currentConvId, () => {
   // 裁剪窗口一并回到初始 80 条：放大过的窗口是上一段历史的临时状态，不该带进新会话
   visibleCount.value = INITIAL_VISIBLE_MESSAGES
   scheduleScrollToBottom()
+  // goal/plan 快照随会话切换重新对齐
+  void goalPlan.attach(currentBackendCid())
 })
+// 首次挂载同样要对齐一次（watch 非 immediate：恢复出来的当前会话不会触发）
+void goalPlan.attach(currentBackendCid())
 watch(() => agentStore.content, () => { if (agentStore.isRunning) requestFollow() })
 watch(() => agentStore.reasoning, () => { if (agentStore.isRunning) requestFollow() })
 // 运行通知区块（任务规划/警告/人工介入/错误）是消息流之外的另一段高度变化，

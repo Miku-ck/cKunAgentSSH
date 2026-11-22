@@ -268,6 +268,32 @@ const STALL_CHECK_INTERVAL_MS = 5_000
  * 流时长，长回答仍由后端 15s 心跳 + 90s 看门狗按原口径照看。28s 给后端留足首字节
  * 时间，又不让用户无限等；与心跳周期、桥 hello-ack 是彼此独立的口径。
  */
+/**
+ * goal/plan 进度订阅总线（M2）：`goal_plan_progress` 事件的旁路分发。
+ *
+ * agent.ts（单次 run 执行态，1121 行超限文件）零改动 —— 该 store 只关心
+ * run 级事件；goal/plan 是会话级结构化状态，由 stores/goal-plan.ts 经本
+ * 总线订阅。所有 streamAgentRun 流上出现的 goal_plan_progress 事件都会
+ * 通知订阅者（handler 异常隔离，不影响主 onEvent 派发）。
+ */
+type GoalPlanProgressHandler = (event: AgentSSEEvent) => void
+const goalPlanProgressHandlers = new Set<GoalPlanProgressHandler>()
+
+export function subscribeGoalPlanProgress(handler: GoalPlanProgressHandler): () => void {
+  goalPlanProgressHandlers.add(handler)
+  return () => { goalPlanProgressHandlers.delete(handler) }
+}
+
+function notifyGoalPlanProgress(event: AgentSSEEvent): void {
+  for (const handler of goalPlanProgressHandlers) {
+    try {
+      handler(event)
+    } catch (e) {
+      logError('subscribeGoalPlanProgress', 'goal_plan_progress 订阅者异常:', e)
+    }
+  }
+}
+
 export function streamAgentRun(options: StreamAgentOptions): () => void {
   // 连接阶段超时只约束 fetch 返回 headers 之前；响应开始后由调用方拿到的 abort() 控制整条流。
   const connectTimeout = createConnectTimeout()
@@ -373,6 +399,8 @@ export function streamAgentRun(options: StreamAgentOptions): () => void {
         }
         try {
           const parsed = JSON.parse(data) as AgentSSEEvent
+          // goal/plan 进度旁路（会话级状态，stores/goal-plan 订阅）；异常隔离
+          if (parsed.type === 'goal_plan_progress') notifyGoalPlanProgress(parsed)
           // H3 修复：onEvent 异常单独捕获，避免被当作 heartbeat 解析错误吞掉
           try {
             options.onEvent(parsed)
