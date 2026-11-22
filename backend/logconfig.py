@@ -5,6 +5,10 @@
 main.py 入口最早经 install_early() 安装（S-B1①：在那之前 lastResort 只放
 WARNING+ 且裸打无格式）—— 用户显式选 info/debug 才开始变多，运行期默认可观测
 输出与装 handler 之前一致（只是多了时间戳与级别）。
+
+级别门有两道，缺一不可：root logger 的级别 + root handler 的级别。只设前者时
+第三方库一旦自己 setLevel 就绕过了（子 logger 用自身 effective level，root 的
+WARNING 不参与判定），botpy 1.2.1 就是这么把 QQ 渠道启动刷成十几行 INFO 的。
 """
 import logging
 import sys
@@ -61,6 +65,20 @@ def _install_handler_locked() -> None:
         _handler.addFilter(SecretRedactionFilter())
 
 
+def _gate_handler(level: int) -> None:
+    """root handler 自身也做级别门（幂等，随级别开关走）。
+
+    只设 root logger 的级别挡不住第三方库：botpy 1.2.1 的 get_logger() 会
+    `logger.setLevel(logging.INFO)`，而子 logger 用自己的 effective level
+    —— root 的 WARNING 不参与判定，INFO 会一路冒泡到 root handler；handler
+    停在 NOTSET 就照单全收（实测 QQ 渠道启动刷 18 行「登录机器人账号中...」
+    「心跳维持启动...」）。两道门同取一个级别来源，"全局最低级别"才只有一个
+    真相；用户选 info 时这道门跟着放开，不会变成硬编码的 WARNING。
+    """
+    if _handler is not None:
+        _handler.setLevel(level)
+
+
 def install_early() -> str:
     """进程入口最早安装 root handler（S-B1①，main.py 模块级调用）。
 
@@ -79,6 +97,7 @@ def install_early() -> str:
     global _current
     _install_handler_locked()
     logging.getLogger().setLevel(logging.WARNING)
+    _gate_handler(logging.WARNING)
     _current = DEFAULT_LEVEL
     return _current
 
@@ -86,13 +105,16 @@ def install_early() -> str:
 def apply_level(level, *, persist_note: bool = True) -> str:
     """安装 root handler（一次）并设定级别；返回生效级别。
 
-    只改 root 与本项目自有 logger 的级别，不动 uvicorn.error/uvicorn.access：
+    root logger 与 root handler 用同一个级别（两道门，见 _gate_handler）：只设
+    logger 那道会被第三方库私自 setLevel 绕过。不动 uvicorn.error/uvicorn.access：
     那两个由 uvicorn.Config(log_level=...) 管，访问日志级别不该被这个开关改掉。
     """
     global _current
     resolved = normalize_level(level)
     _install_handler_locked()
-    logging.getLogger().setLevel(getattr(logging, resolved.upper(), logging.WARNING))
+    level_value = getattr(logging, resolved.upper(), logging.WARNING)
+    logging.getLogger().setLevel(level_value)
+    _gate_handler(level_value)
     _current = resolved
     if persist_note:
         logging.getLogger(__name__).debug("日志级别设为 %s", resolved)

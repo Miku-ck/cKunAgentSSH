@@ -424,6 +424,37 @@ def test_install_early_does_not_lift_root_level(clean_loglevel):
     assert logconfig.get_level() == "warning"
 
 
+def test_root_handler_level_gate_follows_config(clean_loglevel):
+    """root handler 必须自己也是级别门，且门随配置走。
+
+    botpy 1.2.1 的 get_logger() 会 `logger.setLevel(logging.INFO)`：子 logger
+    用自己的 effective level，root 的 WARNING 不参与判定，INFO 会一路冒泡到
+    root handler。handler 停在 NOTSET 就照单全收 —— 实测 QQ 渠道启动刷 18 行
+    「登录机器人账号中...」「心跳维持启动...」。反向断言 apply_level("info")
+    后门要放开，避免这道门被写成硬编码 WARNING。
+    """
+    import io
+
+    logconfig.install_early()
+    handler = logconfig._handler
+    assert handler is not None
+    buf = io.StringIO()
+    handler.setStream(buf)
+
+    botpy_logger = logging.getLogger("botpy")
+    saved = botpy_logger.level
+    botpy_logger.setLevel(logging.INFO)   # 复刻 botpy.get_logger 的行为
+    try:
+        botpy_logger.info("[botpy] 心跳维持启动...")
+        assert "[botpy]" not in buf.getvalue(), "root handler 未做级别门，第三方 INFO 冒泡进日志"
+
+        logconfig.apply_level("info")
+        botpy_logger.info("[botpy] 登录机器人账号中...")
+        assert "[botpy] 登录机器人账号中..." in buf.getvalue(), "级别门被硬编码成 warning，用户选 info 也放不开"
+    finally:
+        botpy_logger.setLevel(saved)
+
+
 def test_log_level_apply_installs_single_handler_and_sets_root(clean_loglevel):
     root = logging.getLogger()
     before = len(root.handlers)
