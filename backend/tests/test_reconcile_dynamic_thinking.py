@@ -227,3 +227,63 @@ def test_reconcile_llm_first_attempt_success_no_retry(monkeypatch):
 
     assert decisions == [{"index": 0, "op": "ADD"}]
     assert len(calls) == 1
+
+
+# ── 5. 输出预算按上下文窗口封顶（防 vLLM 400）────────────────────────────────
+
+
+def test_reconcile_llm_caps_budget_to_context_window(monkeypatch):
+    """max_output_tokens 被误配成接近窗口（262144 = max_model_len）时不得原样下发。
+
+    实测故障：vLLM 400 `max_tokens=524288 cannot be greater than
+    max_model_len=262144`，job 每 5 分钟重试一次、永远停在待重试。
+    口径与 bot/chat_service、routes/agent 的 safe_max_tokens 一致。
+    """
+    calls = []
+
+    async def fake_llm(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"decisions": [{"index": 0, "op": "ADD"}]})
+
+    monkeypatch.setattr(pp, "_call_llm_with_timeout", fake_llm)
+    asyncio.run(reconcile._call_llm(
+        "PROMPT", "CANDS", _cfg(max_output_tokens=262144, max_tokens=262144)))
+
+    assert len(calls) == 1
+    assert calls[0]["max_tokens"] == 65536, \
+        "误配 max_output_tokens=窗口 时未按 safe_max_tokens 降级封顶"
+
+
+def test_reconcile_llm_retry_budget_also_capped(monkeypatch):
+    """重试的 2x 预算同样封顶：400 属参数非法，翻倍重试不可能成功。"""
+    calls = []
+
+    async def fake_llm(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("task_name") == "reconcile":
+            return None  # 首查空内容 → 触发重试
+        return json.dumps({"decisions": [{"index": 0, "op": "NOOP"}]})
+
+    monkeypatch.setattr(pp, "_call_llm_with_timeout", fake_llm)
+    decisions = asyncio.run(reconcile._call_llm(
+        "PROMPT", "CANDS", _cfg(max_output_tokens=262144, max_tokens=262144)))
+
+    assert decisions == [{"index": 0, "op": "NOOP"}]
+    assert [c["max_tokens"] for c in calls] == [65536, 65536], \
+        "重试预算未封顶，仍会出现 max_tokens > 窗口的 400"
+
+
+def test_reconcile_llm_small_window_capped_and_deduped(monkeypatch):
+    """窗口 8k + 误配 8k：封顶到窗口 1/2，且两个预算档去重后只调一次。"""
+    calls = []
+
+    async def fake_llm(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"decisions": [{"index": 0, "op": "ADD"}]})
+
+    monkeypatch.setattr(pp, "_call_llm_with_timeout", fake_llm)
+    asyncio.run(reconcile._call_llm(
+        "PROMPT", "CANDS", _cfg(max_output_tokens=8192, max_tokens=8192)))
+
+    assert [c["max_tokens"] for c in calls] == [4096], \
+        "小窗口下未封顶，且 2x 预算未去重"

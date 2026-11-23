@@ -17,6 +17,8 @@ import logging
 
 import database as db
 
+from safe_tokens import safe_max_tokens
+
 from . import mstore
 from .embedding import get_embedding_client
 from . import retriever
@@ -101,8 +103,23 @@ async def _call_llm(prompt: str, candidates_block: str, model_cfg: dict) -> "lis
         base_budget = int(model_cfg.get("max_output_tokens") or 0) or 1024
     except (TypeError, ValueError):
         base_budget = 1024
+    # 输出预算按「模型窗口 − prompt 实际长度」封顶，口径与 bot/chat_service、
+    # routes/agent 的 safe_max_tokens 一致：max_output_tokens 是用户可填字段，
+    # 一旦被填成接近窗口（如 262144 = 模型 max_model_len），原样下发会让 vLLM
+    # 判定 prompt 挤不进剩余空间 → 400。400 属参数非法，升预算重试永远不可能
+    # 成功（实测 02:09~02:24 每 5 分钟刷一次 max_tokens=524288 的
+    # BadRequestError，job 一直停在待重试）。窗口未知时 safe_max_tokens 返回
+    # None，回退原预算 —— 不改变既有行为。
+    prompt_text = prompt + "\n\n" + candidates_block
+    window = model_cfg.get("max_tokens")
+    # 保留首查/重试两档结构（不去重）：封顶后两档可能相同，此时重试一次同预算
+    # 仍有价值（偶发空内容容错）；400 属异常路径，不走这里，由 job 级重试兜底。
+    budgets = [
+        safe_max_tokens(window, prompt_text, max_output_tokens=b) or b
+        for b in (base_budget, base_budget * 2)
+    ]
     text = None
-    for attempt, budget in enumerate((base_budget, base_budget * 2), 1):
+    for attempt, budget in enumerate(budgets, 1):
         text = await _call_llm_with_timeout(
             messages=messages, model_cfg=model_cfg, model_id=model_id,
             temperature=0.1, max_tokens=budget,
