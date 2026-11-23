@@ -22,7 +22,7 @@ describe('GoalPlanProgress 挂载边界', () => {
 
   it('面板位于 composer-wrap 内、不进 home-messages', () => {
     const wrapStart = workspace.indexOf('class="composer-wrap"')
-    const panelAt = workspace.indexOf('<GoalPlanProgress />')
+    const panelAt = workspace.indexOf('<GoalPlanProgress')
     const composerAt = workspace.indexOf('<HomeComposer')
     const messagesAt = workspace.indexOf('class="home-messages"')
     expect(panelAt).toBeGreaterThan(wrapStart)
@@ -39,6 +39,23 @@ describe('GoalPlanProgress 挂载边界', () => {
     expect(panel).toContain('v-if="gp.planActionable && !gp.awaitingApproval"')
     // 放弃是危险色
     expect(panel).toContain("danger: true")
+  })
+
+  it('＋ 菜单聚焦：暴露 focusSection，无卡片时给目标/计划引导而非静默失败', () => {
+    expect(panel).toContain('defineExpose({ focusSection })')
+    expect(panel).toContain('function focusSection(stage:')
+    expect(panel).toContain('useToastStore()')
+    // 空态引导：让模型用对应工具提出（与后端工具名一致）
+    expect(panel).toContain('plan_propose')
+    expect(panel).toContain('goal_propose')
+    // 聚焦卡片由 ref + 高亮态驱动，高亮自动退
+    expect(panel).toContain('ref="goalRef"')
+    expect(panel).toContain('ref="planRef"')
+    expect(panel).toContain("{ 'gp-focus': focused === 'goal' }")
+    expect(panel).toContain("{ 'gp-focus': focused === 'plan' }")
+    // 滚动与自动退亮
+    expect(panel).toContain('scrollIntoView')
+    expect(panel).toContain('setTimeout')
   })
 
   it('目标裁决与修订按钮经二次确认，且走乐观锁与 achieved 语义', () => {

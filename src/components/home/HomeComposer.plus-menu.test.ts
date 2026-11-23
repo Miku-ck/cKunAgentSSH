@@ -26,10 +26,11 @@ describe('＋ 菜单左栏四项', () => {
     expect(firstIf).toBeLessThan(firstElseIf)
   })
 
-  it('左栏附件 / 技能 / 专家 / 插件按序出现，且左栏常驻不整卡替换', () => {
-    // 目标 / 计划两枚姿态 chip 已随 M1 结构化重构退役（goal/plan 改由会话内
-    // 结构化 store 驱动），左栏只剩附件与三个级联入口
-    const tokens = ['>附件</span>', '>技能<', '>专家<', '>插件</span>']
+  it('左栏附件 / Spec / Plan / Goal / 技能 / 专家 / 插件按序出现，且左栏常驻不整卡替换', () => {
+    // 旧「目标/计划」姿态 chip 已随 M1 退役（workflow_mode 双通路删除）；
+    // 用户 2026-11-23 要求加回显式入口，但语义换成「打开能力」：Spec 走任务
+    // 结构化、Plan/Goal 聚焦会话级结构化面板 —— 不再下发任何姿态参数。
+    const tokens = ['>附件</span>', '>Spec<', '>Plan<', '>Goal<', '>技能<', '>专家<', '>插件</span>']
     let last = -1
     for (const token of tokens) {
       const i = plusRoot.indexOf(token)
@@ -51,6 +52,27 @@ describe('＋ 菜单左栏四项', () => {
     expect(plusRoot).toContain("openCascade('skill')")
     expect(plusRoot).toContain("openCascade('expert')")
     expect(plusRoot).toContain("openCascade('plugin')")
+  })
+
+  it('Spec/Plan/Goal 是能力入口而非姿态开关：无 workflow_mode、无 posture', () => {
+    // 守卫红线：三个入口不得复活旧双通路（M1 删除的那套），否则服务端推导的
+    // 只读档会被前端姿态覆盖，批准门重新出现逃逸口。
+    // 只查实际调用点（顶部注释会提到这些旧词说明「已退役」，不算复活）
+    expect(composer).not.toContain('sendWorkflowMode')
+    expect(composer).not.toContain('setPosture(')
+    expect(composer).not.toContain('posture:')
+    // Spec = 任务结构化；Plan/Goal = emit 给父层聚焦结构化面板
+    expect(plusRoot).toContain('@click="openSpec"')
+    expect(plusRoot).toContain("@click=\"focusStage('plan')\"")
+    expect(plusRoot).toContain("@click=\"focusStage('goal')\"")
+    expect(composer).toContain("'stage-focus': [stage: 'plan' | 'goal']")
+    // 三个入口一步直达：不带级联箭头
+    for (const name of ['Spec', 'Plan', 'Goal']) {
+      const at = plusRoot.indexOf(`>${name}<`)
+      const btn = plusRoot.slice(
+        plusRoot.lastIndexOf('<button', at), plusRoot.indexOf('</button>', at))
+      expect(btn).not.toContain('casc-arrow')
+    }
   })
 
   it('技能不显示条数数字（用户 2026-11-10 指定）', () => {

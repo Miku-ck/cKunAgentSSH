@@ -82,8 +82,12 @@
       <!-- 审批面钉在输入区上方：待决请求不属于消息流，不能跟着历史滚走 -->
       <ApprovalDock />
       <!-- goal/plan 进度面板（M2）：同样钉在输入区上方 —— 结构化状态不属于消息流 -->
-      <GoalPlanProgress />
-      <HomeComposer @bulk="emit('bulk')" @remote-mgr="emit('remote-mgr')" />
+      <GoalPlanProgress ref="goalPlanRef" />
+      <HomeComposer
+        @bulk="emit('bulk')"
+        @remote-mgr="emit('remote-mgr')"
+        @stage-focus="onStageFocus"
+      />
     </div>
   </div>
 </template>
@@ -120,6 +124,12 @@ const agentStore = useAgentStore()
 const settingsStore = useSettingsStore()
 const toast = useToastStore()
 const goalPlan = useGoalPlanStore()
+const goalPlanRef = ref<InstanceType<typeof GoalPlanProgress> | null>(null)
+
+/** ＋ 菜单 Plan/Goal 入口：聚焦结构化面板对应卡片（组件自带无内容引导）。 */
+function onStageFocus(stage: 'plan' | 'goal') {
+  goalPlanRef.value?.focusSection(stage)
+}
 
 const scrollRef = ref<HTMLElement | null>(null)
 

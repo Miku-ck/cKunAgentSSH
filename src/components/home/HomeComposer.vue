@@ -53,7 +53,12 @@ import TaskStructureDialog from './TaskStructureDialog.vue'
 import { useTaskStructuring } from '@/composables/useTaskStructuring'
 import { APPROVAL_OPTIONS, PERMISSION_LABELS, PERM_MARKS, PERM_SHIELD, resolveRunModes, type ApprovalKey } from '@/utils/run-modes'
 
-const emit = defineEmits<{ bulk: [], 'remote-mgr': [] }>()
+const emit = defineEmits<{
+  bulk: []
+  'remote-mgr': []
+  /** ＋ 菜单 Spec/Plan/Goal 入口：Plan/Goal 请求父层聚焦结构化面板对应卡片 */
+  'stage-focus': [stage: 'plan' | 'goal']
+}>()
 
 const agent = useAgentStore()
 const sshAi = useSshAiStore()
@@ -89,6 +94,21 @@ const {
 function toBulk() {
   emit('bulk')
   closePlusMenu()
+}
+
+/** ＋ 菜单 Spec：走任务结构化（把草稿拆成明确需求）。不是旧版 workflow_mode 姿态开关。 */
+function openSpec() {
+  closePlusMenu()
+  if (!structCanTrigger.value || sshAi.enhancedActive) {
+    toast.info('先在输入框写一段需求，再用 Spec 拆解')
+    return
+  }
+  void openStruct()
+}
+
+function focusStage(stage: 'plan' | 'goal') {
+  closePlusMenu()
+  emit('stage-focus', stage)
 }
 
 /** 「连接远程服务器」：去远程管理页选主机连接。只开不关 —— 复用 toggle 会在
@@ -834,6 +854,42 @@ onMounted(() => {
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
               <span class="ol">附件</span>
+            </button>
+            <div class="hcc-rule"></div>
+            <!-- Spec / Plan / Goal：三个显式入口（2026-11-23 用户指定加回）。
+                 语义是「打开能力」，不是旧版下发 workflow_mode 的姿态开关。 -->
+            <button
+              type="button"
+              class="hcc-opt casc-opt"
+              title="把草稿拆解为明确需求与验收口径（可对照、可回退）"
+              @click="openSpec"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
+                <path d="M3 2.5h10v11H3zM5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
+              </svg>
+              <span class="ol">Spec</span>
+            </button>
+            <button
+              type="button"
+              class="hcc-opt casc-opt"
+              title="聚焦本次会话的计划与步骤进度"
+              @click="focusStage('plan')"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
+                <path d="M3 4h10M3 8h10M3 12h6" />
+              </svg>
+              <span class="ol">Plan</span>
+            </button>
+            <button
+              type="button"
+              class="hcc-opt casc-opt"
+              title="聚焦本次会话的目标与成功标准"
+              @click="focusStage('goal')"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
+                <circle cx="8" cy="8" r="5.5" /><circle cx="8" cy="8" r="2" />
+              </svg>
+              <span class="ol">Goal</span>
             </button>
             <div class="hcc-rule"></div>
             <button
