@@ -96,6 +96,21 @@ export const useGoalPlanStore = defineStore('goal-plan', () => {
     }
   }
 
+  /** 用户显式新建目标（＋ 菜单 Goal 入口）：conversation_id 取当前快照归属会话。 */
+  function createGoal(payload: {
+    title?: string
+    statement: string
+    context?: string
+    criteria?: string[]
+  }): Promise<void> {
+    if (!conversationId.value) {
+      useToastStore().info('请先进入一个会话，再建立目标')
+      return Promise.resolve()
+    }
+    return _runAction('建立目标', () =>
+      goalPlanApi.createGoal({ ...payload, conversation_id: conversationId.value }))
+  }
+
   function approvePlan(planId: string): Promise<void> {
     return _runAction('批准计划', () => goalPlanApi.approvePlan(planId))
   }
@@ -139,6 +154,7 @@ export const useGoalPlanStore = defineStore('goal-plan', () => {
     attach,
     loadSnapshot,
     handleProgressEvent,
+    createGoal,
     approvePlan,
     replanPlan,
     abandonPlan,

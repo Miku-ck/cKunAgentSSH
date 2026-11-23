@@ -88,6 +88,9 @@
       </ol>
     </div>
   </div>
+
+  <!-- Goal 入口空态：新建目标弹窗（Teleport 到 body，不受面板 v-if 影响） -->
+  <GoalCreateDialog v-if="showCreate" @close="showCreate = false" />
 </template>
 
 <script setup lang="ts">
@@ -95,6 +98,7 @@ import { computed, ref } from 'vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToastStore } from '@/stores/toast'
 import { useGoalPlanStore } from '@/stores/goal-plan'
+import GoalCreateDialog from './GoalCreateDialog.vue'
 import type { GoalStatus, PlanStatus, StepStatus } from '@/utils/goal-plan-core'
 
 const gp = useGoalPlanStore()
@@ -110,10 +114,14 @@ let focusTimer: ReturnType<typeof setTimeout> | null = null
 
 function focusSection(stage: 'plan' | 'goal'): void {
   const target = stage === 'plan' ? planRef.value : goalRef.value
-  if (!target || !gp.hasContent) {
-    toast.info(stage === 'plan'
-      ? '当前会话还没有计划：在对话里让助手用 plan_propose 提出步骤'
-      : '当前会话还没有目标：在对话里让助手用 goal_propose 写明成功标准')
+  if (!target) {
+    if (stage === 'goal') {
+      // Goal 入口：无目标就当场建（不走「让助手用某工具」那类内部术语）
+      showCreate.value = true
+    } else {
+      // Plan 入口：拆步骤是模型的活，用户侧无建计划端点 —— 用用户语言引导
+      toast.info('还没有计划 · 在对话里描述要做的事，助手会先给出步骤清单')
+    }
     return
   }
   focused.value = stage
@@ -123,6 +131,8 @@ function focusSection(stage: 'plan' | 'goal'): void {
 }
 
 defineExpose({ focusSection })
+
+const showCreate = ref(false)
 
 const editing = ref(false)
 const editStatement = ref('')

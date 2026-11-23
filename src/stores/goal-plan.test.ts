@@ -15,6 +15,7 @@ let capturedHandler: ((event: unknown) => void) | null = null
 vi.mock('@/api/client', () => ({
   goalPlanApi: {
     state: vi.fn(),
+    createGoal: vi.fn(async () => ({})),
     approvePlan: vi.fn(async () => ({})),
     replanPlan: vi.fn(async () => ({ superseded_plan_id: 'p1', archived_steps: [] })),
     abandonPlan: vi.fn(async () => ({ abandoned: true, plan_id: 'p1' })),
@@ -190,6 +191,27 @@ describe('goal-plan 用户侧动作', () => {
     await store.attach('c1')
     await store.abandonPlan('p1')
     expect(store.hasContent).toBe(true)
+  })
+
+  it('无会话时 createGoal 给引导，不打 REST', async () => {
+    const store = useGoalPlanStore()
+    await store.createGoal({ statement: '服务恢复' })
+    expect(goalPlanApi.createGoal).not.toHaveBeenCalled()
+  })
+
+  it('createGoal 补当前会话 id 并刷新快照（Goal 空态新建）', async () => {
+    vi.mocked(goalPlanApi.state)
+      .mockResolvedValueOnce({ goal: null, plan: null, steps: [], progress: emptyProgress() })
+      .mockResolvedValueOnce({
+        goal: goalFixture(), plan: null, steps: [], progress: emptyProgress(),
+      })
+    const store = useGoalPlanStore()
+    await store.attach('c1')
+    await store.createGoal({ statement: '服务恢复', criteria: ['502 归零'] })
+    expect(goalPlanApi.createGoal).toHaveBeenCalledWith({
+      conversation_id: 'c1', statement: '服务恢复', criteria: ['502 归零'],
+    })
+    expect(store.snapshot.goal?.goal_id).toBe('g1')
   })
 
   it('裁决目标后重新拉快照（user_confirmed → achieved）', async () => {

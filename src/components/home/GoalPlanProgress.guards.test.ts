@@ -41,19 +41,21 @@ describe('GoalPlanProgress 挂载边界', () => {
     expect(panel).toContain("danger: true")
   })
 
-  it('＋ 菜单聚焦：暴露 focusSection，无卡片时给目标/计划引导而非静默失败', () => {
+  it('＋ 菜单聚焦：Goal 空态开新建弹窗，Plan 空态用用户语言引导（不暴露工具名）', () => {
     expect(panel).toContain('defineExpose({ focusSection })')
     expect(panel).toContain('function focusSection(stage:')
-    expect(panel).toContain('useToastStore()')
-    // 空态引导：让模型用对应工具提出（与后端工具名一致）
-    expect(panel).toContain('plan_propose')
-    expect(panel).toContain('goal_propose')
+    // Goal 空态 = 当场建目标（用户 2026-11-23 指定的「点有所用」）
+    expect(panel).toContain("if (stage === 'goal')")
+    expect(panel).toContain('showCreate.value = true')
+    expect(panel).toContain('GoalCreateDialog')
+    // Plan 空态 = 用户语言引导；红线：不向用户暴露模型侧工具名
+    expect(panel).toContain('助手会先给出步骤清单')
+    expect(panel).not.toMatch(/plan_propose|goal_propose/)
     // 聚焦卡片由 ref + 高亮态驱动，高亮自动退
     expect(panel).toContain('ref="goalRef"')
     expect(panel).toContain('ref="planRef"')
     expect(panel).toContain("{ 'gp-focus': focused === 'goal' }")
     expect(panel).toContain("{ 'gp-focus': focused === 'plan' }")
-    // 滚动与自动退亮
     expect(panel).toContain('scrollIntoView')
     expect(panel).toContain('setTimeout')
   })
