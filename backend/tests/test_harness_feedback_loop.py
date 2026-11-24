@@ -213,13 +213,15 @@ def test_clarification_interceptor_registers_pending_sig(_clean_clarification):
     assert (asyncio.run(interceptor.check(ctx))).intercepted is True
     assert sig in ctx.metadata.get("clarification_pending", set()), "建卡未登记等待签名"
 
-    # 用户答完 → done 分支注入并放行，等待标记必须撤销
+    # 用户答完 → consume_answer_decision 作废原调用并注入（仍属拦截：
+    # 答案不是执行许可，执行须由下一轮新 tool call 重新走完整链条），
+    # 等待标记必须撤销
     _CLARIFICATION_DONE[ctx.run_id] = {"0": {"choice": "A"}}
     info = _CLARIFICATION_CONTEXT.get(ctx.run_id)
     if info:
         info["_done"] = True
     decision = asyncio.run(interceptor.check(ctx))
-    assert decision.intercepted is False
+    assert decision.intercepted is True
     assert sig not in ctx.metadata.get("clarification_pending", set()), (
         "答案已消费仍留着豁免标记 → 该命令从此永不做循环检测"
     )

@@ -16,21 +16,25 @@ from agent.harness.telemetry import SSEAdapter
 RUN = "run-clarify-1"
 
 
-def _shell_event():
-    """用真实注册表构造 rm -rf * 的澄清事件（多步）。"""
-    detect_vague, build_steps = _CLARIFIABLE_TOOLS["shell_exec"]
-    args = {"command": "rm -rf /var/log/*"}
+def _file_write_event():
+    """用真实注册表构造覆写系统配置的澄清事件（多步：备份策略 + 生效方式）。
+
+    shell_exec 已按设计收敛为单步问卷（只问影响范围），多步透传的用例改用
+    file_write —— 它注册为 KIND_RISK、固定两题。
+    """
+    detect_vague, build_steps = _CLARIFIABLE_TOOLS["file_write"]
+    args = {"path": "/etc/nginx/nginx.conf"}
     reason = detect_vague(args)
     assert reason, "该命令应被判为意图不明"
     steps = build_steps(args)
-    assert len(steps) >= 2, "shell_exec 澄清应是多步问卷"
+    assert len(steps) >= 2, "file_write 澄清应是多步问卷"
     return _build_clarification_needed(
-        RUN, "shell_exec", args, steps, 0, len(steps), "tc-1", reason=reason
+        RUN, "file_write", args, steps, 0, len(steps), "tc-1", reason=reason
     ), steps
 
 
 def test_clarification_event_reaches_frontend_with_question_and_options():
-    ev, steps = _shell_event()
+    ev, steps = _file_write_event()
     sse = SSEAdapter.to_sse_dict(ev)
     assert sse["type"] == "clarification_needed"
     assert sse["run_id"] == RUN
@@ -44,7 +48,7 @@ def test_clarification_event_reaches_frontend_with_question_and_options():
 
 def test_clarification_steps_are_forwarded_for_local_advance():
     """全量 steps 必须透传：前端本地推进 localStep 时按索引取下一题。"""
-    ev, steps = _shell_event()
+    ev, steps = _file_write_event()
     sse = SSEAdapter.to_sse_dict(ev)
     forwarded = sse["steps"]
     assert len(forwarded) == len(steps)
@@ -58,9 +62,9 @@ def test_clarification_steps_are_forwarded_for_local_advance():
 
 def test_reshow_of_pending_step_keeps_index():
     """LLM 重试同一工具时后端重发当前步事件：步号/题目都要跟着走。"""
-    ev, steps = _shell_event()
+    ev, steps = _file_write_event()
     ev2 = _build_clarification_needed(
-        RUN, "shell_exec", {"command": "rm -rf /var/log/*"}, steps, 1, len(steps), "tc-1"
+        RUN, "file_write", {"path": "/etc/nginx/nginx.conf"}, steps, 1, len(steps), "tc-1"
     )
     sse = SSEAdapter.to_sse_dict(ev2)
     assert sse["current_step"] == 1

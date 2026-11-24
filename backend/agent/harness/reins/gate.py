@@ -428,7 +428,7 @@ class PermissionGate:
             os.replace(str(tmp), str(final))
         finally:
             # 写失败/replace 失败时清理 .pid.tmp 残留（成功路径 tmp 已不存在，
-            # unlink 跳过）—— 与 workflow._write_artifact 的收尾同口径
+            # unlink 跳过）—— 收尾口径同 _save_permanent_allowlist
             try:
                 if tmp.exists():
                     tmp.unlink()

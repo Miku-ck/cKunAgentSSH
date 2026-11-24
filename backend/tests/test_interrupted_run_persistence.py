@@ -110,8 +110,10 @@ def test_done_branch_write_points_arm_the_gate():
 
 def test_finally_fallback_is_gated_and_cancel_safe():
     src = _source()
-    assert "if not assistant_persisted:" in src
-    body = src[src.index("if not assistant_persisted:"):]
+    # 闸门带 run_suspended 条件：挂起（等澄清/审批）不是中断，兜底不得写
+    # 「AI 运行中断」，否则挂起中的 run 会被误标失败。
+    assert "if not assistant_persisted and not run_suspended:" in src
+    body = src[src.index("if not assistant_persisted and not run_suspended:"):]
     assert "await persist_interrupted_run(" in body[:400]
     assert "except BaseException:" in body[:900]
     # v2 抗取消：兜底与全部异步清理收进独立 task _final_cleanup，finally 里

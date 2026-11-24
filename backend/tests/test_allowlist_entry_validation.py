@@ -149,7 +149,7 @@ def test_persist_leaves_no_tmp_and_is_atomic(gate):
 
 def test_atomic_replace_cleans_tmp_on_failure(gate):
     """写失败路径（复核 nit）：os.replace 抛错时 finally 不得残留 .pid.tmp ——
-    与 workflow._write_artifact 的收尾同口径，否则残留随 pid 积累。"""
+    收尾不干净残留会随 pid 积累。"""
     allowlist = Path(gate_mod.ALLOWLIST_PATH)
     blocker = allowlist.parent / "blocked-dir"
     blocker.mkdir()
@@ -209,17 +209,6 @@ def test_clean_allowlist_still_loads_without_quarantine(gate):
         "shell_exec:a1b2c3d4e5f67890", "@db-01|my_tool"}
     assert allowlist.exists(), "合法文件不得被隔离改名"
     assert not [p for p in allowlist.parent.iterdir() if ".corrupt-" in p.name]
-
-
-def test_workflow_artifact_write_is_atomic(tmp_workspace):
-    """workflow 工件落盘同口径：写入成功 + 不残留 .tmp（撕裂的 spec.md 会被
-    get_phase 当有效阶段读回）。"""
-    from agent import workflow
-    target = Path(tmp_workspace) / "conv1" / "spec.md"
-    out = workflow._write_artifact(target, "# spec\n内容")
-    assert out == "# spec\n内容"
-    assert target.read_text(encoding="utf-8") == "# spec\n内容"
-    assert [p for p in target.parent.iterdir() if p.name.endswith(".tmp")] == []
 
 
 # ── hardline 预检（Q-B4①：allowlist 放不走的命令不再登记死预授权）────────────

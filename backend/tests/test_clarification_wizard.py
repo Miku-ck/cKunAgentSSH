@@ -458,7 +458,8 @@ class TestRouteValidation:
 
     def test_custom_text_truncated(self):
         """超长 custom_text 应被截断"""
-        from routes.agent import ClarificationAnswerRequest, _CUSTOM_TEXT_MAX_LEN
+        from routes.agent import ClarificationAnswerRequest
+        from routes.agent_clarification import _CUSTOM_TEXT_MAX_LEN
         long_text = "A" * (_CUSTOM_TEXT_MAX_LEN + 200)
         req = ClarificationAnswerRequest(run_id="r1", answers={
             "0": {"choice": "custom", "custom_text": long_text},

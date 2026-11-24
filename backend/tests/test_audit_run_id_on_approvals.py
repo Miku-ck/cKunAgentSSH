@@ -26,7 +26,8 @@ RUN_BOUND_ACTIONS = (
     "permission_deny_command",
     "permission_release_run",
     "clarification_answer",
-    "clarification_skip",
+    # clarification_skip 已下线：跳过澄清端点返回 410（routes/agent_clarification.py），
+    # 只剩 resume / cancel 两条路，没有「跳过」决策可落审计（见下方 410 守卫用例）。
 )
 # 按设计无 run 的两条：不该出现 run_id，也不该被当成漏传
 RUN_LESS_ACTIONS = ("permission_revoke", "permission_allow_manual")
@@ -75,13 +76,20 @@ def recorder(monkeypatch):
     return seen
 
 
-def test_skip_clarification_records_its_run(recorder):
+def test_skip_clarification_is_retired_with_410():
+    """跳过澄清已下线（永久等待语义删除 skip，routes/agent_clarification.py）：
+
+    端点保留壳返回 410，引导用户走 resume / cancel；没有「跳过」决策，
+    自然也不该有 clarification_skip 审计调用点。本用例钉住下线状态本身，
+    防止有人误恢复旧实现而绕过 RUN_BOUND_ACTIONS 的守卫口径。
+    """
+    import fastapi
     import routes.agent as ra
     req = ra.ClarificationAnswerRequest(run_id="run-skip-42", answers={})
-    asyncio.run(ra.skip_clarification(req))
-    assert recorder, "skip 没落审计"
-    assert recorder[-1]["run_id"] == "run-skip-42"
-    assert recorder[-1]["conclusion"] == "skipped"
+    with pytest.raises(fastapi.HTTPException) as ei:
+        asyncio.run(ra.skip_clarification(req))
+    assert ei.value.status_code == 410
+    assert "跳过澄清已下线" in str(ei.value.detail)
 
 
 def test_answer_clarification_records_its_run(recorder):

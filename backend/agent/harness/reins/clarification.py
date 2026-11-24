@@ -688,8 +688,8 @@ class ClarificationInterceptor:
        → 重发当前 step 的 clarification_needed + inject 等待提示
        → intercepted=True（仍不执行）
     3. POST /agent/clarification/answer → _CLARIFICATION_DONE[run_id]=answers
-       随后 PRE_TOOL_CALL → 注入 answers 上下文 + clarification_done 事件
-       → intercepted=False（LLM 按澄清结果重规划后放行本工具）
+       随后 PRE_TOOL_CALL → consume_answer_decision 注入上下文 + done 事件、撤销等待签名
+       → intercepted=True（答案不是执行许可，放行须由下一轮新 tool call 重走完整链）
     """
     point: ReinPoint = field(default=ReinPoint.PRE_TOOL_CALL, init=False)
     # 7 < PermissionGate(8) < FilesystemGuard(10)：先问清意图，再走授权/阻断
