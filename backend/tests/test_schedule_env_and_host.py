@@ -14,10 +14,13 @@ from types import SimpleNamespace
 
 import pytest
 
+import database as db
+import db._conn as conn_mod
 import agent.schedule_engine as se
 import agent.tools as tools_mod
 from agent.environment_policy import EnvironmentResolution
 from agent.schedule_engine import ScheduleEngine, _schedule_environment
+from db import run_safe_points
 
 SCHED = {"id": "s-1", "name": "每日巡检", "target_host": "conn-1",
          "task_prompt": "检查磁盘"}
@@ -50,6 +53,7 @@ def test_查不到主机配置时按_prod_保守(source):
 
 # 模块级而非类属性：类属性写成可变默认值会触发 RUF012，本文件也只关心"最近一次调用"
 _SEEN: dict = {}
+_WRITE_SAFE_POINT = False
 
 
 class _FakeHarness:
@@ -64,6 +68,11 @@ class _FakeHarness:
     async def run(self, **kwargs):
         _SEEN.clear()
         _SEEN.update(kwargs)
+        if _WRITE_SAFE_POINT:
+            run_safe_points.save_safe_point(
+                kwargs["run_id"], expected_version=0, phase="iteration",
+                payload={"schema_version": 1, "run_id": kwargs["run_id"], "messages": []},
+            )
         yield SimpleNamespace(
             kind="done", payload={"content": "ok", "state": "completed"})
 
@@ -89,9 +98,9 @@ def _run_once(monkeypatch, resolution: EnvironmentResolution):
         "id": "m1", "model_id": "m1", "base_url": "http://x",
         "api_key": "k", "max_tokens": 8192,
     })
-    # 执行栈在 _run_agent_once 内按需导入（启动速度优化），patch 必须打到定义处：
-    # 模块内 `from agent.harness import Harness` 会经包级 __getattr__ 取到这里的桩
-    monkeypatch.setattr("agent.harness.harness.Harness", _FakeHarness)
+    # 先前测试可能已把真实 Harness 缓存到包属性；patch 底层模块会让
+    # `from agent.harness import Harness` 绕过这里的桩。
+    monkeypatch.setattr("agent.harness.Harness", _FakeHarness)
     monkeypatch.setattr("agent.harness.llm_client.StreamLLMClient", lambda **_kw: object())
     monkeypatch.setattr("agent.cost_tracker.CostTracker", lambda **_kw: object())
     monkeypatch.setattr(se, "ElectronBridge", _FakeBridge)
@@ -135,6 +144,25 @@ def test_环境未核实时报_prod(monkeypatch):
 
 
 # ── 巡检沉淀：标题里的主机名得是人能认、能检索的那个 ─────────────────────
+
+def test_定时任务完成后清理安全点(monkeypatch, tmp_path):
+    global _WRITE_SAFE_POINT
+    original = conn_mod._db_path
+    db._close_all_connections()
+    db.init_db(str(tmp_path / "schedule.db"))
+    _WRITE_SAFE_POINT = True
+    try:
+        seen = _run_once(monkeypatch, EnvironmentResolution(
+            effective="test", requested="test",
+            source="connection", host="test-box"))
+        assert run_safe_points.load_safe_point(seen["run_id"]) is None
+    finally:
+        _WRITE_SAFE_POINT = False
+        db._close_all_connections()
+        if original:
+            db.init_db(original)
+        db._close_all_connections()
+
 
 def test_巡检报告标题用真实主机名(monkeypatch):
     """sched['target_host'] 存的是连接 ID（用户在下拉里选的是连接）。

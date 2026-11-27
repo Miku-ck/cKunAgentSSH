@@ -790,6 +790,8 @@ async def _reconcile_stale_runs_once() -> None:
         return
     _startup_reconciled = True
     try:
+        from agent.run_recovery_runner import reconcile_stale_runs
+        await reconcile_stale_runs()
         # 第一步：崩溃在「快照落库 → 状态改写」之间的 run 救回 waiting_confirmation
         # （先于 mark_stale —— 顺序反了会把这些 run 标成 failed）
         from db.run_checkpoints import promote_waiting_checkpoint_runs
@@ -1488,7 +1490,7 @@ async def agent_run(req: AgentRunRequest, request: Request):
                     "type": "expert_suggestion",
                     "slug": _ops["slug"],
                     "name": _ops["name"],
-                    "reason": "检测到运维任务，建议切到运维",
+                    "reason": "这是运维类任务",
                     "task": req.task or "",
                     "run_id": run_id,
                 })
@@ -1625,6 +1627,8 @@ async def agent_run(req: AgentRunRequest, request: Request):
                             # 运行列表「回滚」列的数据源（投影守卫见 test_done_event_projection）
                             undo_recorded=1 if event.get("undo_recorded") else 0,
                         )
+                        from agent.run_cleanup import cleanup_terminal_safe_point
+                        await asyncio.to_thread(cleanup_terminal_safe_point, run_id, final_state)
                         # H14 修复：构造 AgentTraceSnapshot（无论是否有正文都构造）
                         # 原实现只在 total_content 非空时保存消息，导致运行失败且无正文输出时
                         # 执行过程记录丢失，用户完全看不到 Agent 做了什么
@@ -1968,6 +1972,13 @@ async def agent_run(req: AgentRunRequest, request: Request):
                         run = await asyncio.to_thread(db.get_agent_run, run_id)
                         if run and run.get("status") in ("running", "init"):
                             await asyncio.to_thread(db.update_agent_run, run_id=run_id, status="failed")
+                            run["status"] = "failed"
+                        from agent.harness.contracts import TERMINAL_RUN_STATES
+                        if run and run.get("status") in TERMINAL_RUN_STATES:
+                            from agent.run_cleanup import cleanup_terminal_safe_point
+                            await asyncio.to_thread(
+                                cleanup_terminal_safe_point, run_id, str(run["status"]),
+                            )
                     except BaseException:
                         pass
                 # 修复：Agent 启动时将会话状态设为 in_progress，结束时须重置回

@@ -11,6 +11,7 @@ import { computed } from 'vue'
 import { useSshAiStore } from '@/stores/ssh-ai'
 import { useAgentStore } from '@/stores/agent'
 import { useToastStore } from '@/stores/toast'
+import { buildIntentSuffix, type IntentKind } from '@/utils/intent-core'
 
 export function useHomeCommand() {
   const sshAi = useSshAiStore()
@@ -59,7 +60,12 @@ export function useHomeCommand() {
     }
     // 审批档、技能都取自 store：＋ 菜单点亮的东西必须真的随这次下达出去，
     // 否则它只是首页的装饰。
-    if (!await sshAi.sendMessage(text, {
+    // 「意图先行」chips：本轮意图声明，按 intent-core 唯一事实源把用户口吻的
+    // 意图句拼进消息文本 —— 纯 prompt 注入，不下发执行参数；模型不提就无事
+    // 发生，提了照样待批。badge 渲染层从同一份措辞推导（intent-core.test 钉同源）。
+    const activeIntents = (['goal', 'plan', 'spec'] as IntentKind[])
+      .filter(k => sshAi.intentPending[k])
+    if (!await sshAi.sendMessage(text + buildIntentSuffix(activeIntents), {
       approval: sshAi.approvalMode,
       skillIds: [...sshAi.selectedSkillIds],
       // 逐 run 插件收紧：null = 未表态（不传字段），数组 = 显式选择。
@@ -71,6 +77,8 @@ export function useHomeCommand() {
     // 同一份技能目录 / 再把整份文件重注入一遍。发送被拒时草稿原样留着。
     sshAi.setSelectedSkillIds([])
     sshAi.setPendingAttachments([])
+    // 意图同属"这一条消息带什么"：消费一次即清（发送被拒时留给用户改主意）
+    sshAi.clearIntentPending()
     draft.value = ''
     return true
   }

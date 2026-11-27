@@ -20,6 +20,7 @@ import rawRunModes from '../utils/run-modes?raw'
 import rawApprovalCard from './approval-card.css?raw'
 import rawSettingsGroups from '../components/settings/panels/settings-groups.css?raw'
 import rawSettingsPanelBase from '../components/settings/panels/settings-panel-base.css?raw'
+import rawLiquidGlass from '../composables/useLiquidGlass.ts?raw'
 import rawButton from './button.css?raw'
 
 /**
@@ -520,5 +521,98 @@ describe('完整主题按手记标准重调（森林/蓝屏/薄荷/蜜蜂/珊瑚
     const block = blockOf(theme)
     expect(valueOf(block, '--canvas-bg')).toContain('radial-gradient')
     expect(valueOf(block, '--shadow-lg')).not.toBe(rootValueOf('--shadow-lg'))
+  })
+})
+
+describe('液态玻璃主题（liquid）：浅色材质 + 受控折射 + 动态机制', () => {
+  const liquid = blockOf('liquid')
+
+  it('覆盖浅色基准的全部令牌（漏一条就会在折射底上露出深色默认值）', () => {
+    const missing = tokensOf(blockOf('light')).filter(t => !tokensOf(liquid).includes(t))
+    expect(missing).toEqual([])
+  })
+
+  it('浅色档：画布不透明、光斑三色、文字深色、墨线描边', () => {
+    const canvas = valueOf(liquid, '--canvas-bg') ?? ''
+    expect(canvas.match(/radial-gradient/g)?.length).toBe(3)
+    expect(canvas.trim().endsWith('var(--bg-base)')).toBe(true)
+    expect(/^#[0-9a-f]{6}$/i.test(valueOf(liquid, '--bg-base') ?? '')).toBe(true)
+    expect(valueOf(liquid, '--text-primary')).toBe('#1a2130')
+    expect(valueOf(liquid, '--border-default')).toContain('30, 41, 59')
+  })
+
+  it('面板白基底够透（≤0.35），否则浅底光斑被洗成白卡', () => {
+    const elevated = valueOf(liquid, '--bg-elevated') ?? ''
+    const white = elevated.match(/rgba\(255,\s*255,\s*255,\s*([\d.]+)\)/)
+    expect(white, '面板末层必须是半透明白基底').toBeTruthy()
+    expect(Number(white![1])).toBeLessThanOrEqual(0.35)
+  })
+
+  it('输入框边框派生自强调色（不写死中性色）', () => {
+    const border = valueOf(liquid, '--border-input') ?? ''
+    expect(border).toContain('var(--accent-primary)')
+    expect(border).toContain('color-mix')
+  })
+
+  it('动态机制令牌齐全：高光 / 阴影 / 折射强度 / 卡面磨砂', () => {
+    for (const token of ['--liquid-sheen', '--sheen-x', '--sheen-y', '--shadow-dyn', '--liquid-blur', '--liquid-card-blur', '--liquid-saturate']) {
+      expect(valueOf(liquid, token), `${token} 缺失`).toBeTruthy()
+    }
+  })
+
+  it('卡面磨砂只覆盖静态卡片，实时刷新区零 blur', () => {
+    const rules = [...globalCss.matchAll(/\[data-theme="liquid"\]([^{]+)\{([^}]*backdrop-filter[^}]*)\}/g)]
+    const cardRules = rules.filter(([, , body]) => body.includes('--liquid-card-blur'))
+    expect(cardRules.length).toBeGreaterThan(0)
+    for (const [, selector] of cardRules) {
+      for (const s of ['.hcc', '.ap-card', '.panel']) expect(selector).toContain(s)
+      for (const forbidden of ['.terminal', 'table', 'nvtop', '.hcc-menu', '.hcc-suggest']) {
+        expect(selector, `${forbidden} 不得有卡面 blur`).not.toContain(forbidden)
+      }
+    }
+  })
+
+  it('折射强度走令牌，blur 只落在模态浮层白名单', () => {
+    const rules = [...globalCss.matchAll(/\[data-theme="liquid"\]([^{]+)\{([^}]*)\}/g)]
+    // 只看弹窗折射规则；卡面磨砂用 --liquid-card-blur，由下一条用例单独校验
+    const refract = rules.filter(([, , body]) => body.includes('var(--liquid-blur)'))
+    expect(refract.length).toBeGreaterThan(0)
+    for (const [, selector, body] of refract) {
+      expect(body).toContain('var(--liquid-blur)')
+      expect(body).toContain('var(--liquid-saturate)')
+      // 实时刷新区不进白名单：旧版 blur 铺到这些区域时掉帧且让内容透字
+      for (const forbidden of ['.hcc', '.nvtop', 'table', '.terminal', '.tab']) {
+        expect(selector, `${forbidden} 不应有折射`).not.toContain(forbidden)
+      }
+    }
+  })
+
+  it('动态规则只挂在浮层类上，不扩散到实时刷新区', () => {
+    expect(globalCss).toMatch(/\.liquid-glass::before/)
+    expect(globalCss).toMatch(/\.liquid-glass\.energized/)
+    expect(globalCss).toMatch(/\.liquid-scroll-edge/)
+    for (const forbidden of ['terminal', 'nvtop', '.hcc']) {
+      const dynamicRules = [...globalCss.matchAll(/\[data-theme="liquid"\][^{]*\.liquid-(?:glass|scroll-edge)[^{]*\{[^}]*\}/g)]
+      for (const [rule] of dynamicRules) expect(rule, `${forbidden} 不得挂动态机制`).not.toContain(forbidden)
+    }
+  })
+
+  it('弹性形变只作用于浮层内小控件：整窗 scale 会让设置窗点击时抖动', () => {
+    // 用户 2026-11-27 反馈"设置窗还是抖"：根因是 pointerdown 给整个
+    // .settings-dialog 加 energized → 960px 弹窗 scale(.985) 缩一下再弹回。
+    expect(globalCss).toMatch(/\.liquid-glass\s+\.liquid-control\.energized/)
+    for (const [, selector, body] of [...globalCss.matchAll(/\[data-theme="liquid"\]([^{]+)\{([^}]*)\}/g)]) {
+      if (/transform:\s*scale/.test(body)) expect(selector).toContain('.liquid-control')
+    }
+    // JS 侧也必须只标记控件，不再给浮层本体加 energized
+    expect(rawLiquidGlass).toContain("const control = e.target.closest<HTMLElement>(CONTROL_SELECTOR)")
+    expect(rawLiquidGlass).not.toContain("surfaceAt(e.target)?.classList.add('energized')")
+  })
+
+  it('高光与明暗采样合帧/去重：磨砂层上高频写入会持续重建合成层', () => {
+    expect(rawLiquidGlass).toContain('requestAnimationFrame(flushPointer)')
+    expect(rawLiquidGlass).toContain('cancelAnimationFrame(raf)')
+    // pointerover 在浮层内跨子元素也会触发；不去重会让 body class 反复 toggle
+    expect(rawLiquidGlass).toContain('surface.contains(e.relatedTarget)')
   })
 })

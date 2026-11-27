@@ -41,23 +41,16 @@ describe('GoalPlanProgress 挂载边界', () => {
     expect(panel).toContain("danger: true")
   })
 
-  it('＋ 菜单聚焦：Goal 空态开新建弹窗，Plan 空态用用户语言引导（不暴露工具名）', () => {
-    expect(panel).toContain('defineExpose({ focusSection })')
-    expect(panel).toContain('function focusSection(stage:')
-    // Goal 空态 = 当场建目标（用户 2026-11-23 指定的「点有所用」）
-    expect(panel).toContain("if (stage === 'goal')")
-    expect(panel).toContain('showCreate.value = true')
-    expect(panel).toContain('GoalCreateDialog')
-    // Plan 空态 = 用户语言引导；红线：不向用户暴露模型侧工具名
-    expect(panel).toContain('助手会先给出步骤清单')
+  it('旧聚焦路径已退役：无 focusSection/GoalCreateDialog/toast，工具名红线保留', () => {
+    // ＋ 菜单 Spec/Plan/Goal 已统一为挂/摘意图 chip（2026-11-23 用户对齐截图产品）：
+    // 面板不再有聚焦入口、空态 toast 与手建弹窗触发 —— 主通路 = 意图 chip 发送后
+    // 模型 goal_propose / plan_propose 经批准门。
+    expect(panel).not.toContain('focusSection')
+    expect(panel).not.toContain('GoalCreateDialog')
+    expect(panel).not.toContain('toast.info')
+    expect(panel).not.toContain('scrollIntoView')
+    // 红线不随退役松动：不向用户暴露模型侧工具名
     expect(panel).not.toMatch(/plan_propose|goal_propose/)
-    // 聚焦卡片由 ref + 高亮态驱动，高亮自动退
-    expect(panel).toContain('ref="goalRef"')
-    expect(panel).toContain('ref="planRef"')
-    expect(panel).toContain("{ 'gp-focus': focused === 'goal' }")
-    expect(panel).toContain("{ 'gp-focus': focused === 'plan' }")
-    expect(panel).toContain('scrollIntoView')
-    expect(panel).toContain('setTimeout')
   })
 
   it('目标裁决与修订按钮经二次确认，且走乐观锁与 achieved 语义', () => {

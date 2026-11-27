@@ -99,6 +99,9 @@ export interface AgentSSEEvent {
   readonly_rule?: string
   /** tool_deliver 专用：复合命令逐段拆解（意图 + 段级风险），单段命令为空数组 */
   segments?: Array<{ command: string; intent: string; level: string; note?: string }>
+  /** tool_deliver 专用：逐段退出码插桩脚本（含 __AGENT_MARKER__ 占位符）；
+   *  空/缺省 = 不可插桩（&&/|| 链、循环体、heredoc…），按原命令执行 */
+  instrumented?: string
   // clarification_needed 事件专用字段
   tool_call_id?: string
   current_step?: number

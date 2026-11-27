@@ -24,6 +24,7 @@ import { useChatPersistence } from '@/composables/useChatPersistence'
 import { useModelsStore } from './models'
 import { finalizeAgentMessage, type AgentMessage } from '@/utils/finalize-agent-message'
 import { resolveRunModes, type ApprovalKey } from '@/utils/run-modes'
+import type { IntentKind } from '@/utils/intent-core'
 import type { ModeConversation, ModeMessage } from '@/types/chat'
 
 // 后端 AgentRunRequest.task 的 max_length（routes/agent.py），与聊天输入框的
@@ -167,6 +168,19 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
    *  一个 add/remove，去重逻辑就会被抄成三份。技能本身在后端有真消费者
    *  （按 id 装进技能目录），不是前端装饰。 */
   const selectedSkillIds = ref<string[]>([])
+  /** 「意图先行」三 chip（plan/spec/goal）本轮意图：发送时按 intent-core 拼
+   *  用户口吻意图句进消息（纯 prompt 注入，不下发执行参数 —— 模型不提就
+   *  无事发生，提了照样待批）。消费一次即清（与技能/附件同语义）：意图
+   *  属于那一轮，不跨轮悬挂。 */
+  const intentPending = ref<Record<IntentKind, boolean>>({
+    plan: false, spec: false, goal: false,
+  })
+  function toggleIntent(kind: IntentKind) {
+    intentPending.value = { ...intentPending.value, [kind]: !intentPending.value[kind] }
+  }
+  function clearIntentPending() {
+    intentPending.value = { plan: false, spec: false, goal: false }
+  }
 
   function setSelectedSkillIds(ids: string[]) {
     selectedSkillIds.value = ids
@@ -924,6 +938,10 @@ export const useSshAiStore = defineStore('ssh-ai', () => {
     setSelectedSkillIds,
     addSelectedSkill,
     removeSelectedSkill,
+    // ── 「意图先行」三 chip（plan/spec/goal）本轮意图 ──
+    intentPending,
+    toggleIntent,
+    clearIntentPending,
     // ── 专家选择 ──
     selectedExpertId,
     setSelectedExpert,

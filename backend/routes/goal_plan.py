@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from db import goal_plan_store
+from db import goal_continuation, goal_plan_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -100,6 +100,15 @@ async def adjudicate_goal(goal_id: str, req: GoalAdjudicateRequest):
     return goal
 
 
+@router.post("/goal-plan/goal/{goal_id}/continuation/resume")
+async def resume_goal_continuation(goal_id: str):
+    """用户处理完阻塞后显式恢复自动推进；不改变目标裁决。"""
+    resumed = await asyncio.to_thread(goal_continuation.resume, goal_id)
+    if not resumed:
+        raise HTTPException(status_code=404, detail="该目标尚未进入自动推进")
+    return {"resumed": True, "goal_id": goal_id}
+
+
 @router.post("/goal-plan/plan/{plan_id}/approve")
 async def approve_plan(plan_id: str):
     """用户显式批准：awaiting_approval → approved。模型侧没有对应工具入口。"""
@@ -108,6 +117,7 @@ async def approve_plan(plan_id: str):
         raise HTTPException(
             status_code=409, detail="计划不存在或不处于等待批准状态（只能批准一次）")
     logger.info("[goal_plan] 用户批准计划 plan=%s", plan_id)
+    await asyncio.to_thread(goal_continuation.resume, plan["goal_id"])
     return plan
 
 

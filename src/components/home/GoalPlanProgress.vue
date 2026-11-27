@@ -1,7 +1,7 @@
 <template>
-  <div ref="panelRef" v-if="gp.hasContent" class="gp-panel" data-testid="goal-plan-progress">
+  <div v-if="gp.hasContent" class="gp-panel" data-testid="goal-plan-progress">
     <!-- 目标卡：陈述 + 逐条标准勾选态；裁决与修订由用户显式操作 -->
-    <div v-if="gp.snapshot.goal" ref="goalRef" class="gp-goal" :class="{ 'gp-focus': focused === 'goal' }">
+    <div v-if="gp.snapshot.goal" class="gp-goal">
       <div class="gp-goal-head">
         <span class="gp-badge" :class="goalBadgeClass">{{ goalStatusLabel }}</span>
         <h3 class="gp-goal-title" :title="gp.snapshot.goal.statement">
@@ -49,7 +49,7 @@
     </div>
 
     <!-- 计划卡：状态徽标 + 进度条 + 步骤列表 + 用户侧动作 -->
-    <div v-if="gp.snapshot.plan" ref="planRef" class="gp-plan" :class="{ 'gp-focus': focused === 'plan' }">
+    <div v-if="gp.snapshot.plan" class="gp-plan">
       <div class="gp-plan-head">
         <span class="gp-badge" :class="planBadgeClass">{{ planStatusLabel }}</span>
         <span class="gp-plan-title">计划 v{{ gp.snapshot.plan.version }}</span>
@@ -88,51 +88,16 @@
       </ol>
     </div>
   </div>
-
-  <!-- Goal 入口空态：新建目标弹窗（Teleport 到 body，不受面板 v-if 影响） -->
-  <GoalCreateDialog v-if="showCreate" @close="showCreate = false" />
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useConfirm } from '@/composables/useConfirm'
-import { useToastStore } from '@/stores/toast'
 import { useGoalPlanStore } from '@/stores/goal-plan'
-import GoalCreateDialog from './GoalCreateDialog.vue'
 import type { GoalStatus, PlanStatus, StepStatus } from '@/utils/goal-plan-core'
 
 const gp = useGoalPlanStore()
 const { confirm } = useConfirm()
-const toast = useToastStore()
-
-/** ＋ 菜单 Plan/Goal 入口聚焦：滚动到对应卡片并短暂高亮（2s 后自动退）。 */
-const panelRef = ref<HTMLElement | null>(null)
-const goalRef = ref<HTMLElement | null>(null)
-const planRef = ref<HTMLElement | null>(null)
-const focused = ref<'plan' | 'goal' | null>(null)
-let focusTimer: ReturnType<typeof setTimeout> | null = null
-
-function focusSection(stage: 'plan' | 'goal'): void {
-  const target = stage === 'plan' ? planRef.value : goalRef.value
-  if (!target) {
-    if (stage === 'goal') {
-      // Goal 入口：无目标就当场建（不走「让助手用某工具」那类内部术语）
-      showCreate.value = true
-    } else {
-      // Plan 入口：拆步骤是模型的活，用户侧无建计划端点 —— 用用户语言引导
-      toast.info('还没有计划 · 在对话里描述要做的事，助手会先给出步骤清单')
-    }
-    return
-  }
-  focused.value = stage
-  target.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-  if (focusTimer) clearTimeout(focusTimer)
-  focusTimer = setTimeout(() => { focused.value = null }, 2000)
-}
-
-defineExpose({ focusSection })
-
-const showCreate = ref(false)
 
 const editing = ref(false)
 const editStatement = ref('')

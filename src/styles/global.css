@@ -44,6 +44,79 @@ body {
   --bg-input: color-mix(in srgb, var(--bg-input-solid) var(--gradient-alpha, 94%), transparent);
 }
 
+/* ── 液态玻璃：折射只作用于模态浮层 ──
+   终端/表格/命令卡等实时刷新区一律不加 blur：旧版 blur(30) saturate(200%)
+   铺到这些区域时既掉帧，又让滚动内容从 sticky 表头透上来。强度走主题令牌，
+   这里不放字面数值 —— 调整材质只改令牌，不改规则。 */
+[data-theme="liquid"] .settings-dialog,
+[data-theme="liquid"] .confirm-dialog,
+[data-theme="liquid"] .modal-dialog,
+[data-theme="liquid"] .modal,
+[data-theme="liquid"] .bulk-modal,
+[data-theme="liquid"] .dialog {
+  -webkit-backdrop-filter: blur(var(--liquid-blur)) saturate(var(--liquid-saturate));
+  backdrop-filter: blur(var(--liquid-blur)) saturate(var(--liquid-saturate));
+}
+/* 设置窗背景：默认是结构画布（--canvas-bg），但液态玻璃下画布是三色光斑，
+   画在弹窗里会变成"窗里又有窗"的材质错位。改回浮起层面板，让磨砂落在
+   遮罩后的主窗口上，层次与其余弹窗一致。结构画布仍由 .settings-overlay 下面透出。 */
+[data-theme="liquid"] .settings-dialog {
+  background: var(--bg-elevated);
+}
+
+/* 静态卡面磨砂：首页命令卡 / 审批卡 / 设置面板卡。强度低于弹窗令牌，
+   终端/表格/滚动表头等实时刷新区不在名单内（旧版铺满 blur 掉帧 + 透字）。 */
+[data-theme="liquid"] .hcc,
+[data-theme="liquid"] .ap-card,
+[data-theme="liquid"] .panel {
+  -webkit-backdrop-filter: blur(var(--liquid-card-blur)) saturate(var(--liquid-saturate));
+  backdrop-filter: blur(var(--liquid-card-blur)) saturate(var(--liquid-saturate));
+}
+
+/* ── 液态玻璃动态机制（仅浮层，实时刷新区不参与）──
+   高光跟随指针、弹性激发、明暗翻转、阴影增减由 useLiquidGlass 驱动；
+   这里只放规则，不放 per-component 分支。Scroll Edge 用 CSS mask 溶解。 */
+[data-theme="liquid"] .liquid-glass {
+  position: relative;
+  transition: transform 220ms cubic-bezier(.2,.8,.2,1), box-shadow 220ms;
+}
+[data-theme="liquid"] .liquid-glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(220px circle at var(--sheen-x, 46%) var(--sheen-y, 40%),
+    var(--liquid-sheen, rgba(255,255,255,.95)) 0%, rgba(255,255,255,0.15) 38%, transparent 70%);
+  opacity: 0;
+  transition: opacity 180ms;
+}
+[data-theme="liquid"] .liquid-glass:hover::before,
+[data-theme="liquid"] .liquid-glass.energized::before { opacity: 1; }
+/* 弹性激发：形变只作用于浮层内的小控件（按钮/开关/图标），浮层本体不缩放。
+   早期版本把 .liquid-glass.energized 写成整个弹窗 scale(.985)，点击设置项时
+   960px 宽的窗口整体缩一下再弹回 —— 视觉上就是"抖动"。Apple 的 flex/energize
+   也只用于控件，不用于承载内容的窗口本身。 */
+[data-theme="liquid"] .liquid-glass .liquid-control {
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms;
+}
+[data-theme="liquid"] .liquid-glass .liquid-control.energized {
+  transform: scale(.94);
+  box-shadow: 0 4px 12px rgba(30,41,59,0.14),
+    inset 0 0 10px var(--liquid-glow, rgba(255,255,255,0.70));
+}
+/* 明暗翻转：小元素按背后底色切换深/浅；阴影随背景增减 */
+[data-theme="liquid"] .liquid-glass .liquid-glyph { font-weight: 600; }
+[data-theme="liquid"] .liquid-surface-dark .liquid-glyph { color: #f4f9ff; background: rgba(255,255,255,0.14); }
+[data-theme="liquid"] .liquid-surface-light .liquid-glyph { color: #1a2130; background: rgba(30,41,59,0.10); }
+[data-theme="liquid"] .liquid-surface-dark .liquid-glass { --shadow-dyn: 0.30; }
+[data-theme="liquid"] .liquid-surface-light .liquid-glass { --shadow-dyn: 0.12; }
+/* Scroll Edge 溶解：内容滚到玻璃下沿时淡入背景 */
+[data-theme="liquid"] .liquid-scroll-edge {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
+}
+
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: var(--radius-sm); }

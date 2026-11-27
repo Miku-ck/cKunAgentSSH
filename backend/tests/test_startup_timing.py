@@ -65,6 +65,46 @@ def _step(rec: _Recorder, name: str, delay: float):
     return _fn
 
 
+def test_background_starts_goal_continuation(monkeypatch):
+    calls = []
+
+    class Fake:
+        def ensure_started(self):
+            calls.append("ensure")
+        def stop(self):
+            calls.append("stop")
+            return asyncio.sleep(0)
+
+    fake = Fake()
+    async def restore():
+        return None
+    async def stop_channels():
+        calls.append("channels")
+
+    class Runtime:
+        async def stop_all(self):
+            await stop_channels()
+    class Post:
+        async def shutdown(self, timeout=10):
+            return None
+
+    monkeypatch.setattr("agent.consciousness_tick.get_global_tick", lambda: fake)
+    monkeypatch.setattr("agent.schedule_engine.get_schedule_engine", lambda: fake)
+    monkeypatch.setattr("agent.goal_continuation_engine.get_goal_continuation_engine", lambda: fake)
+    monkeypatch.setattr("bot.proactive.get_scheduler", lambda: fake)
+    monkeypatch.setattr(main, "_restore_channels_quietly", restore)
+    monkeypatch.setattr(main, "set_bridge_relay", lambda _relay: None)
+    monkeypatch.setattr("bot.channel_runtime.get_channel_runtime", lambda: Runtime())
+    monkeypatch.setattr("post_processor.get_post_process_manager", lambda: Post())
+
+    async def exercise():
+        background = main._start_background_tasks()
+        assert calls == ["ensure", "ensure", "ensure"]
+        await main._stop_background_tasks(background)
+    asyncio.run(exercise())
+    assert calls[-5:] == ["channels", "stop", "stop", "stop", "stop"]
+
+
 def _install_stubs(monkeypatch, rec: _Recorder, delays: dict) -> None:
     """把 lifespan 的每个步骤替换成按 delays 睡眠的桩，并清空打点累积。"""
     monkeypatch.setattr(main, "_marks", [])

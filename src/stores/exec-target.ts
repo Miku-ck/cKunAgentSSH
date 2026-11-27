@@ -81,7 +81,7 @@ export const useExecTargetStore = defineStore('execTarget', () => {
   const loading = ref(false)
   const error = ref('')
   /** 目录面列的就是这一份：用户打开过的目录，最近在前。空 = 还没打开过任何文件夹，
-   *  目录面只剩「不在项目中工作」与「＋ 新建工作区」两行（不预读会话 / 工作树 / 仓库）。 */
+   *  目录面只剩「＋ 新建工作区」一行（不预读会话 / 工作树 / 仓库）。 */
   const recentDirs = ref<string[]>(readRecentDirs())
 
   /** AI 专属 SSH 会话 id（用户在 AI 输入框选中连接后由 connectAiRemote 建立）。

@@ -124,6 +124,12 @@ export const TERMINAL_THEMES: Record<ResolvedTheme, ITheme> = {
     cyan: '#7fb5ac', brightCyan: '#99c9c0',
     brightBlack: '#6e6a60',
   },
+  liquid: {
+    ...TERMINAL_BASE,
+    blue: '#8fe3ff', brightBlue: '#b8ecff',
+    cyan: '#8ff0e0', brightCyan: '#b6f7ec',
+    magenta: '#cbb7ff', brightMagenta: '#e0d2ff',
+  },
 }
 
 /**

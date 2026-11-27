@@ -59,9 +59,11 @@ def _stub_assembly(monkeypatch, hr, captured):
 
         async def run(self, **kw):
             captured["system_prompt"] = kw.get("system_prompt", "")
+            captured["history"] = kw.get("history", [])
             yield type("Ev", (), {
                 "kind": "done",
-                "payload": {"content": "ok", "state": "completed"},
+                "payload": {"content": "ok", "state": "completed", "iterations": 4,
+                            "cost": {"total_tokens": 9, "cost_usd": 0.2}},
             })()
 
     monkeypatch.setattr(hr, "Harness", _FakeHarness)
@@ -96,6 +98,28 @@ async def test_headless_unknown_slug_fail_closed(base_db, monkeypatch):
         await hr.run_headless_once(
             "t", run_id="r2", conversation_id="c", expert_slug="no-such-expert",
         )
+
+
+@pytest.mark.asyncio
+async def test_headless_preserves_done_iterations_and_cost(base_db, monkeypatch):
+    import agent.headless_run as hr
+    _stub_assembly(monkeypatch, hr, {})
+    result = await hr.run_headless_once("t", run_id="r-cost", conversation_id="c")
+    assert result.iterations == 4
+    assert result.cost == {"total_tokens": 9, "cost_usd": 0.2}
+
+
+@pytest.mark.asyncio
+async def test_headless_leaves_safe_point_cleanup_to_caller(base_db, monkeypatch):
+    import agent.headless_run as hr
+    from db import run_safe_points
+    _stub_assembly(monkeypatch, hr, {})
+    run_safe_points.save_safe_point(
+        "r-owned", expected_version=0, phase="iteration",
+        payload={"run_id": "r-owned", "schema_version": 1, "state": "running"},
+    )
+    await hr.run_headless_once("t", run_id="r-owned", conversation_id="c")
+    assert run_safe_points.load_safe_point("r-owned") is not None
 
 
 @pytest.mark.asyncio

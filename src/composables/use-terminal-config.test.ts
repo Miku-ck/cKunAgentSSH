@@ -17,6 +17,7 @@ const TERMINAL_BG: Record<ResolvedTheme, string> = {
   bee: '#000000',
   coral: '#000000',
   atelier: '#000000',
+  liquid: '#000000',
 }
 
 const ANSI_KEYS = [
@@ -26,7 +27,7 @@ const ANSI_KEYS = [
 ] as const
 
 describe('终端 ANSI 色板', () => {
-  it('8 个主题齐全', () => {
+  it('全部主题齐全', () => {
     expect(Object.keys(TERMINAL_THEMES).sort()).toEqual(Object.keys(TERMINAL_BG).sort())
   })
 

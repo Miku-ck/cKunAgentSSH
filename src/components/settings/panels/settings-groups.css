@@ -1,8 +1,9 @@
 /**
  * 折叠分组清单的共享样式 —— 收敛前 AgentPanel 与 SkillsPanel 各抄一份、逐字相同
- * （28 条选择器 0 漂移）。两面板以 <style scoped src> 引入；各自的专有项留在本地：
- *   AgentPanel: .grp-badge.live / .risk-* / .tool-row 等行内样式
- *   SkillsPanel: .skill-row / .skill-* 与 .skill-content
+ * （28 条选择器 0 漂移）。以 <style scoped src> 引入；专有项留在本地：
+ *   AgentPanel: .grp-badge.live / .risk-* / .tool-row 等行内样式（唯一消费方）
+ *   Skills / Plugins / Experts 三页 2026-11 改走 settings-list.css：整页只有一张清单，
+ *   可折叠组头是冗余的一层，不再引入本文件。
  * `.btn` 已收敛到全局 styles/button.css；本文件不再声明按钮样式。
  */
 

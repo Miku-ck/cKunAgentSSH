@@ -327,6 +327,7 @@ const themeLabels: Record<Theme, string> = {
   bee: '蜜蜂',
   coral: '珊瑚',
   atelier: '手记',
+  liquid: '液态玻璃',
   system: '跟随系统',
 }
 

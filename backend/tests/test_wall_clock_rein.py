@@ -230,6 +230,29 @@ def test_driver_stamps_start_time_without_overwriting():
     assert ctx.metadata["run_started_mono"] == preset
 
 
+def test_driver_full_recovery_keeps_iteration_and_skips_startup_injection(monkeypatch):
+    from agent.harness import driver as driver_mod
+    config = AgentConfig(max_iterations=3, enable_intention_guide=True)
+    ctx = RunContext.new(task="恢复任务", config=config)
+    ctx.iteration = 2
+    ctx.metadata["recovered_run"] = True
+
+    calls = []
+
+    def forbidden(*args, **kwargs):
+        calls.append(True)
+        raise AssertionError("完整恢复不得重复识别意图")
+
+    monkeypatch.setattr(driver_mod, "resolve_intention", forbidden)
+    harness = _StubHarness(_FakeTracker(tokens=100, cost=0.0), WallClockRein())
+    events = asyncio.run(_collect(harness, ctx))
+    done = [e for e in events if e.kind == "done"]
+    assert done and done[-1].payload.get("iterations") == 0
+    assert done[-1].payload.get("state") == "max_reached"
+    assert calls == []
+    assert harness.reins.agent_failed == 0
+
+
 def test_driver_within_limit_runs_to_completion():
     """墙钟内 run 不受影响（跑满步数正常终止）
 

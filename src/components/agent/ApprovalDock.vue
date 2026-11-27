@@ -6,9 +6,11 @@
  * run 收尾四条出口（done/error/abort/_reset）都会清空。所以它不能跟着消息流
  * 滚动 —— 用户往上翻历史时，待决的那条仍要停在输入框上方。
  *
- * 执行过程本身归运维轨迹（DB 权威记录），那里按 run_id 回放；本组件只负责
- * 「现在要你拍板」这一件事：权限审批逐条复用 ApprovalCard，终端交付逐条复用
- * DeliveryCard，批量只结算权限请求。
+ * 执行过程本身归运维轨迹（DB 权威记录），那里按 run_id 回放；本组件负责
+ * 「现在要你拍板」以及「刚执行的这批到底成没成」：权限审批逐条复用
+ * ApprovalCard，终端交付逐条复用 DeliveryCard，批量只结算权限请求。
+ * 交付卡到终态（failed/timeout）仍停留一屏展示退出码与失败段 —— 这是决策
+ * 需要的即时结论，不是过程回放，过程明细仍只在轨迹页。
  */
 import { computed, ref } from 'vue'
 import { useAgentStore } from '@/stores/agent'
@@ -30,6 +32,14 @@ const wizard = computed(() => agent.clarificationWizard)
 // 渲染「重发结果」按钮，调 useAgentDeliver.retryPostResult。
 const failedPostDeliveries = computed(() =>
   agent.deliveries.filter(d => d.postFailed === true),
+)
+// 执行失败/超时的结果卡同样留在决策面：退出码、失败段、失败原因和「查看详情」
+// 都挂在卡内，只回传成功就撤卡等于把结论藏进轨迹页（用户当场看不到哪一步挂了）。
+// postFailed 单独一组渲染，这里显式排除，避免同一条交付出现两遍。
+const resultDeliveries = computed(() =>
+  agent.deliveries.filter(d =>
+    d.postFailed !== true && (d.status === 'failed' || d.status === 'timeout'),
+  ),
 )
 const batching = ref(false)
 const onceBlocked = computed(() => onceGrantBlocked(agent.isRunning))
@@ -55,7 +65,7 @@ async function batch(kind: 'approve' | 'deny') {
 </script>
 
 <template>
-  <section v-if="pending.length || deliveries.length || failedPostDeliveries.length || wizard" class="approval-dock" aria-label="待放行的操作">
+  <section v-if="pending.length || deliveries.length || failedPostDeliveries.length || resultDeliveries.length || wizard" class="approval-dock" aria-label="待处理的操作">
     <!-- 意图澄清：run 阻塞在澄清上，先答它才有后续审批，故排在权限队列之前 -->
     <ClarifyingWizard v-if="wizard" />
     <template v-if="pending.length">
@@ -85,10 +95,12 @@ async function batch(kind: 'approve' | 'deny') {
       </div>
     </template>
     <!-- 交付确认没有「批量」：每条命令写进终端都会立刻执行，不能合并成一次放行。
-         postFailed 的交付（回传耗尽重试）与待确认集合互斥，key 不冲突 -->
-    <div v-if="deliveries.length || failedPostDeliveries.length" class="ad-body ad-deliveries">
+         postFailed 的交付（回传耗尽重试）与待确认集合互斥，key 不冲突；
+         结果卡（failed/timeout）排最后，是执行结论而非待放行项 -->
+    <div v-if="deliveries.length || failedPostDeliveries.length || resultDeliveries.length" class="ad-body ad-deliveries">
       <DeliveryCard v-for="d in deliveries" :key="d.tool_id" :delivery="d" />
       <DeliveryCard v-for="d in failedPostDeliveries" :key="d.tool_id" :delivery="d" />
+      <DeliveryCard v-for="d in resultDeliveries" :key="d.tool_id" :delivery="d" />
     </div>
   </section>
 </template>

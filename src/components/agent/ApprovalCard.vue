@@ -3,7 +3,7 @@
  * ApprovalCard — 一张完整的授权卡，消费方是输入区上方的 ApprovalDock
  *
  * 从 AgentRunPanel 原样搬出，不是重写：读的数据（req）、四档动作的开放条件
- * （grantScopesForRisk）、prod 警示开关（E5）、超时卡仍可操作（裁决A）、说明文案
+ * （grantScopesForRisk）、超时卡仍可操作（裁决A）、说明文案
  * 全部原样带过来。审批文案属于"用户据此点按钮"的东西，抄第二份就会开始漂移。
  *
  * 审批是运行期的瞬时决策，不是执行记录：请求不写入 agentTrace / agent_runs，
@@ -25,7 +25,6 @@ import { computed } from 'vue'
 import type { PermissionRequest } from '@/stores/agent'
 import { useAgentStore } from '@/stores/agent'
 import { useSSHStore } from '@/stores/ssh'
-import { useSettingsStore } from '@/stores/settings'
 import { grantScopesForRisk, onceGrantBlocked } from '@/utils/approval-scopes'
 import {
   approvalCommand,
@@ -44,8 +43,6 @@ const sshStore = useSSHStore()
 const { approve: grantPermission, deny: denyRequest } = useApprovalActions()
 
 const req = computed(() => props.req)
-/** E5：prod 专属警示的总开关（设置 → Agent 治理 → 运维策略） */
-const prodConfirmOn = computed(() => useSettingsStore().settings.agent.prodConfirm)
 const targetLabel = computed(() =>
   approvalTargetLabel(props.req, sshStore.sessions, sshStore.connections, '本机'))
 const writePreview = computed(() => approvalWritePreview(props.req))
@@ -77,7 +74,6 @@ const explainLabel = computed(() => {
   if (req.value.explainSource === 'tool') return '这个工具会做什么'
   return '这条命令会做什么'
 })
-const hasArgs = computed(() => Object.keys(props.req.args || {}).length > 0)
 const riskClass = computed(() => approvalRiskClass(props.req.risk))
 // P2 修复（2026-10-11）：once 按 run 键控 —— 后端 run 终态后 once 授权无处消费
 // （直接 409）。「允许本次」必须提前禁用，别让人点出一个假「已授权」。
@@ -99,7 +95,7 @@ const expiredTitle = computed(() => onceBlocked.value
 <template>
   <div class="ap-card ap-perm">
     <div class="ap-head">
-      <span class="ap-ttl ap-perm-ttl">AI 请求执行确认</span>
+      <span class="ap-ttl ap-perm-ttl">需要你确认</span>
       <span class="ap-risk" :class="riskClass">{{ approvalRiskLabel(req.risk) }}</span>
       <span v-if="req.expired" class="ap-risk-pill ap-timeout-pill" :title="expiredTitle">
         {{ expiredText }}
@@ -111,11 +107,6 @@ const expiredTitle = computed(() => onceBlocked.value
     </div>
     <div class="ap-body">
       <!-- 阅读顺序：我要做的事 → 后果 → 目标机器 -->
-      <!-- E5：prod 提示受「生产环境额外确认」开关控制。关掉只是不再多问一句，
-           风险判定本身（dangerous 审批 / prod 预授权 allowlist / hardline 阻断）不受影响 -->
-      <div v-if="req.environment === 'prod' && prodConfirmOn" class="ap-prod-warn">
-        目标为生产环境主机，误操作影响线上业务，请格外确认后再授权。
-      </div>
       <div v-if="req.task" class="ap-keyval" :title="req.task">
         <span class="ap-k">你的请求</span>
         <span class="ap-v ap-2line">{{ req.task }}</span>
@@ -123,16 +114,10 @@ const expiredTitle = computed(() => onceBlocked.value
       <div v-if="req.explain" class="ap-keyval">
         <span class="ap-k">{{ explainLabel }}</span>
         <span class="ap-v">{{ req.explain }}</span>
-        <span v-if="req.explainSource === 'llm'" class="ap-tag-inline">AI 生成，仅供参考</span>
       </div>
       <div v-if="targetLabel" class="ap-keyval">
         <span class="ap-k">目标主机</span>
         <code class="ap-code">{{ targetLabel }}</code>
-      </div>
-      <!-- 预登记范围：「始终允许」不再是无条件全局授权，主机可见时必须写清作用域 -->
-      <div v-if="req.host" class="ap-keyval">
-        <span class="ap-k">预登记范围</span>
-        <span class="ap-v">仅主机 <code class="ap-code">{{ req.host }}</code>，换机器仍需确认</span>
       </div>
       <!-- 环境标签的来源：服务端按主机连接配置判定的不显示（默认可信）；
            客户端自报、服务端没核实过的必须写出来 —— 否则一个被声明成 test 的
@@ -164,10 +149,6 @@ const expiredTitle = computed(() => onceBlocked.value
           <span class="ap-k">写入内容</span>
           <pre class="ap-diff">{{ writePreview.content || '（空文件）' }}</pre>
         </div>
-        <div v-if="writePreview.truncated" class="ap-preview-note">预览已截断，完整内容见下方「技术详情」。</div>
-        <div class="ap-write-note">
-          授权只绑定目标路径，不校验本次写入内容；同一路径换一段内容不会再询问。
-        </div>
       </div>
       <div class="ap-keyval">
         <span class="ap-k">工具:</span>
@@ -179,13 +160,6 @@ const expiredTitle = computed(() => onceBlocked.value
           <code class="ap-code ap-code-normal">{{ command }}</code>
         </template>
       </div>
-      <!-- 英文判定 reason 与原始参数收进折叠区：正文留给用户读结论，
-           排查要用的原文一条不少，但不该占据第一屏 -->
-      <details v-if="hasArgs || req.message" class="ap-args">
-        <summary>技术详情</summary>
-        <div v-if="req.message" class="ap-tech-line">{{ req.message }}</div>
-        <pre v-if="hasArgs">{{ JSON.stringify(req.args, null, 2) }}</pre>
-      </details>
     </div>
     <div class="ap-actions">
       <button
@@ -220,15 +194,10 @@ const expiredTitle = computed(() => onceBlocked.value
         @click="denyRequest(req.id)"
       >拒绝</button>
     </div>
-    <div class="ap-hint">
-      {{ req.host
-        ? `「始终允许」只写入主机 ${req.host} 的持久授权清单，换一台机器仍需重新确认；拿不准选「允许本次」。`
-        : '「始终允许」会写入本机持久授权清单，之后包括生产环境在内都不再询问 —— 拿不准选「允许本次」。' }}
-    </div>
   </div>
 </template>
 
 <style scoped>
-/* 与 ApprovalDock 的 .ad-body 同高：长写入预览在正文里滚动，动作栏与说明条常驻 */
+/* 与 ApprovalDock 的 .ad-body 同高：长写入预览在正文里滚动，动作栏常驻 */
 .ap-perm { max-height: min(38vh, 340px); }
 </style>

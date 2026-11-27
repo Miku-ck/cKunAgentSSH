@@ -64,6 +64,8 @@ export interface DeliverySegment {
   intent: string
   level: string
   note?: string
+  /** 该段真实退出码（执行后回填；未插桩或未执行时缺省） */
+  exit_code?: number | null
 }
 
 export interface ToolDelivery {
@@ -93,6 +95,10 @@ export interface ToolDelivery {
   explain_source?: string
   /** 复合命令逐段拆解（后端拆解层，纯展示；单段命令缺省） */
   segments?: DeliverySegment[]
+  /** 后端生成的逐段退出码插桩脚本（含 __AGENT_MARKER__ 占位符）；空/缺省 = 不可插桩 */
+  instrumented?: string
+  /** 执行失败的具体原因（取自输出中的错误行；仅失败时回填） */
+  failure_reason?: string
   /** 展示用聚合风险（safe/dangerous/hardline）；权威判定在后端授权链 */
   risk?: string
   /** 发起本次命令的任务原话（卡片上下文行，让用户核对命令服务于他的请求） */
@@ -114,6 +120,7 @@ interface ToolDeliverPayload {
   explain?: string
   explain_source?: string
   segments?: DeliverySegment[]
+  instrumented?: string
   risk?: string
   task?: string
 }
@@ -134,6 +141,8 @@ interface CaptureState {
   output: string
   /** 输出是否已达上限停止累加（截断标记只追加一次；超限后只等 END 哨兵收尾） */
   truncated: boolean
+  /** 段序号（1 起）→ 该段真实 $?：由插桩标记行回填，用于逐段失败判定 */
+  stepExitCodes: Map<number, number>
   finished: boolean
   timer: ReturnType<typeof setTimeout> | null
 }
@@ -275,11 +284,29 @@ async function retryPostResult(toolId: string): Promise<boolean> {
   return postResultWithRetry(toolId, d.lastPost)
 }
 
-async function finishAndPost(toolId: string, output: string, success: boolean, exitCode: number | null, rejected = false, timeout = false): Promise<void> {
+/** 把逐段退出码回填到交付条目；未插桩（无 segments/无标记）时保持缺省 = 未知 */
+function applyStepExitCodes(delivery: ToolDelivery, codes?: Map<number, number>): void {
+  if (!codes?.size || !delivery.segments?.length) return
+  for (const [idx, code] of codes) {
+    const seg = delivery.segments[idx - 1]
+    if (seg) seg.exit_code = code
+  }
+}
+
+async function finishAndPost(
+  toolId: string,
+  output: string,
+  success: boolean,
+  exitCode: number | null,
+  rejected = false,
+  timeout = false,
+  stepExitCodes?: Map<number, number>,
+): Promise<void> {
   const delivery = findDelivery(toolId)
   if (delivery) {
     delivery.output = output
     delivery.exit_code = exitCode
+    applyStepExitCodes(delivery, stepExitCodes)
     // 拒绝/中止是更明确的终态，不覆盖；其余按真实结果细分终态
     if (delivery.status !== 'rejected' && delivery.status !== 'aborted') {
       if (rejected) {
@@ -291,6 +318,16 @@ async function finishAndPost(toolId: string, output: string, success: boolean, e
       } else {
         // exit_code 非零，或哨兵退出码不可解析（exitCode=null 且 success=false）
         delivery.status = 'failed'
+      }
+    }
+    // 失败原因只在真的失败时回填：逐段有非零（插桩）或整条退出码非零/未知
+    if (!rejected) {
+      const stepFailed = delivery.segments?.some(
+        s => typeof s.exit_code === 'number' && s.exit_code !== 0) ?? false
+      if (timeout) {
+        delivery.failure_reason = '执行超时，未拿到完整结果'
+      } else if (stepFailed || (exitCode !== null && exitCode !== 0)) {
+        delivery.failure_reason = extractFailureReason(output)
       }
     }
   }
@@ -326,6 +363,21 @@ function armTimeout(delivery: ToolDelivery): void {
  * 把命令写入可见终端并按 BEGIN/END 哨兵开始捕获。
  * 自动交付与确认通过共用此路径。
  */
+/** 逐段退出码标记：与后端 command_explain.STEP_MARKER_* 一字不差（跨端契约）。
+ *  插桩脚本形如 `A ; printf '__AGENT_STEP__ <marker>:1:%s\n' "$?" ; B ...`，
+ *  捕获端按 marker 精确匹配、把这些标记行从输出里剔除，只回填逐段 $?。 */
+export const STEP_MARKER_PREFIX = '__AGENT_STEP__'
+export const STEP_MARKER_PLACEHOLDER = '__AGENT_MARKER__'
+
+/** 失败原因摘要：优先第一条错误行，否则最后一行（只在已判定失败时调用）。 */
+const ERROR_LINE_RE = /command not found|No such file or directory|Permission denied|not permitted|syntax error|Read-only file system|cannot |could not |failed|failure|denied|error/i
+export function extractFailureReason(output: string): string {
+  const lines = output.split('\n').map(l => l.trim()).filter(Boolean)
+  if (!lines.length) return ''
+  const hit = lines.find(l => ERROR_LINE_RE.test(l)) ?? lines[lines.length - 1]
+  return hit.length > 200 ? hit.slice(0, 200) + '…' : hit
+}
+
 /** 交付哨兵模板：按 shell 家族生成 BEGIN/END 包裹行（导出仅为测试缝）。
  *
  * CMD 的退出码必须写 `%%ERRORLEVEL%%` 并经 `call echo` 二次展开：cmd.exe 对
@@ -382,10 +434,16 @@ async function deliverCommand(toolId: string): Promise<void> {
     || session.shell === 'Git Bash'
     || session.shell === 'WSL'
     || !session.shell
+  // 逐段退出码插桩：只对后端给出的纯 ; 链生效（&&/||、循环体、heredoc 后端已回退为空串）。
+  // 标记里的占位符换成本次哨兵 marker，捕获端才能精确剔除标记行、回填逐段 $?。
+  // 非 POSIX shell 不插桩：$?/$LASTEXITCODE 语义与 printf 都不可靠。
+  const shellCommand = isPosixShell && delivery.instrumented
+    ? delivery.instrumented.split(STEP_MARKER_PLACEHOLDER).join(marker)
+    : delivery.command
   const sentinel = sentinelFor(
     isPosixShell ? 'posix' : session.shell === 'CMD' ? 'cmd' : 'powershell',
     marker,
-    delivery.command,
+    shellCommand,
   )
 
   // 先登记捕获，避免错过回显
@@ -399,6 +457,7 @@ async function deliverCommand(toolId: string): Promise<void> {
     partialLine: '',
     output: '',
     truncated: false,
+    stepExitCodes: new Map<number, number>(),
     finished: false,
     timer: null,
   }
@@ -478,6 +537,7 @@ function handleDeliver(payload: ToolDeliverPayload): void {
     explain: payload.explain,
     explain_source: payload.explain_source,
     segments: payload.segments,
+    instrumented: payload.instrumented,
     risk: payload.risk,
     task: payload.task,
   }
@@ -514,6 +574,19 @@ async function rejectDeliver(toolId: string): Promise<void> {
   }
 }
 
+/** 已捕获标记里序号最大的一段退出码（即 shell 视角的整条命令退出码） */
+function lastStepExitCode(cap: CaptureState): number | undefined {
+  let last: number | undefined
+  let lastIdx = -1
+  for (const [idx, code] of cap.stepExitCodes) {
+    if (idx > lastIdx) {
+      lastIdx = idx
+      last = code
+    }
+  }
+  return last
+}
+
 /**
  * 把一段输出喂给单个活动捕获做解析。提取为独立函数以便同会话并发捕获时
  * 逐个分发：每个捕获按各自 marker 路由，互不直接读写对方的 output。
@@ -547,12 +620,30 @@ function parseCaptureChunk(toolId: string, data: string): void {
     const endPrefix = `__AGENT_END__ ${cap.marker}:`
     if (line.startsWith(endPrefix)) {
       const codeStr = line.slice(endPrefix.length).trim()
-      const exitCode = codeStr === '' ? 0 : Number(codeStr)
+      const parsedCode = codeStr === '' ? 0 : Number(codeStr)
+      // 插桩后 END 的 $? 是最后一条 printf 的 0，真实整体退出码以最后一段标记为准
+      const lastStep = lastStepExitCode(cap)
+      const exitCode = lastStep !== undefined
+        ? lastStep
+        : (Number.isFinite(parsedCode) ? parsedCode : null)
       cap.finished = true
       const captured = cap.output.trim()
-      const success = Number.isFinite(exitCode) && exitCode === 0
-      void finishAndPost(cap.tool_id, captured, success, Number.isFinite(exitCode) ? exitCode : null)
+      const success = exitCode !== null && exitCode === 0
+      void finishAndPost(
+        cap.tool_id, captured, success, exitCode, false, false, cap.stepExitCodes)
       return
+    }
+    // 逐段退出码标记：`__AGENT_STEP__ <marker>:<段号>:<退出码>`。只回填、不输出 ——
+    // 标记是我们自己插入的噪声，混进交付输出会污染模型看到的执行结果。
+    const stepPrefix = `${STEP_MARKER_PREFIX} ${cap.marker}:`
+    if (line.startsWith(stepPrefix)) {
+      const [idxStr, codeStr] = line.slice(stepPrefix.length).split(':')
+      const idx = Number(idxStr)
+      const code = Number(codeStr)
+      if (Number.isInteger(idx) && idx > 0 && Number.isFinite(code)) {
+        cap.stepExitCodes.set(idx, code)
+      }
+      continue
     }
     // 跳过哨兵起始行以外的杂项行（如提示符/空行）
     if (line === `__AGENT_BEGIN__ ${cap.marker}`) {

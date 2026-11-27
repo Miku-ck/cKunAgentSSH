@@ -252,6 +252,8 @@ class Harness:
         # 挂起恢复：run_checkpoints.load_checkpoint() 的返回值。提供时跳过首条
         # 任务消息追加，messages/iteration 从快照回填，driver 从待确认轮重放。
         resume_checkpoint: Optional[dict] = None,
+        # 完整运行安全点：恢复消息、状态、原预算与累计成本，不重放已闭合工具。
+        resume_safe_point: Optional[dict] = None,
     ) -> AsyncIterator[TraceEvent]:
         """
         主入口 — yield TraceEvent
@@ -322,7 +324,23 @@ class Harness:
         # 用实际 run 配置重新初始化 reins（保证 DynamicBudgetRein 的参数正确）
         # create_default_reins 用 run 的 config 而非 Harness 构造时的默认 config
         # 传入 saddle：PermissionGate 从 ToolRegistry 读取 ToolMeta（单一数据源）
-        actual_config = config or AgentConfig()
+        if resume_safe_point is not None and resume_checkpoint is not None:
+            raise ValueError("完整安全点与澄清快照不能同时恢复")
+        if resume_safe_point is not None:
+            from dataclasses import fields
+            from .safe_point import SafePoint, validate_message_pairs
+            from .contracts import State as _State
+            if str(resume_safe_point.get("run_id") or "") != str(run_id or ""):
+                raise ValueError("完整安全点与 run_id 不匹配")
+            config_data = dict(resume_safe_point.get("config") or {})
+            config_data["fallback_model_cfg"] = None
+            allowed = {item.name for item in fields(AgentConfig)}
+            actual_config = AgentConfig(**{
+                key: value for key, value in config_data.items() if key in allowed
+            })
+            validate_message_pairs(list(resume_safe_point.get("messages") or []))
+        else:
+            actual_config = config or AgentConfig()
         self.reins = create_default_reins(
             config=actual_config,
             saddle=self._saddle,
@@ -365,6 +383,17 @@ class Harness:
         # 如果调用方指定 run_id，覆盖自动生成的
         if run_id:
             ctx.run_id = run_id
+        if resume_safe_point is not None:
+            ctx.task = str(resume_safe_point.get("task") or "")
+            ctx.conversation_id = str(resume_safe_point.get("conversation_id") or "")
+            ctx.ssh_session_id = str(resume_safe_point.get("ssh_session_id") or "")
+            ctx.environment = str(resume_safe_point.get("environment") or "test")
+            ctx.visible_terminal = bool(resume_safe_point.get("visible_terminal"))
+            ctx.system_prompt = str(resume_safe_point.get("system_prompt") or "")
+            ctx.history = list(resume_safe_point.get("history") or [])
+            ctx.memories = list(resume_safe_point.get("memories") or [])
+            ctx.skill_ids = list(resume_safe_point.get("skill_ids") or [])
+            ctx.auto_skill_match = bool(resume_safe_point.get("auto_skill_match", True))
         # 注入 LLM 配置
         ctx.llm_base_url = self.config.base_url
         ctx.llm_api_key = self.config.api_key
@@ -381,6 +410,21 @@ class Harness:
         if memory_scopes is not None:
             ctx.metadata["memory_scopes"] = list(memory_scopes)
         ctx.metadata["saddle"] = self._saddle
+        ctx.metadata["available_tool_names"] = list(self._saddle.registry.names())
+        from .operation_ledger import ledger_for_run
+        import db._conn as _conn_mod
+        run_ledger = ledger_for_run(
+            enabled=actual_config.operation_ledger_enabled,
+            db_path=str(getattr(_conn_mod, "_db_path", "")),
+        )
+        if run_ledger is not None:
+            ctx.metadata["operation_ledger"] = run_ledger
+        from .safe_point import safe_point_for_run
+        run_safe_point = safe_point_for_run(
+            enabled=actual_config.safe_point_enabled, db_path=str(getattr(_conn_mod, "_db_path", "")),
+        )
+        if run_safe_point is not None:
+            ctx.metadata["safe_point"] = run_safe_point
         # 侦察子 Agent 的治理通道：spawn_subagent 在自己的轻量 ReAct 循环里执行
         # 只读观测工具，PRE/POST 检查与 Saddle 执行必须复用主 run 的同一套拦截器
         # 实例（PermissionGate 进程单例 + FilesystemGuard 内容级判定 + AuditLogger
@@ -446,12 +490,52 @@ class Harness:
         # 显式覆盖而非追加 —— 同一 harness 实例被复用时上一 run 的图片不得泄漏。
         self.stirrups.images = list(images) if images else None
 
-        # ── 挂起恢复（waiting_confirmation → resume）──
-        # 快照回填：messages 原样塞回（绝不重新拼装 —— 重新拼装会拆散
-        # assistant.tool_calls 与 role=tool 的配对，vLLM 直接 400）；
-        # iteration 回填；待确认轮的重放信息交给 driver。
-        # 此时跳过首条任务消息追加 —— 快照 messages 已包含原始任务消息。
-        if resume_checkpoint is not None:
+        # ── 完整安全点恢复 ──
+        # 运行时服务一律重新装配；快照只回填可序列化业务状态。
+        if resume_safe_point is not None:
+            loaded = await SafePoint.load(ctx.run_id)
+            if loaded is None:
+                raise RuntimeError("完整运行安全点已丢失")
+            disk_payload, writer = loaded
+            if disk_payload != resume_safe_point:
+                raise RuntimeError("完整运行安全点已变化，请重新对账")
+            ctx.messages = list(resume_safe_point.get("messages") or [])
+            ctx.messages.append({
+                "role": "user",
+                "content": (
+                    "[系统] 运行已从持久安全点恢复。请先依据已有消息、工具结果和当前目标"
+                    "重新规划剩余步骤；不要重复已确认成功的副作用，不要假设未知操作已执行。"
+                    "继续遵守原审批与预算约束。"
+                ),
+            })
+            ctx.iteration = int(resume_safe_point.get("iteration") or 0)
+            ctx.state = _State(str(resume_safe_point.get("state") or "init"))
+            ctx.state_history = list(resume_safe_point.get("state_history") or [])
+            ctx.tool_calls_log = list(resume_safe_point.get("tool_calls_log") or [])
+            ctx.warnings = list(resume_safe_point.get("warnings") or [])
+            ctx.errors = list(resume_safe_point.get("errors") or [])
+            ctx.metadata.update(resume_safe_point.get("metadata") or {})
+            ctx.metadata["safe_point"] = writer
+            ctx.metadata["operation_ledger"] = run_ledger
+            ctx.metadata["saddle"] = self._saddle
+            ctx.metadata["governance"] = SimpleNamespace(reins=self.reins, saddle=self._saddle)
+            ctx.metadata["emit_event"] = emit_event
+            if self.cost_tracker is not None:
+                ctx.metadata["cost_tracker"] = self.cost_tracker
+                snapshot = resume_safe_point.get("metadata", {}).get("cost_snapshot") or {}
+                self.cost_tracker.prompt_tokens = max(0, int(snapshot.get("prompt_tokens") or 0))
+                self.cost_tracker.completion_tokens = max(0, int(snapshot.get("completion_tokens") or 0))
+                self.cost_tracker.tool_call_count = max(0, int(snapshot.get("tool_call_count") or 0))
+                self.cost_tracker.llm_call_count = max(0, int(snapshot.get("llm_call_count") or 0))
+                self.cost_tracker.tool_duration_ms = max(0, int(snapshot.get("tool_duration_ms") or 0))
+            ctx.metadata["recovered_run"] = True
+            max_wall = getattr(ctx.config, "max_wall_clock_s", 0) or 0
+            if max_wall > 0:
+                started_unix = float(resume_safe_point.get("run_started_unix_s") or 0)
+                elapsed = max(0.0, time.time() - started_unix) if started_unix else max_wall
+                ctx.metadata["run_started_mono"] = time.monotonic() - elapsed
+            logger.info("恢复完整运行安全点 run=%s iteration=%s", ctx.run_id, ctx.iteration)
+        elif resume_checkpoint is not None:
             ck = resume_checkpoint
             ctx.messages = list(ck.get("messages") or [])
             ctx.iteration = int(ck.get("iteration") or 0)

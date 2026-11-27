@@ -52,12 +52,10 @@ import QuickSshDialog from '@/components/ssh/QuickSshDialog.vue'
 import TaskStructureDialog from './TaskStructureDialog.vue'
 import { useTaskStructuring } from '@/composables/useTaskStructuring'
 import { APPROVAL_OPTIONS, PERMISSION_LABELS, PERM_MARKS, PERM_SHIELD, resolveRunModes, type ApprovalKey } from '@/utils/run-modes'
+import type { IntentKind } from '@/utils/intent-core'
 
 const emit = defineEmits<{
   bulk: []
-  'remote-mgr': []
-  /** ＋ 菜单 Spec/Plan/Goal 入口：Plan/Goal 请求父层聚焦结构化面板对应卡片 */
-  'stage-focus': [stage: 'plan' | 'goal']
 }>()
 
 const agent = useAgentStore()
@@ -96,27 +94,25 @@ function toBulk() {
   closePlusMenu()
 }
 
-/** ＋ 菜单 Spec：走任务结构化（把草稿拆成明确需求）。不是旧版 workflow_mode 姿态开关。 */
-function openSpec() {
-  closePlusMenu()
-  if (!structCanTrigger.value || sshAi.enhancedActive) {
-    toast.info('先在输入框写一段需求，再用 Spec 拆解')
-    return
-  }
-  void openStruct()
-}
-
-function focusStage(stage: 'plan' | 'goal') {
-  closePlusMenu()
-  emit('stage-focus', stage)
-}
-
-/** 「连接远程服务器」：去远程管理页选主机连接。只开不关 —— 复用 toggle 会在
- *  页面已开时把它关掉，与「去连接」的语义相反。 */
-function openRemoteManager() {
-  emit('remote-mgr')
+/** ＋ 菜单 Spec/Plan/Goal 与意图 chips 同一状态：点 = 挂/摘对应 chip。
+ *  旧「Spec 走结构化 / Plan/Goal 聚焦面板」路径已退役 —— 结构化保留自动浮现
+ *  卡片（草稿够长够模糊时 structCanTrigger）作为唯一发送前旁路入口；
+ *  结构化面板常驻在输入区上方，无需聚焦入口。 */
+const INTENT_ITEMS: { kind: IntentKind; label: string }[] = [
+  { kind: 'plan', label: 'Plan' },
+  { kind: 'spec', label: 'Spec' },
+  { kind: 'goal', label: 'Goal' },
+]
+function toggleIntentChip(kind: IntentKind) {
+  sshAi.toggleIntent(kind)
+  // 点卡片选项后关闭 ＋ 菜单（用户 2026-11-23）：挂载动作已完成，
+  // 菜单留在原地只会让人再点一次以为还要确认
   closePlusMenu()
 }
+/** chips 行只渲染已挂的意图（选了才显示 —— 用户 2026-11-23 指正）；挂载入口
+ *  在 ＋ 菜单三个同名项（同一 intentPending 状态），全摘即整行消失。 */
+const activeIntents = computed(() =>
+  INTENT_ITEMS.filter(ik => sshAi.intentPending[ik.kind]))
 
 /** 断开当前目标这台：走终端页标签 × 的同一个出口（store.closeSession →
  *  sshDisconnect），所以首页不另定一套断开语义，也不弹确认 —— 那两个决策位
@@ -229,9 +225,7 @@ function cascadeMatch(haystack: string): boolean {
   const q = cascadeQuery.value.trim().toLowerCase()
   return !q || haystack.toLowerCase().includes(q)
 }
-/** 落点只有一个浮层，四个面：kind（本地/云端/工作树 + 连接 SSH/WSL）、
- *  dir（本地模式的文件夹）、repo（工作树模式的仓库）、branch（该仓的分支）。
- *  与 ＋ 菜单互斥。 */
+/** 落点只有一个浮层四个面：kind（本地/云端/工作树+SSH/WSL）、dir（文件夹）、repo（仓库）、branch。 */
 type LandingPane = '' | 'kind' | 'dir' | 'repo' | 'branch'
 const landingMenu = ref<LandingPane>('')
 const landingRef = ref<HTMLElement | null>(null)
@@ -241,12 +235,27 @@ function closePlusMenu() {
   plusPane.value = 'root'
   cascadeQuery.value = ''
   landingMenu.value = ''
+  menuPos.value = null
 }
 
-function togglePlusMenu() {
+/** ＋ 浮层按鼠标光标放置（无事件时回退默认锚点）；left/bottom 相对 .hcc-sel，
+ *  卡片带 left+bottom、二级面板只带 bottom（left 恒贴卡右）。 */
+const menuPos = ref<{ left: number; bottom: number } | null>(null)
+const MENU_TOTAL_W = 500  // 卡片 + 二级面板总宽，用于视口夹紧
+function anchorFromCursor(e: MouseEvent): { left: number; bottom: number } | null {
+  const sel = plusRef.value?.getBoundingClientRect()
+  if (!sel) return null
+  const maxLeft = Math.max(4, document.documentElement.clientWidth - sel.left - MENU_TOTAL_W)
+  return { left: Math.min(Math.max(e.clientX - sel.left, 4), maxLeft), bottom: Math.max(6, sel.bottom - e.clientY + 6) }
+}
+const menuCardStyle = computed(() => menuPos.value ? { left: `${menuPos.value.left}px`, bottom: `${menuPos.value.bottom}px` } : undefined)
+const menuPanelStyle = computed(() => menuPos.value ? { bottom: `${menuPos.value.bottom}px` } : undefined)
+
+function togglePlusMenu(e?: MouseEvent) {
   showPlusMenu.value = !showPlusMenu.value
   plusPane.value = 'root'
   if (showPlusMenu.value) {
+    menuPos.value = e ? anchorFromCursor(e) : null
     landingMenu.value = ''
     // 自愈：首屏那次 /skills?mode=ssh 可能在后端就绪前失败，remoteSkills 空了就
     // 不再有第二次机会（onMounted 的空表守卫已被本地扫盘结果填掉）。用户每次点开
@@ -265,9 +274,8 @@ const landingLabel = computed(() => {
 /** 图标跟读同一来源；无会话时按「本地」画（首次进入的隐式默认落点）。 */
 const landingIcon = computed<'local' | 'worktree' | 'ssh'>(() => landing.kind ?? 'local')
 /** 第二枚 chip：在哪个目录。三态常驻，语义随落点变（文件夹 / 仓库 / 远程目录）。 */
-/** 第二枚 chip 的读数。**没有绑定目录时不编「主目录」**：主目录不是用户选的项目，
- *  写上去等于把「没选」谎报成一个位置（2026-11-11 用户口径）。这一枚写「不指定工作区」——
- *  描述的是**状态**（没指定），不是动作（打开文件夹）；动作在它展开的菜单里。 */
+/** 第二枚 chip 的读数。没绑定时不编「主目录」（2026-11-11：那是把「没选」谎报成位置）：
+ *  写「不指定工作区」只描述状态，动作在它展开的面里。 */
 const dirLabel = computed(() =>
   landing.activeDirLabel || (landing.kind === 'worktree' ? '仓库' : '不指定工作区'),
 )
@@ -278,18 +286,28 @@ const dirChipTitle = computed(() => {
     if (landing.activeDirUnavailable) return '连接已断开 · 点开切换主机或重新连接'
     return landing.activeDirPath ? `远程目录：${landing.activeDirPath}` : '远程目录未知 · 点开切换主机'
   }
-  return landing.activeDirPath ? `当前目录：${landing.activeDirPath}` : '不在项目中工作 · 点击选一个文件夹'
+  return landing.activeDirPath ? `当前目录：${landing.activeDirPath}` : '未绑定目录 · 点开选一个文件夹'
 })
-const repoLabel = computed(() => landing.activeRepoLabel || '仓库')
 const branchLabel = computed(() => landing.activeBranch === '—' ? '分支' : landing.activeBranch)
 
 /** 第二枚 chip 开哪个面：工作树读仓库列表，本地与 SSH 读目录。 */
 const dirPane = computed<Exclude<LandingPane, ''>>(() => landing.kind === 'worktree' ? 'repo' : 'dir')
 function toggleDirChip() { toggleLanding(dirPane.value) }
+/** 各次级面挂在自己 chip 的左缘（2026-11-24 用户口径）：offsetLeft 相对 .hcc-sel。
+ *  kind 面没有专属 chip，仍在整排 chip 左缘起开。 */
+const dirChipRef = ref<HTMLElement | null>(null)
+const branchChipRef = ref<HTMLElement | null>(null)
+const landingPaneStyle = computed(() => {
+  const chipLeft = landingMenu.value === 'branch'
+    ? branchChipRef.value?.offsetLeft
+    : landingMenu.value === dirPane.value
+      ? dirChipRef.value?.offsetLeft
+      : undefined
+  return chipLeft == null ? undefined : { left: `${chipLeft}px` }
+})
 
 /** 五面共用一个浮层；每次展开都顺手补一次列表（已加载时 loadWorktrees 只被
- *  这里挡住，不重复跑 git）。与 ＋ 菜单互斥。新建工作树表单随面切换收起。 */
-watch(landingMenu, () => { wtFormOpen.value = false })
+ *  这里挡住，不重复跑 git）。与 ＋ 菜单互斥。 */
 function toggleLanding(which: Exclude<LandingPane, ''>) {
   const open = landingMenu.value !== which
   landingMenu.value = open ? which : ''
@@ -358,16 +376,16 @@ function removeDirRecord(path: string) {
   landing.removeRecentDir(path)
 }
 
-/** 当前落点就是「不在项目中」那种（本地会话没绑定任何目录）：底部那行打勾。
- *  与目录行互斥 —— 绑定目录为空时不会有任何一行被选中，不会出现两个 ✓。 */
-const atHomeRoot = computed(() => landing.kind === 'local' && !landing.activeBoundDir)
+/** 第二枚 chip 行首的 ×：只在「本地 + 已绑定目录」时出现 —— 点了解绑回主目录，
+ *  接替已撤掉的「不在项目中工作」那一行。 */
+const dirChipClearable = computed(() => landing.kind === 'local' && !!landing.activeBoundDir)
 
 async function chooseDirChip(path: string) {
   landingMenu.value = ''
   await landing.chooseLocalDir(path)
 }
 
-/** 「不在项目中工作」：回到不绑定目录的本地会话（主目录），chip 上不再挂文件夹。 */
+/** 解绑目录：回到不绑定目录的本地会话（主目录），chip 行首的 × 随之消失。 */
 async function chooseHomeChip() {
   landingMenu.value = ''
   await landing.chooseLocalHome()
@@ -397,39 +415,8 @@ async function chooseRepoChip(repo: string) {
   if (!landing.error) landingMenu.value = ''
 }
 
-/** 新建工作树的行内表单（参考 Trae 的任务驱动形态）：预填自动名，Enter 创建。
- *  成功后 store 已把落点切到新分支，这里只收菜单；失败原因落 landing.error 可见。 */
-const wtFormOpen = ref(false)
-const wtBranchName = ref('')
-const wtFormInputRef = ref<HTMLInputElement | null>(null)
 /** 有失效工作树（目录已被手动删除）时才露「清理失效记录」。 */
 const hasPrunable = computed(() => !!landing.activeGroup?.items?.some(w => w.prunable))
-function openWtForm() {
-  const rand = Math.random().toString(36).slice(2, 6)
-  wtBranchName.value = `feat/ai-${rand}`
-  wtFormOpen.value = true
-  void nextTick(() => wtFormInputRef.value?.focus())
-}
-function closeWtForm() {
-  wtFormOpen.value = false
-}
-async function submitWtForm() {
-  if (!landing.activeRepoPath) return
-  const name = wtBranchName.value.trim()
-  if (!name) return
-  const wt = await landing.createWorktree(landing.activeRepoPath, name)
-  if (wt) {
-    wtFormOpen.value = false
-    landingMenu.value = ''
-  }
-}
-
-/** 选中一条 SSH 连接配置：建 AI 专属会话（不切用户终端 tab），菜单收起。
- *  建连失败的原因落 landing.error，菜单留在原地看得见。 */
-async function chooseSshConn(connectionId: string) {
-  await landing.chooseSshConnection(connectionId)
-  if (!landing.error) landingMenu.value = ''
-}
 
 /** 幽灵会话手动回拨：只在 chip 已判定「未连接」时出现。
  *  自动那一次由 exec-target 负责（每个会话只试一次），这里给的是失败之后的第二次机会 ——
@@ -544,18 +531,6 @@ const pickedSkills = computed(() =>
   }),
 )
 
-/** SSH 面列的是**连接配置**，不是已开的远程会话：AI 的远程连接与用户终端隔离，
- *  选中即建一条 AI 专属会话（landing.chooseSshConnection），不借用终端页的 tab。
- *  当前 AI 落点那条连接打勾；本地 / WSL 会话归 kind 面「本地」下面那一小组。 */
-const sshConnectionOptions = computed(() =>
-  ssh.connections.map(c => ({
-    id: c.id,
-    label: c.name || `${c.username}@${c.host}`,
-    hint: `${c.username}@${c.host}:${c.port}`,
-    active: landing.aiConnectionId === c.id,
-  })),
-)
-
 /** 仓库 chip 只显示目录短名，完整路径走 title —— 底栏放不下整条绝对路径。 */
 function shortPath(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean)
@@ -586,6 +561,18 @@ function toggleSkill(id: string) {
   // 去重与摘除的算法在 store（add/removeSelectedSkill），这里只组合"点一下是加上还是摘掉"
   if (sshAi.selectedSkillIds.includes(id)) sshAi.removeSelectedSkill(id)
   else sshAi.addSelectedSkill(id)
+}
+
+/** 级联面板里点技能/插件卡片：挂/摘 + 关闭 ＋ 菜单（用户 2026-11-23：选完即关，
+ *  与意图 chip / chooseExpert 同款交互）。overlay 行上的摘除走 toggle*，不动菜单。 */
+function pickSkillFromMenu(id: string) {
+  toggleSkill(id)
+  closePlusMenu()
+}
+
+function pickPluginFromMenu(id: string) {
+  togglePlugin(id)
+  closePlusMenu()
 }
 
 /** 专家是「跟随下一次发送」的选择：与目标 chip 同语义，逐条消息可换。
@@ -654,6 +641,15 @@ const pickedPlugins = computed(() =>
     const p = pluginsStore.enabled.find(x => x.id === id)
     return p ? [p] : []
   }),
+)
+
+/** 输入区第一行挂了东西（意图 / 技能 / 插件 / 专家任一）：控制 overlay 行渲染与
+ *  textarea 的 placeholder 让位 —— 挂了就让真 placeholder 置空避免重叠。 */
+const hasInputChips = computed(() =>
+  activeIntents.value.length > 0 ||
+  pickedSkills.value.length > 0 ||
+  pickedPlugins.value.length > 0 ||
+  pickedExpert.value !== null,
 )
 
 /** 右栏三个面板共用一枚搜索框：按名称 + 描述过滤，空查询不过滤。 */
@@ -732,14 +728,10 @@ function ignoreExpertSuggestion() {
   agent.dismissExpertSuggestion()
 }
 
-// 草稿是 store 级共享态（sharedDraft）：预填与打字都落到这份 textarea，
-// 高度与行线要跟着重算 —— 否则内容被 overflow-y:hidden 裁掉半截。
-// 带 immediate：预填若发生在挂载之前，只守变化的 watch 就永远不补这一次高度。
+// 草稿是 store 级共享态：高度随变化重算（immediate 覆盖挂载前预填）
 watch(draft, () => nextTick(grow), { immediate: true })
 
-// 「问 AI」预填（终端选区 / 批量下发结果 / 监控指标诊断）统一落进这份草稿。
-// SshView 的 sync watch 先把用户带回任务台，这里只负责消费一次：置 null 后
-// 再进首页不会把同一段问题重放一遍，用户改过的草稿也不会被覆盖。
+// 「问 AI」预填只消费一次（置 null 防重放，用户改过的草稿不覆盖）
 watch(() => sshAi.pendingPrefill, (req) => {
   if (!req) return
   sshAi.pendingPrefill = null
@@ -747,7 +739,21 @@ watch(() => sshAi.pendingPrefill, (req) => {
   void nextTick(() => ta.value?.focus())
 }, { immediate: true })
 
+/** 空草稿 Backspace/Delete 摘最右 chip（显示序反序）；有字时按键归文字 */
+function removeLastInputChip() {
+  if (pickedExpert.value) { sshAi.setSelectedExpert(''); return }
+  const lastPlugin = pickedPlugins.value[pickedPlugins.value.length - 1]
+  if (lastPlugin) { togglePlugin(lastPlugin.id); return }
+  const lastSkill = pickedSkills.value[pickedSkills.value.length - 1]
+  if (lastSkill) { toggleSkill(lastSkill.id); return }
+  const intentOrder: IntentKind[] = ['goal', 'spec', 'plan']
+  for (const k of intentOrder) { if (sshAi.intentPending[k]) { toggleIntentChip(k); return } }
+}
+
 function onKeydown(e: KeyboardEvent) {
+  if ((e.key === 'Backspace' || e.key === 'Delete') && !draft.value && hasInputChips.value) {
+    e.preventDefault(); removeLastInputChip(); return
+  }
   if (e.key !== 'Enter') return
   // 发送快捷键可在设置里换档：硬编码 Enter 会让首页输入框与设置说的不是一回事
   const wantShift = settings.settings.chat.sendShortcut === 'shiftEnter'
@@ -776,7 +782,7 @@ onMounted(() => {
   <div class="hcc">
     <!-- 运维专家建议（非阻塞）：当前 run 继续跑，用户可切换并重跑或忽略 -->
     <div v-if="agent.expertSuggestion" class="hcc-suggest" role="status">
-      <span class="hcc-suggest-text">{{ agent.expertSuggestion.reason }}：{{ agent.expertSuggestion.name }}</span>
+      <span class="hcc-suggest-text">{{ agent.expertSuggestion.reason }}，交给「{{ agent.expertSuggestion.name }}」处理</span>
       <button type="button" class="hcc-suggest-accept" @click="acceptExpertSuggestion">切换并重跑</button>
       <button type="button" class="hcc-suggest-ignore" @click="ignoreExpertSuggestion">忽略</button>
     </div>
@@ -807,18 +813,47 @@ onMounted(() => {
         >×</button>
       </div>
     </div>
-    <textarea
-      ref="ta"
-      v-model="draft"
-      class="hcc-input"
-      rows="2"
-      placeholder=""
-      aria-label="输入指令"
-      spellcheck="false"
-      @input="grow"
-      @keydown="onKeydown"
-      @paste="onPaste"
-    />
+    <div class="hcc-inputrow">
+      <!-- 输入区第一行 chips（与文字同排）：意图/技能/插件/专家，选了才显示，hover ✕ 摘除；prompt 注入不下发参数 -->
+      <div v-if="hasInputChips" class="hcc-intents" role="toolbar" aria-label="这一条消息带什么">
+        <button v-for="ik in activeIntents" :key="ik.kind" type="button" class="hcc-intent" :disabled="running" @click="toggleIntentChip(ik.kind)" @keydown.delete.prevent="toggleIntentChip(ik.kind)">
+          <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="13" height="13" aria-hidden="true">
+            <path v-if="ik.kind === 'plan'" d="M3 4h10M3 8h10M3 12h6" /><path v-else-if="ik.kind === 'spec'" d="M3 2.5h10v11H3zM5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
+            <circle v-else-if="ik.kind === 'goal'" cx="8" cy="8" r="5.5" /><circle v-if="ik.kind === 'goal'" cx="8" cy="8" r="2" />
+          </svg>
+          <svg class="x" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+          <span>{{ ik.label }}</span>
+        </button>
+        <button v-for="s in pickedSkills" :key="s.id" type="button" class="hcc-intent" :aria-label="`移除技能 ${s.name}`" @click="toggleSkill(s.id)" @keydown.delete.prevent="toggleSkill(s.id)">
+          <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="13" height="13" aria-hidden="true"><path d="M8 2.5 13.5 5.4 8 8.3 2.5 5.4z" /><path d="M2.5 8.4 8 11.3l5.5-2.9" /><path d="M2.5 11.3 8 14.2l5.5-2.9" /></svg>
+          <svg class="x" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+          <span>{{ s.name }}</span>
+        </button>
+        <button v-for="p in pickedPlugins" :key="p.id" type="button" class="hcc-intent" :aria-label="`移除插件 ${p.name}`" @click="togglePlugin(p.id)" @keydown.delete.prevent="togglePlugin(p.id)">
+          <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="13" height="13" aria-hidden="true"><path d="M2.5 5.8l1.3 1.3 2.4-2.6" /><path d="M8.5 5.8h5" /><path d="M2.5 10.8l1.3 1.3 2.4-2.6" /><path d="M8.5 10.8h5" /></svg>
+          <svg class="x" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+          <span>{{ p.name }}</span>
+        </button>
+        <button v-if="pickedExpert" type="button" class="hcc-intent" :aria-label="`移除专家 ${pickedExpert.name}`" @click="sshAi.setSelectedExpert('')" @keydown.delete.prevent="sshAi.setSelectedExpert('')">
+          <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="13" height="13" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5" /><circle cx="6" cy="6.7" r="1.5" /><path d="M4.2 10.8a1.9 1.9 0 0 1 3.6 0" /><path d="M9.8 5.8h2.6M9.8 8.2h2.6" /></svg>
+          <svg class="x" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+          <span>{{ pickedExpert.name }}</span>
+        </button>
+      </div>
+      <textarea
+        ref="ta"
+        v-model="draft"
+        class="hcc-input"
+        :class="{ 'has-intents': hasInputChips }"
+        rows="2"
+        placeholder="输入你的任务。"
+        aria-label="输入指令"
+        spellcheck="false"
+        @input="grow"
+        @keydown="onKeydown"
+        @paste="onPaste"
+      />
+    </div>
     <input
       ref="fileInputRef"
       type="file"
@@ -835,12 +870,12 @@ onMounted(() => {
           :disabled="running"
           :aria-expanded="showPlusMenu"
           title="添加上下文"
-          @click.stop="togglePlusMenu"
+          @click.stop="togglePlusMenu($event)"
         >＋</button>
         <!-- 双栏级联：左栏五层常驻，技能 / 专家 / 插件带 › 在右栏展开二级面板。
              不再是「点一下整卡替换」或「技能内联折叠」—— 左栏始终看得见，
              右栏带搜索框与图标 + 标题 + 描述的列表，切换层级不迷路。 -->
-        <div v-if="showPlusMenu" class="hcc-menu cascade" @click.stop>
+        <div v-if="showPlusMenu" class="hcc-menu cascade" :style="menuCardStyle" @click.stop>
           <div class="hcc-cascade-left">
             <!-- 附件 = 一步直达：点击直接弹系统文件选择对话框（用户指定）。
                  远端文件入口已按用户要求移除（2026-11-15）。 -->
@@ -856,13 +891,14 @@ onMounted(() => {
               <span class="ol">附件</span>
             </button>
             <div class="hcc-rule"></div>
-            <!-- Spec / Plan / Goal：三个显式入口（2026-11-23 用户指定加回）。
-                 语义是「打开能力」，不是旧版下发 workflow_mode 的姿态开关。 -->
+            <!-- Spec / Plan / Goal：与输入框上方意图 chips 同一状态（2026-11-23
+                 统一语义）：点 = 挂/摘对应 chip，不再走结构化/聚焦面板旧路径
+                 （那两条路径的空态 toast 随之退役）。菜单项与 chips 互为入口。 -->
             <button
               type="button"
               class="hcc-opt casc-opt"
-              title="把草稿拆解为明确需求与验收口径（可对照、可回退）"
-              @click="openSpec"
+              :class="{ current: sshAi.intentPending.spec }"
+              @click="toggleIntentChip('spec')"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
                 <path d="M3 2.5h10v11H3zM5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
@@ -872,8 +908,8 @@ onMounted(() => {
             <button
               type="button"
               class="hcc-opt casc-opt"
-              title="聚焦本次会话的计划与步骤进度"
-              @click="focusStage('plan')"
+              :class="{ current: sshAi.intentPending.plan }"
+              @click="toggleIntentChip('plan')"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
                 <path d="M3 4h10M3 8h10M3 12h6" />
@@ -883,8 +919,8 @@ onMounted(() => {
             <button
               type="button"
               class="hcc-opt casc-opt"
-              title="聚焦本次会话的目标与成功标准"
-              @click="focusStage('goal')"
+              :class="{ current: sshAi.intentPending.goal }"
+              @click="toggleIntentChip('goal')"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
                 <circle cx="8" cy="8" r="5.5" /><circle cx="8" cy="8" r="2" />
@@ -901,7 +937,7 @@ onMounted(() => {
               @click="openCascade('skill')"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
-                <rect x="3" y="3" width="10" height="10" rx="1" /><path d="M8 3v10M5 6h1.4M5 9h1.4" />
+                <path d="M8 2.5 13.5 5.4 8 8.3 2.5 5.4z" /><path d="M2.5 8.4 8 11.3l5.5-2.9" /><path d="M2.5 11.3 8 14.2l5.5-2.9" />
               </svg>
               <span class="ol">技能</span>
               <span class="casc-arrow">›</span>
@@ -915,7 +951,7 @@ onMounted(() => {
               @click="openCascade('expert')"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
-                <circle cx="8" cy="5.5" r="2.5" /><path d="M3.5 13a4.5 4.5 0 0 1 9 0" />
+                <rect x="2.5" y="3" width="11" height="10" rx="1.5" /><circle cx="6" cy="6.7" r="1.5" /><path d="M4.2 10.8a1.9 1.9 0 0 1 3.6 0" /><path d="M9.8 5.8h2.6M9.8 8.2h2.6" />
               </svg>
               <span class="ol">专家</span>
               <span class="casc-arrow">›</span>
@@ -929,7 +965,7 @@ onMounted(() => {
               @click="openCascade('plugin')"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
-                <path d="M6 3v3M10 3v3M4 6h8v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM8 11v2" />
+                <path d="M2.5 5.8l1.3 1.3 2.4-2.6" /><path d="M8.5 5.8h5" /><path d="M2.5 10.8l1.3 1.3 2.4-2.6" /><path d="M8.5 10.8h5" />
               </svg>
               <span class="ol">插件</span>
               <span class="casc-arrow">›</span>
@@ -938,7 +974,7 @@ onMounted(() => {
         </div>
         <!-- 二级面板独立成层（用户 2026-11-11：卡片尺寸固定不动）：与卡片并列，
              贴在卡片右侧同一底边。放 .hcc-sel 内，外部点击判定仍算「点在菜单里」。 -->
-        <div v-if="showPlusMenu && plusPane !== 'root'" class="hcc-cascade-right" :key="plusPane" @click.stop>
+        <div v-if="showPlusMenu && plusPane !== 'root'" class="hcc-cascade-right" :key="plusPane" :style="menuPanelStyle" @click.stop>
             <div class="casc-search">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="14" height="14" aria-hidden="true">
                 <circle cx="7" cy="7" r="4" /><path d="M10 10l3.5 3.5" />
@@ -962,10 +998,10 @@ onMounted(() => {
                   class="casc-item"
                   :class="{ on: sshAi.selectedSkillIds.includes(s.id) }"
                   :title="s.description || s.name"
-                  @click="toggleSkill(s.id)"
+                  @click="pickSkillFromMenu(s.id)"
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
-                    <rect x="3" y="3" width="10" height="10" rx="1" /><path d="M8 3v10M5 6h1.4M5 9h1.4" />
+                    <path d="M8 2.5 13.5 5.4 8 8.3 2.5 5.4z" /><path d="M2.5 8.4 8 11.3l5.5-2.9" /><path d="M2.5 11.3 8 14.2l5.5-2.9" />
                   </svg>
                   <span class="ci-body">
                     <span class="ci-name">{{ s.name }}</span>
@@ -1000,7 +1036,7 @@ onMounted(() => {
                   @click="chooseExpert(e.id)"
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
-                    <circle cx="8" cy="5.5" r="2.5" /><path d="M3.5 13a4.5 4.5 0 0 1 9 0" />
+                    <rect x="2.5" y="3" width="11" height="10" rx="1.5" /><circle cx="6" cy="6.7" r="1.5" /><path d="M4.2 10.8a1.9 1.9 0 0 1 3.6 0" /><path d="M9.8 5.8h2.6M9.8 8.2h2.6" />
                   </svg>
                   <span class="ci-body">
                     <span class="ci-name">{{ e.name }}</span>
@@ -1017,10 +1053,10 @@ onMounted(() => {
                   class="casc-item"
                   :class="{ on: isPluginOn(p.id) }"
                   :title="pluginSummary(p)"
-                  @click="togglePlugin(p.id)"
+                  @click="pickPluginFromMenu(p.id)"
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="15" height="15" aria-hidden="true">
-                    <path d="M6 3v3M10 3v3M4 6h8v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM8 11v2" />
+                    <path d="M2.5 5.8l1.3 1.3 2.4-2.6" /><path d="M8.5 5.8h5" /><path d="M2.5 10.8l1.3 1.3 2.4-2.6" /><path d="M8.5 10.8h5" />
                   </svg>
                   <span class="ci-body">
                     <span class="ci-name">{{ p.name }}</span>
@@ -1132,26 +1168,27 @@ onMounted(() => {
             <b>{{ landingLabel }}</b>
             <svg class="caret" :class="{ up: landingMenu === 'kind' }" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" width="8" height="8" aria-hidden="true"><path d="M1.8 3 4 5.2 6.2 3" /></svg>
           </button>
-          <!-- 第二枚：在哪个目录。三态常驻，只换语义 —— 本地读文件夹、工作树读仓库、
-               SSH 读远程目录。命令落到哪里，这枚就写哪里，不靠猜。 -->
-          <button
-            type="button"
-            class="hcc-btn landing dir-chip"
-            :class="{ on: landingMenu === dirPane }"
-            :aria-expanded="landingMenu === dirPane"
-            :title="dirChipTitle"
-            @click.stop="toggleDirChip()"
-          >
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" width="12" height="12" aria-hidden="true">
-              <path d="M2 4.2h4L7.2 5.7H14v6.1a.9.9 0 0 1-.9.9H2.9a.9.9 0 0 1-.9-.9Z" />
-            </svg>
-            <b>{{ dirLabel }}</b>
-            <svg class="caret" :class="{ up: landingMenu === dirPane }" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" width="8" height="8" aria-hidden="true"><path d="M1.8 3 4 5.2 6.2 3" /></svg>
-          </button>
+          <!-- 第二枚：在哪个目录。三态常驻只换语义（文件夹 / 仓库 / 远程目录）；本地绑了
+                目录后行首仍是文件夹图标，hover / focus 才露出 ×（解绑回主目录）。 -->
+          <span ref="dirChipRef" class="hcc-dir-chip" :class="{ on: landingMenu === dirPane }">
+            <button v-if="dirChipClearable" type="button" class="hcc-btn landing dir-chip-x"
+              aria-label="解绑目录，回到主目录" title="解绑目录，回到主目录" @click.stop="chooseHomeChip">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" width="11" height="11" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+            </button>
+            <button type="button" class="hcc-btn landing dir-chip"
+              :aria-expanded="landingMenu === dirPane" :title="dirChipTitle" @click.stop="toggleDirChip()">
+              <svg class="dir-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" width="12" height="12" aria-hidden="true">
+                <path d="M2 4.2h4L7.2 5.7H14v6.1a.9.9 0 0 1-.9.9H2.9a.9.9 0 0 1-.9-.9Z" />
+              </svg>
+              <b>{{ dirLabel }}</b>
+              <svg class="caret" :class="{ up: landingMenu === dirPane }" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" width="8" height="8" aria-hidden="true"><path d="M1.8 3 4 5.2 6.2 3" /></svg>
+            </button>
+          </span>
           <!-- 第三枚只有工作树才有：本地是「就在这个文件夹」，SSH 是「另一台机器上的
                某个目录」，分支对两者都无意义，渲染出来就是无中生有。 -->
           <button
             v-if="landing.showBranch"
+            ref="branchChipRef"
             type="button"
             class="hcc-btn landing"
             :class="{ on: landingMenu === 'branch' }"
@@ -1166,9 +1203,9 @@ onMounted(() => {
             <b>{{ branchLabel }}</b><svg class="caret" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" width="8" height="8" aria-hidden="true"><path d="M1.8 3 4 5.2 6.2 3" /></svg>
           </button>
         </div>
-        <!-- 这块是一个 select，不是菜单：每行一行字 + 右侧勾选/箭头，没有图标、
+        <!-- 这块是一个 select，不是菜单：kind 面行首图标 + 一行字 + 右侧勾选/箭头，
              没有分组小标题。选中即收起，不往二级面里钻（2026-11-10 用户口径）。 -->
-        <div v-if="landingMenu" class="hcc-menu wide landing-menu" @click.stop>
+        <div v-if="landingMenu" class="hcc-menu wide landing-menu" :class="{ 'dir-pane': landingMenu === 'dir' }" :style="landingPaneStyle" @click.stop>
           <template v-if="landingMenu === 'kind'">
             <button
               type="button"
@@ -1177,6 +1214,7 @@ onMounted(() => {
               title="就在当前文件夹操作 · 不涉及 git 分支"
               @click="chooseLocalChip"
             >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="13" height="13" aria-hidden="true"><rect x="2" y="3" width="12" height="8.5" rx="1" /><path d="M6 14h4M8 11.5V14" /></svg>
               <span class="ol">本地</span>
               <span v-if="landing.kind === 'local'" class="tick">✓</span>
             </button>
@@ -1186,6 +1224,7 @@ onMounted(() => {
               title="云执行环境还没接入"
               @click="onCloudClick"
             >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="13" height="13" aria-hidden="true"><path d="M11.67 12.67H6a4.67 4.67 0 1 1 4.47-6h1.19a3 3 0 1 1 0 6Z" /></svg>
               <span class="ol">云端</span>
               <span class="meta">未接入</span>
             </button>
@@ -1196,43 +1235,30 @@ onMounted(() => {
               title="按 git worktree 隔离 · 直接落到当前仓库的主工作树"
               @click="pickWorktreeKind"
             >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="13" height="13" aria-hidden="true"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5" r="1.5" /><path d="M4.5 5v6M11.5 6.5v1.2a2.8 2.8 0 0 1-2.8 2.8H6" /></svg>
               <span class="ol">工作树</span>
               <span v-if="landing.kind === 'worktree'" class="tick">✓</span>
             </button>
-            <!-- SSH 连接配置：执行目标本来就是「本地 / 某台机器」这一个维度，
-                 主机列表属于这里。选中即建一条 AI 专属会话（与用户终端隔离），
-                 不借用终端页已开的远程 tab。 -->
-            <button
-              v-for="o in sshConnectionOptions"
-              :key="o.id"
-              type="button"
-              class="hcc-opt landing-opt"
-              :class="{ current: o.active }"
-              :title="o.hint"
-              @click="chooseSshConn(o.id)"
-            >
-              <span class="ol">{{ o.label }}</span>
-              <span v-if="o.active" class="tick">✓</span>
-            </button>
+            <!-- 连接入口只有「连接 SSH…」一个：原先上面还并列一列已存主机
+                 （192.168.150.40 等）与「连接 SSH…」语义冲突（用户 2026-11-23
+                 指正）——选主机统一进弹窗的「SSH 主机历史」，菜单不再列主机。 -->
             <div class="hcc-rule"></div>
-            <button type="button" class="hcc-opt landing-opt" title="弹窗粘贴 ssh 命令或点主机历史，连上即切落点" @click="openConnDialog">
+            <button type="button" class="hcc-opt landing-opt" title="从主机历史选择，连上即切落点" @click="openConnDialog">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="13" height="13" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
               <span class="ol">连接 SSH…</span>
             </button>
             <button type="button" class="hcc-opt landing-opt" title="新建一个 WSL 本地终端并切过去" @click="chooseWslChip">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="13" height="13" aria-hidden="true"><rect x="2" y="3" width="12" height="8.5" rx="1" /><path d="M6 14h4M8 11.5V14" /></svg>
               <span class="ol">连接 WSL…</span>
             </button>
             <button v-if="canBulkDispatch" type="button" class="hcc-opt landing-opt" title="批量下发 · 不改 AI 目标" @click="toBulk">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="13" height="13" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M5 6.5 7 8l-2 1.5M9 10.5h2" /></svg>
               <span class="ol">全部 {{ remoteCount }} 台</span>
-            </button>
-            <button type="button" class="hcc-opt landing-opt" title="打开终端页的服务器管理面板" @click="openRemoteManager">
-              <span class="ol">管理服务器…</span>
             </button>
             <div v-if="landing.error" class="hcc-sep">{{ landing.error }}</div>
           </template>
-          <!-- 第二枚 chip 的本地面：按目录选，不像菜单像项目选择器（2026-11-11 参考实现）：
-               一行一个**打开过的**目录，当前项右侧绿 ✓，hover 浮出 × 删掉这条记录；
-               底部「不在项目中工作」是默认态（不绑定任何文件夹）。
-               列表不预读会话 / 工作树 / 仓库 —— 没打开过就只剩底部两行。 -->
+          <!-- 第二枚 chip 的本地面：按目录选，不像菜单像项目选择器（2026-11-11 参考实现）：一行一个**打开过的**目录，
+                当前项右侧绿 ✓，hover 浮出 × 删掉这条记录。「不在项目中工作」已撤掉（2026-11-24）：解绑动作为第二枚 chip 行首的 ×。 -->
           <template v-else-if="landingMenu === 'dir' && landing.kind !== 'ssh'">
             <div v-if="landing.recentDirs.length" class="casc-search dir-search">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" width="13" height="13" aria-hidden="true">
@@ -1279,13 +1305,6 @@ onMounted(() => {
             <div v-if="dirQuery && !dirRows.length" class="hcc-sep">没有匹配的目录</div>
             <template v-if="!dirQuery">
               <div v-if="dirRows.length" class="hcc-rule"></div>
-              <button type="button" class="hcc-opt landing-opt" title="以主目录为落点，不绑定任何文件夹" @click="chooseHomeChip">
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" width="13" height="13" aria-hidden="true">
-                  <path d="M4 4l8 8M12 4l-8 8" />
-                </svg>
-                <span class="ol">不在项目中工作</span>
-                <span v-if="atHomeRoot" class="tick">✓</span>
-              </button>
               <!-- ＋ 新建工作区（用户 2026-11-15 指定）：语义从「打开」升为「创建」——
                    选一个文件夹即落一个新工作区 -->
               <button type="button" class="hcc-opt landing-opt" title="选择一个文件夹，作为新工作区的落点" @click="pickDirChip">
@@ -1356,17 +1375,6 @@ onMounted(() => {
             </button>
           </template>
           <template v-else-if="landingMenu === 'branch'">
-            <!-- 仓库维度不占 chip：这一行是「换仓库」，箭头说明它还有下一层（仓库列表）。 -->
-            <button
-              type="button"
-              class="hcc-opt landing-opt"
-              :title="landing.activeRepoPath || '选择本机 git 仓库'"
-              @click="toggleLanding('repo')"
-            >
-              <span class="ol">{{ repoLabel }}</span>
-              <span class="arrow">›</span>
-            </button>
-            <div class="hcc-rule"></div>
             <div v-if="landing.loading" class="hcc-sep">正在读取工作树…</div>
             <div v-if="landing.error" class="hcc-sep">{{ landing.error }}</div>
             <button
@@ -1384,39 +1392,6 @@ onMounted(() => {
             </button>
             <div v-if="landing.activeGroup?.error" class="hcc-sep">{{ landing.activeGroup.error }}</div>
             <div v-if="!landing.activeGroup?.items?.length" class="hcc-sep">这个仓库还没有工作树</div>
-            <div class="hcc-rule"></div>
-            <!-- 新建工作树（参考 Trae）：自动建分支 + 仓库旁目录，创建后落点直接切过去。
-                 输入框预填自动名（feat/ai-xxxx），Enter 创建，Esc 收起表单。 -->
-            <div v-if="wtFormOpen" class="wt-form">
-              <input
-                ref="wtFormInputRef"
-                v-model="wtBranchName"
-                type="text"
-                placeholder="feat/my-feature"
-                aria-label="新分支名"
-                spellcheck="false"
-                @keydown.enter.prevent="submitWtForm"
-                @keydown.esc.stop.prevent="closeWtForm"
-              />
-              <button
-                type="button"
-                class="wt-go"
-                :disabled="landing.loading || !wtBranchName.trim()"
-                title="创建分支与独立目录，并把落点切过去"
-                @click="submitWtForm"
-              >创建</button>
-            </div>
-            <div v-if="wtFormOpen" class="hcc-sep">目录将建在仓库旁 · 名 = 仓库名-分支名（/ 换 -）</div>
-            <button
-              v-else-if="landing.activeRepoPath"
-              type="button"
-              class="hcc-opt landing-opt"
-              :disabled="landing.loading"
-              title="自动建分支 + 独立目录（git worktree add），创建后落点直接切过去"
-              @click="openWtForm"
-            >
-              <span class="ol">新建工作树…</span>
-            </button>
             <button
               v-if="hasPrunable"
               type="button"
@@ -1426,12 +1401,6 @@ onMounted(() => {
               @click="landing.pruneWorktrees(landing.activeRepoPath)"
             >
               <span class="ol">清理失效记录</span>
-            </button>
-            <button type="button" class="hcc-opt landing-opt" :disabled="landing.loading" title="目录选择器，登记后刷新列表" @click="landing.registerRepo()">
-              <span class="ol">登记本机仓库…</span>
-            </button>
-            <button type="button" class="hcc-opt landing-opt" :disabled="landing.loading" @click="landing.loadWorktrees()">
-              <span class="ol">刷新工作树</span>
             </button>
           </template>
         </div>
@@ -1449,52 +1418,9 @@ onMounted(() => {
         >×</button>
       </span>
 
-      <!-- 专家 chip 紧跟目标 chip：两者都是「这一条消息落到哪里 / 以什么策略跑」，
-           放在会话头部会谎称整段会话只有一个专家。 -->
-      <span
-        v-if="pickedExpert"
-        class="hcc-chip"
-        :title="`专家：${pickedExpert.name}（r${pickedExpert.revision}）· 只收紧不放宽`"
-      >
-        {{ pickedExpert.name }}
-        <button
-          type="button"
-          class="hcc-chip-x"
-          :aria-label="`移除专家 ${pickedExpert.name}`"
-          @click="sshAi.setSelectedExpert('')"
-        >×</button>
-      </span>
-
-      <span
-        v-for="s in pickedSkills"
-        :key="s.id"
-        class="hcc-chip"
-        :title="s.description || s.name"
-      >
-        {{ s.name }}
-        <button
-          type="button"
-          class="hcc-chip-x"
-          :aria-label="`移除技能 ${s.name}`"
-          @click="toggleSkill(s.id)"
-        >×</button>
-      </span>
-
-      <!-- 插件 chip 与技能同款（用户 2026-11-16：选中直接在输入栏显示，不靠面板 ✓） -->
-      <span
-        v-for="p in pickedPlugins"
-        :key="p.id"
-        class="hcc-chip"
-        :title="pluginSummary(p)"
-      >
-        {{ p.name }}
-        <button
-          type="button"
-          class="hcc-chip-x"
-          :aria-label="`移除插件 ${p.name}`"
-          @click="togglePlugin(p.id)"
-        >×</button>
-      </span>
+      <!-- 专家/技能/插件 chips 已上移到输入区第一行（与意图 chips 同排，2026-11-23
+           用户指定）：foot 不再重复印 —— 「这一条消息带什么」只有一处；目标 chip
+           与文本附件仍留 foot（它们是「落到哪 / 引用了什么」，不是「带了什么」）。 -->
 
       <!-- 文本类附件留在底部 chip：图片/视频已上移到输入框内预览条 -->
       <span
@@ -1612,7 +1538,11 @@ onMounted(() => {
   border-radius: var(--radius-lg);
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
-.hcc:focus-within {
+/* 输入时框不变色 —— 光标 caret-color 已是焦点提示。
+   CSS 的 :focus-visible 对文本输入在鼠标点击时同样命中（见 global.css 注），
+   区分不了点击输入与 Tab 聚焦，故改用 useAppearance 写入的 data-input-mode：
+   只有最后一次输入来自键盘时才给可见焦点（DESIGN.md 硬规则 + WCAG 2.2 AA）。 */
+:root[data-input-mode="keyboard"] .hcc:has(.hcc-input:focus) {
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent);
 }
@@ -1700,7 +1630,7 @@ onMounted(() => {
   color: var(--text-tertiary);
 }
 .hcc-suggest-ignore:hover { background: var(--bg-hover); color: var(--text-primary) }
-/* 焦点态用淡 glow（与 .hcc:focus-within 同源同浓度），不用硬描边 ——
+/* 焦点态用淡 glow（与输入框键盘聚焦态同源同浓度），不用硬描边 ——
    全局 2px outline 会在卡内小按钮上盖出一道硬框，与卡片自己的焦点语言打架。 */
 .hcc-suggest-accept:focus-visible,
 .hcc-suggest-ignore:focus-visible {
@@ -1742,21 +1672,21 @@ onMounted(() => {
 .hcc-btn.empty b { color: var(--accent-orange) }
 /* ＋ 是底栏唯一的上下文入口（故事 5），做成方角小方块让它一眼是"加"而不是一个词 */
 .hcc-btn.plus { width: 26px; padding: 0; justify-content: center; font-size: 1.1538rem }
-.hcc-divider {
-  width: 1px;
-  height: 14px;
-  margin: 0 var(--spacing-2);
-  background: var(--border-subtle);
-  flex-shrink: 0;
-}
-/* 文件选择器不进底栏（故事 5：＋ 之外不常驻"添加"按钮），只借程序化 click 唤起。
-   display:none 的 input 在 Chromium 里照样能被 .click() 打开。 */
+/* 输入区第一行 chips：flex 左侧元素、textarea 占右侧（真同排）；ico/✕ 同 13×13 槽位
+   防晃；只字色无底色（--accent-text 随设置强调色，variables.test.ts 认可通路）。 */
+.hcc-inputrow { display: flex; align-items: flex-start; gap: var(--spacing-8) }
+.hcc-intents { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8); flex-shrink: 0; max-width: 70%; padding: var(--spacing-14) 0 0 var(--spacing-16) }
+.hcc-intent { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 4px; border-radius: var(--radius-sm); color: var(--accent-text); font-size: 0.9231rem; font-weight: 700; transition: color var(--transition-fast); cursor: pointer }
+.hcc-intent .x { display: none }
+.hcc-intent:hover .ico { display: none }
+.hcc-intent:hover .x { display: block }
+.hcc-intent:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 30%, transparent) }
+.hcc-intent:disabled { opacity: .5; cursor: default }
+.hcc-input.has-intents { padding-left: 0 }
+.hcc-divider { width: 1px; height: 14px; margin: 0 var(--spacing-2); background: var(--border-subtle); flex-shrink: 0 }
+/* 文件选择器不进底栏，只借程序化 click 唤起（display:none 的 input 照样能 .click()） */
 .hcc-file { display: none }
-/* 可移除的 chip（故事 6）：底是"主题自己的墨按的一道渍"—— text-primary 7% 压在
-   卡面上，卡面是什么它就跟着是什么（手记的卡脚还有那道次级纸面渐变，chip 叠上去
-   照样读得出）。先前用的是 --bg-input：那是一个固定深色档，在蓝屏这类浅一档的卡面
-   上就成了一块比周围更黑的补丁，而不是"这条消息多带了个东西"。
-   边框同底栏其他控件一起撤掉（flat 到底，靠这道墨渍分辨边界）。 */
+/* 可移除的 chip：墨渍底随卡面走（固定的 --bg-input 在浅卡面上会成黑补丁）；无边框 flat 到底 */
 .hcc-chip {
   display: inline-flex;
   align-items: center;
@@ -1853,16 +1783,43 @@ onMounted(() => {
 /* 选中只提亮字色 + alpha 描边：纯文字按钮读 --accent-text 会在浅色主题隐形，
    读 --accent-primary 又过不了 variables.test.ts 的对比度守卫。 */
 .hcc-btn.landing.on { color: var(--text-primary); font-weight: 500; border: 1px solid rgba(var(--accent-primary-rgb), .4) }
+/* 第二枚 chip：默认行首是文件夹图标；绑了目录后 hover / focus-within 才把 ×（解绑）
+   淡入、图标让位。× 绝对定位叠在图标槽位上，标签位置不因露出而跳动；仍不铺底（灰底是 hover 态）。
+   选中态描边用 inset box-shadow：给 auto 尺寸的 span 加 border 会把它撑大 2px，
+   整排 chip 与上方输入框跟着跳一下（2026-11-24 实测口径）。 */
+.hcc-dir-chip { position: relative; display: inline-flex; align-items: center; border-radius: var(--radius-sm) }
+.hcc-dir-chip:hover { background: var(--bg-hover) }
+.hcc-dir-chip:hover .hcc-btn { background: transparent }
+.hcc-dir-chip.on { box-shadow: inset 0 0 0 1px rgba(var(--accent-primary-rgb), .4) }
+.hcc-dir-chip.on .hcc-btn { color: var(--text-primary) }
+.hcc-dir-chip .dir-chip .dir-ic { transition: opacity var(--transition-fast) }
+.hcc-dir-chip .dir-chip-x {
+  position: absolute;
+  left: 7px; /* 主按钮左内边距，与图标同一槽位 */
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+}
+.hcc-dir-chip:hover .dir-chip-x,
+.hcc-dir-chip:focus-within .dir-chip-x { opacity: 1; pointer-events: auto }
+.hcc-dir-chip:hover .dir-chip .dir-ic,
+.hcc-dir-chip:focus-within .dir-chip .dir-ic { opacity: 0 }
 .hcc-sel.landing-sel .hcc-menu.wide { width: 224px; max-height: 320px }
+/* 目录面＝项目选择器密度（2026-11-23 用户口径）：288 宽 / 行高 32，搜索行与列表行共用左网格 */
+.hcc-sel.landing-sel .hcc-menu.wide.dir-pane { width: 288px; max-width: calc(100vw - 240px); max-height: 340px }
+.landing-menu.dir-pane .hcc-opt.landing-opt { min-height: 32px; padding-left: var(--spacing-12) }
 /* 落点 chip：图标 + 短名 + caret。常驻 1 枚（本地 / SSH），工作树态多一枚分支 ——
    「有几枚 chip」本身就是落点类型的读数，不必再另画一行说明。
    caret 是 8px chevron：开合只转 180 度，不再用文本箭头字符（字形随字体漂）。 */
 .hcc-btn.landing .caret { color: var(--text-tertiary); margin-left: 1px; flex-shrink: 0; transition: transform .15s }
 .hcc-btn.landing .caret.up { transform: rotate(180deg) }
 .hcc-btn.landing svg { flex-shrink: 0; opacity: .85 }
-/* 落点浮层是一个 select，不是菜单：每行一行字，右侧只放勾选 / 箭头。
-   只剩目录面例外 —— 那一面是「项目选择器」（2026-11-11 参考实现）：搜索框 +
-   文件夹图标 + 底部逃生口，所以图标只在这一面出现。 */
+/* 落点浮层是一个 select，不是菜单：kind 面行首图标 + 一行字，右侧只放勾选 / 箭头；
+   目录面是「项目选择器」（2026-11-11 参考实现）：搜索框 + 文件夹图标 + 底部逃生口。 */
 .hcc-opt.landing-opt {
   display: flex;
   align-items: center;
@@ -1874,14 +1831,14 @@ onMounted(() => {
 .hcc-opt.landing-opt svg { flex-shrink: 0; color: var(--text-tertiary) }
 .hcc-opt.landing-opt .ol { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .hcc-opt.landing-opt.current { background: var(--bg-hover) }
-/* 目录面的搜索框贴在浮层顶部：列表滚的时候它不动。浮层自带 4px 内边距，
-   用负外边距把背景铺满到边，滚动内容才不会从缝里透出来。 */
+/* 目录面的搜索框贴在浮层顶部：列表滚的时候它不动。负外边距把背景铺满浮层宽度，
+   内容原点随之落在浮层边上，左内边距 16px 与列表行的 4+12 在同一条竖线上。 */
 .landing-menu .dir-search {
   position: sticky;
   top: calc(-1 * var(--spacing-4));
   z-index: 1;
   margin: calc(-1 * var(--spacing-4)) calc(-1 * var(--spacing-4)) 0;
-  padding: 6px var(--spacing-10) 9px;
+  padding: 6px var(--spacing-16) 9px;
   background: var(--bg-elevated);
 }
 /* 目录记录行：整行是「切到这个目录」，右侧 × 只删这条记录 —— 两枚独立按钮，
@@ -1929,43 +1886,6 @@ onMounted(() => {
   white-space: nowrap;
 }
 /* 「还有一层」的箭头：分支面里的仓库行点进去才是仓库列表 */
-.hcc-opt.landing-opt .arrow { color: var(--text-tertiary); font-size: 0.9231rem; line-height: 1 }
-/* 新建工作树的行内表单：输入框压一道可聚焦的底线（与级联搜索同语言），
-   创建钮走 hover 层，不引入新的强调色档。 */
-.wt-form {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: var(--spacing-4) var(--spacing-8);
-}
-.wt-form input {
-  flex: 1;
-  min-width: 0;
-  background: transparent;
-  border: 0;
-  outline: 0;
-  border-bottom: 1px solid var(--border-subtle);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 0.9231rem;
-  padding: 2px 2px 4px;
-}
-.wt-form input:focus { border-bottom-color: rgba(var(--accent-primary-rgb), .55) }
-.wt-form input::placeholder { color: var(--text-tertiary) }
-.wt-go {
-  height: 22px;
-  padding: 0 var(--spacing-8);
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 0.8462rem;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background var(--transition-fast);
-}
-.wt-go:hover:not(:disabled) { background: var(--bg-active) }
-.wt-go:disabled { opacity: .5; cursor: default }
 .hcc-rule { height: 1px; margin: 6px var(--spacing-8); background: var(--border-subtle) }
 .hcc-target {
   display: inline-flex;
@@ -2037,7 +1957,7 @@ onMounted(() => {
 .casc-search {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--spacing-8);
   padding: 3px var(--spacing-8) 9px;
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-tertiary);
@@ -2053,6 +1973,7 @@ onMounted(() => {
 .casc-search input {
   flex: 1;
   min-width: 0;
+  padding: 0; /* 清掉 UA 的 2px：占位文字才会与列表行文字落在同一条竖线上 */
   background: transparent;
   border: 0;
   outline: 0;

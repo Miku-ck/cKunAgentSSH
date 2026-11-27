@@ -1,0 +1,2 @@
+{"key": "6a8d0675e5d0a174", "model": "qwen3.8-27b", "response": "我需要先查一下：CALL tool.search(query='天气')"}
+{"key": "c351583bc37f931f", "model": "qwen3.8-27b", "response": "根据已有信息，最终答案是：今天晴，25℃。"}

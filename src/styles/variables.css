@@ -258,6 +258,113 @@
   --danger-text: #c62828;
 }
 
+/* ── 液态玻璃主题（liquid：浅色材质仿真） ──
+ *
+ * 2026-10 的两档玻璃（glass / glass-light）与 2026-11 的深空玻璃（glass）
+ * 均已退役；liquid 是唯一保留的玻璃族主题。
+ *
+ * 历史失败点在此规避：
+ *   1. 画布不透明：三色流动光斑收在 --bg-base 之上，最底层仍是实色（不透窗口底色）。
+ *   2. blur 只落在模态浮层白名单（global.css），终端/表格/命令卡等实时刷新区零 blur。
+ *   3. 纯 CSS 材质，不碰窗口 acrylic（旧版 S0 门禁未过）。
+ *
+ * --bg-input 刻意比卡面更实：字段靠 1px 边框成形，不在玻璃上挖洞。
+ */
+[data-theme="liquid"] {
+  --bg-base: #eef1f7;
+  /* 透镜色散：三色微光叠在半透面板上，让背后光斑透过时被染色。
+     白基底 0.30 是关键：再高就把光斑洗成白卡（旧版浅墨的失败点）。 */
+  --bg-elevated:
+    radial-gradient(ellipse 120% 85% at 0% 0%, rgba(125, 190, 245, 0.20) 0%, transparent 55%),
+    radial-gradient(ellipse 105% 95% at 100% 18%, rgba(175, 145, 235, 0.16) 0%, transparent 55%),
+    radial-gradient(ellipse 115% 100% at 55% 100%, rgba(245, 160, 195, 0.13) 0%, transparent 60%),
+    rgba(255, 255, 255, 0.30);
+  --bg-elevated-solid: #ffffff;
+  --bg-hover: rgba(30, 41, 59, 0.05);
+  --bg-active: rgba(30, 41, 59, 0.09);
+  --divider-primary: rgba(30, 41, 59, 0.10);
+  /* 浅底上结构线用墨线：白线画在近白卡面上等于没有线 */
+  --border-default: rgba(30, 41, 59, 0.22);
+  --border-subtle: rgba(30, 41, 59, 0.12);
+  --text-primary: #1a2130;
+  --text-secondary: #4a5568;
+  --text-tertiary: #5a6a80;      /* 面板更透后加深，保白底 ≥4.5:1 */
+  --bg-terminal: #000000;
+  --scrim: rgba(30, 41, 59, 0.20);
+  /* 字段比卡面实，靠 1px 边框成形，不在玻璃上挖洞 */
+  --bg-input: rgba(255, 255, 255, 0.86);
+  --bg-input-solid: #ffffff;
+  --bg-slider: #c3cbd8;
+  /* 液态玻璃的控件边框随强调色走：沿用 --wash 的 color-mix 派生手法，
+     --accent-primary 由 applyAccent 内联写入，这里只引用不定义，切换即时生效。
+     其他主题仍是固定中性边框，不为玻璃族改动全局设计。 */
+  --border-input: color-mix(in srgb, var(--accent-primary) 34%, var(--bg-elevated-solid));
+  /* 玻璃厚度：亮线 → 暗线（壁）→ 底缘冷反光 → 外投影 */
+  --shadow-sm: 0 1px 2px rgba(30, 41, 59, var(--shadow-dyn, 0.08)), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  --shadow-lg: 0 16px 40px rgba(30, 41, 59, var(--shadow-dyn, 0.16)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    inset 0 2px 3px -2px rgba(30, 41, 59, 0.18),
+    inset 0 -1px 0 rgba(120, 165, 220, 0.22);
+
+  /* 三色流动光斑：淡青 → 淡紫 → 淡粉，全部收在不透明底色里 */
+  --canvas-bg:
+    radial-gradient(ellipse 65% 55% at 6% 0%, #cfe3fa 0%, transparent 58%),
+    radial-gradient(ellipse 60% 65% at 94% 14%, #e3daf9 0%, transparent 60%),
+    radial-gradient(ellipse 70% 60% at 58% 100%, #f9dce9 0%, transparent 58%),
+    var(--bg-base);
+
+  /* 受控折射强度：仅由 global.css 的模态浮层白名单消费 */
+  --liquid-blur: 16px;        /* 模态弹窗：面积小、出现短暂，可给强磨砂 */
+  --liquid-card-blur: 8px;    /* 静态卡面：常驻且面积大，轻量磨砂避免掉帧 */
+  --liquid-saturate: 140%;
+  /* 动态机制：高光中心 / 弹性激发时的内部发光 / 阴影按背景增减 */
+  --liquid-sheen: rgba(255, 255, 255, 0.95);
+  --sheen-x: 46%;
+  --sheen-y: 40%;
+  --shadow-dyn: 0.16;
+
+  --accent-cyan: #0e7490;
+  --accent-purple: #7a3f8f;
+  --accent-green: #2e6b3a;
+  --accent-orange: #8a4a12;
+  --accent-red: #b3382a;
+  --accent-yellow: #7a5f14;
+  --tint-l: #0e7490;
+  --tint-r: #7c3a72;
+  --tint-d: #4338ca;
+  --accent-indigo: #4f46e5;
+  --accent-indigo-soft: #4f46e5;
+  --accent-indigo-bg: rgba(79, 70, 229, 0.10);
+
+  --status-info-border: #b9d4ec;
+  --status-info-text: #1e6fb2;
+  --status-success-bg: #e6f4ea;
+  --status-success-border: #b7e0c2;
+  --status-success-text: #1e7e34;
+  --status-warn-bg: #faf3dc;
+  --status-warn-text: #7a5c00;
+  --status-error-bg: #fdecea;
+  --status-error-text: #c62828;
+  --status-debug-bg: #e8f4fb;
+  --status-debug-text: #0e7490;
+  --status-tag-bg: rgba(31, 111, 178, 0.08);
+  --status-tag-border: rgba(31, 111, 178, 0.25);
+  --status-tag-text: #1f6fb2;
+
+  --card-warn-border: #e5d5a8;
+  --card-perm-border: #e0c68a;
+  --card-perm-text: #7a5c00;
+  --danger-bg: #fdecea;
+  --danger-border: #f3c2bd;
+  --danger-text: #c62828;
+
+  /* 液态比玻璃板再圆一档：控件转角更接近「一滴」而非一块 */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+}
+
 /* ── 蓝屏主题（深蓝） ──
  * 与森林同一套完整度：低彩度中性 + 自持语义层 + 蓝调投影/画布光。
  * 旧版 elevated #142d52 与边框 #1e3a5f 彩度偏高，整屏像一块蓝板。 */

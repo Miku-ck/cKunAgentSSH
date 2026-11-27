@@ -30,6 +30,8 @@ export default defineConfig({
         /approval-card\.css/,
         /settings-groups\.css/,
         /settings-panel-base\.css/,
+        // 清单面板共享样式：variables.test.ts 按目录前缀扫设置族，放行才能读到真内容
+        /settings-list\.css/,
         /button\.css/,
         // Docker 页的样式守卫（DockerView.guards.test.ts 断言「共享原子全收在 .docker-view 下」）
         /docker-page\.css/,

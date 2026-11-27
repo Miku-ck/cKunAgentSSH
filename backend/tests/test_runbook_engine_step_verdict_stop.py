@@ -12,6 +12,7 @@ import pytest
 
 import runbook_store as rstore
 from agent import headless_run
+from db import run_safe_points
 from agent.harness.contracts import POLICY_DENY_MARKER
 from runbook_engine import RunbookEngine, extract_verdict, build_step_prompt
 
@@ -153,6 +154,25 @@ def test_pass_step_marks_success_and_run_success(runbook_db, engine, sessions, a
     assert audits[0]["conclusion"] == "executed"
     assert audits[-1]["action"] == "runbook_run"
     assert audits[-1]["conclusion"] == "executed"
+
+
+def test_completed_step_cleans_its_safe_point(runbook_db, engine, sessions, audits, monkeypatch):
+    rb = _mk_runbook([{"command": "echo ok", "assertCommand": "", "note": ""}])
+    calls = []
+
+    async def fake_run(task, **kwargs):
+        calls.append(kwargs["run_id"])
+        run_safe_points.save_safe_point(
+            kwargs["run_id"], expected_version=0, phase="iteration",
+            payload={"schema_version": 1, "run_id": kwargs["run_id"], "messages": []},
+        )
+        return _ok()
+
+    _patch_runner(monkeypatch, fake_run)
+    asyncio.run(_trigger_and_wait(engine, rb))
+
+    assert _last_run(runbook_db, rb["id"])["status"] == "success"
+    assert run_safe_points.load_safe_point(calls[0]) is None
 
 
 def test_missing_marker_is_fail_closed(runbook_db, engine, sessions, audits, monkeypatch):

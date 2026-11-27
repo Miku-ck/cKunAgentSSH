@@ -363,25 +363,21 @@ defineExpose({ open, close })
 .settings-content {
   flex: 1;
   overflow-y: auto;
-  padding: var(--padding) var(--padding);
+  /* 右侧不补 padding：面板自己的 .panel-body 已有 padding-right: var(--spacing-4)，
+     两处叠加会让右栏比左栏多 4px 留白，长列表滚动时边界不齐。 */
+  padding: var(--padding) 0 var(--padding) var(--padding);
 }
 
-/* 过渡动画 */
+/* 过渡动画：只做 opacity，不做 transform scale。
+   液态玻璃弹窗带 backdrop-filter，transform 动画每帧都强制合成层重算磨砂，
+   在 scale(0.97↔1) 时表现为整窗抖 / 内容糊。纯淡入淡出无此代价。
+   native 弹窗家族（ConfirmDialog 等）的 scale 不在磨砂层上，不受影响。 */
 .settings-fade-enter-active,
 .settings-fade-leave-active {
   transition: opacity 0.15s ease;
 }
-.settings-fade-enter-active .settings-dialog,
-.settings-fade-leave-active .settings-dialog {
-  transition: transform 0.15s ease, opacity 0.15s ease;
-}
 .settings-fade-enter-from,
 .settings-fade-leave-to {
-  opacity: 0;
-}
-.settings-fade-enter-from .settings-dialog,
-.settings-fade-leave-to .settings-dialog {
-  transform: scale(0.97);
   opacity: 0;
 }
 </style>

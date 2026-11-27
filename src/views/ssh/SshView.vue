@@ -181,7 +181,6 @@ v-show="s.id === store.activeSessionId"
         <HomeWorkspace
           v-show="homeTabActive"
           @bulk="showBulk = true"
-          @remote-mgr="openRemoteManager"
           @open-trace="openTrace"
         />
       </div>

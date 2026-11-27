@@ -90,7 +90,7 @@ The app has no separate "chat mode". Conversations and executions in the task co
 - The default identity is a general-purpose AI assistant; ops, research, and copywriting are optional expert packs — domains are not hard-coded and can be added or removed.
 - Four built-in experts: general (inherits all defaults), Ops Expert (general_ops: ops role + change/read-only methodology + ops tool discipline), research, and copywriting. Research and copywriting are restricted to no execution tools, no plugins, and global-only memory scope.
 - Experts can only tighten, never loosen: tools/skills intersect, permissions take the stricter side, iterations take min, memory scope only shrinks; corrupted config fails closed.
-- When no expert is selected and an ops signal is detected (change verb or ops noun), a non-blocking suggestion chip appears above the input area with "Switch & re-run" or "Dismiss"; no silent switching.
+- When no expert is selected and an ops signal is detected (ops action or ops noun), a non-blocking suggestion chip appears above the input area with "Switch & re-run" or "Dismiss"; no silent switching.
 - Unattended runs: runbooks always use the Ops Expert; scheduled tasks can bind an expert — legacy tasks are migrated to Ops Expert, new tasks default to general.
 
 **Cross-page AI entry points**

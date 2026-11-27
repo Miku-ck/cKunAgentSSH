@@ -1,46 +1,46 @@
 <template>
   <div class="panel">
     <header class="panel-header">
-      <h3>技能管理 <InfoTip text="Agent 的专项知识包：每轮运行按触发词智能匹配（词边界 + 短语加权），命中的技能以目录形式暴露给模型，模型判断相关时调 load_skill 拉取正文（最多 12000 字符）在后续轮次遵循执行。对话里的技能选择器可显式挂载技能，优先级高于自动匹配。" /></h3>
+      <h3>技能管理 <InfoTip text="Agent 的专项知识包：每轮运行按触发词匹配，命中的技能以目录形式暴露给模型，模型判断相关时再加载正文执行。关闭的技能不参与匹配；包内技能随应用更新，也可手动同步。" /></h3>
     </header>
 
     <div class="panel-body">
-      <section class="grp">
-        <button class="grp-head" @click="open.list = !open.list">
-          <span class="grp-caret" :class="{ open: open.list }">▸</span>
-          <span class="grp-title">技能库</span>
-          <InfoTip :focusable="false" text="按「运维模式」隔离启用状态；关闭的技能不再参与触发词匹配与目录暴露。包内运维技能启动时自动同步，升级后可手动「同步包内技能」刷新。" />
-          <span class="grp-badge">{{ enabledCount }}/{{ rows.length }} 启用</span>
-        </button>
-        <div v-show="open.list" class="grp-body">
-          <div class="grp-tools">
-            <button class="link-btn" :disabled="loading" @click="load">{{ loading ? '加载中…' : '刷新' }}</button>
-            <button class="link-btn" :disabled="syncing" @click="onSyncPackaged">{{ syncing ? '同步中…' : '同步包内技能' }}</button>
+      <div class="list-body">
+        <div class="list-bar">
+          <span class="list-count">{{ loading && !rows.length ? '加载中…' : `已启用 ${enabledCount} / ${rows.length}` }}</span>
+          <div class="list-acts">
+            <button type="button" class="btn btn-sm btn-ghost" :disabled="loading" @click="load">刷新</button>
+            <button type="button" class="btn btn-sm btn-ghost" :disabled="syncing" @click="onSyncPackaged">{{ syncing ? '同步中…' : '同步包内技能' }}</button>
           </div>
-          <p v-if="error" class="hint err">{{ error }}</p>
-          <p v-else-if="!rows.length" class="hint muted">暂无技能</p>
+        </div>
+        <p v-if="error" class="list-msg err">{{ error }}</p>
+        <div v-if="rows.length" class="list">
           <template v-for="r in rows" :key="r.id">
-            <div class="skill-row" :class="{ off: !r.on }">
-              <div class="tool-info">
-                <span class="skill-name">
-                  {{ r.name }}
-                  <span class="flag" :class="sourceClass(r.source)">{{ sourceText[r.source] || r.source }}</span>
-                </span>
-                <span class="skill-desc" :title="r.description">{{ r.description || '（无描述）' }}</span>
-                <span v-if="r.triggerWords.length" class="skill-triggers">
-                  触发词：{{ r.triggerWords.slice(0, 6).join('、') }}{{ r.triggerWords.length > 6 ? ' …' : '' }}
-                </span>
+            <div class="list-row" :class="{ off: !r.on }">
+              <div class="row-main">
+                <div class="row-title">
+                  <span class="row-name">{{ r.name }}</span>
+                  <span class="lbl" :class="sourceClass(r.source)">{{ sourceText[r.source] || r.source }}</span>
+                </div>
+                <span class="row-desc" :title="r.description">{{ r.description || '（无描述）' }}</span>
               </div>
-              <button class="btn btn-sm" @click="r.expanded = !r.expanded">{{ r.expanded ? '收起' : '正文' }}</button>
-              <ToggleSwitch :model-value="r.on" @update:model-value="(v: boolean) => onToggle(r, v)" />
-              <button v-if="r.source !== 'builtin'" class="btn btn-danger btn-sm" @click="onDelete(r)">删除</button>
+              <div class="row-acts">
+                <button type="button" class="btn btn-sm btn-ghost" :aria-expanded="r.expanded" @click="r.expanded = !r.expanded">{{ r.expanded ? '收起' : '详情' }}</button>
+                <ToggleSwitch :model-value="r.on" :aria-label="`启用技能 ${r.name}`" @update:model-value="(v: boolean) => onToggle(r, v)" />
+                <template v-if="r.source !== 'builtin'">
+                  <span class="sep" />
+                  <button type="button" class="btn btn-sm btn-danger" @click="onDelete(r)">删除</button>
+                </template>
+              </div>
             </div>
-            <div v-if="r.expanded" class="skill-content">
-              <pre>{{ r.system_prompt.slice(0, 4000) }}{{ r.system_prompt.length > 4000 ? `\n… [共 ${r.system_prompt.length} 字符]` : '' }}</pre>
+            <div v-if="r.expanded" class="row-detail">
+              <p v-if="r.triggerWords.length" class="detail-line"><span class="lbl">触发词</span>{{ r.triggerWords.join('、') }}</p>
+              <pre>{{ promptPreview(r) }}</pre>
             </div>
           </template>
         </div>
-      </section>
+        <div v-else-if="!error" class="list-empty">{{ loading ? '正在加载…' : '还没有技能' }}</div>
+      </div>
     </div>
   </div>
 </template>
@@ -53,7 +53,7 @@
  * 启用状态走 per-mode（?mode=ssh 写 skill_mode_config）。包内技能内容随 app
  * 分发，启动时由 backend/builtin_skills 同步；「同步包内技能」按钮供升级后手动刷新。
  */
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api, toFriendlyMessage } from '@/api/client'
 import InfoTip from '@/components/common/InfoTip.vue'
 import { useToastStore } from '@/stores/toast'
@@ -76,7 +76,6 @@ const MODE = 'ssh'
 const toast = useToastStore()
 const skillStore = useSkillStore()
 const { confirm } = useConfirm()
-const open = reactive({ list: true })
 const rows = ref<SkillRow[]>([])
 const loading = ref(false)
 const syncing = ref(false)
@@ -90,6 +89,12 @@ function sourceClass(source: string): string {
 }
 
 const enabledCount = computed(() => rows.value.filter((r) => r.on).length)
+
+/** 详情区的正文预览：封顶 4000 字符，超出标明总长 */
+function promptPreview(r: SkillRow): string {
+  const body = r.system_prompt
+  return body.length > 4000 ? `${body.slice(0, 4000)}\n… [共 ${body.length} 字符]` : body
+}
 
 function parseTriggerWords(raw: unknown): string[] {
   try {
@@ -192,19 +197,11 @@ onMounted(load)
 </script>
 
 <style scoped src="./settings-panel-base.css"></style>
-<style scoped src="./settings-groups.css"></style>
+<style scoped src="./settings-list.css"></style>
 <style scoped>
-.skill-row {
-  display: flex; align-items: center; gap: var(--spacing-10); padding: 7px var(--spacing-4);
-  border-top: 1px solid var(--border-subtle);
+.row-detail pre {
+  margin: 0; max-height: 240px; overflow-y: auto;
+  font-family: var(--font-mono); font-size: 0.8462rem; line-height: 1.5;
+  color: var(--text-secondary); white-space: pre-wrap; word-break: break-word;
 }
-.skill-row.off { opacity: .55; }
-.skill-name { font-size: 0.9615rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: var(--spacing-6); }
-.skill-desc { font-size: 0.8462rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.skill-triggers { font-size: 0.8077rem; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.skill-content {
-  border: 1px dashed var(--border-default); border-radius: var(--radius-sm); padding: var(--spacing-8); margin: var(--spacing-2) var(--spacing-4) var(--spacing-8);
-  max-height: 240px; overflow-y: auto;
-}
-.skill-content pre { margin: 0; font-size: 0.8462rem; font-family: var(--font-mono); color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
 </style>

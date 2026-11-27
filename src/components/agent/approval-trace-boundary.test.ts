@@ -57,6 +57,34 @@ describe('终端交付确认也在决策面', () => {
   it('交付卡只有确认/拒绝两条结算路径', () => {
     expect(deliveryCard).toContain('confirmDeliver')
     expect(deliveryCard).toContain('rejectDeliver')
+    // 已到终态（失败/超时）的结果卡不能再冒出一对结算按钮
+    expect(deliveryCard).toContain("delivery.status === 'pending_confirm'")
+  })
+})
+
+describe('执行失败的结果卡停在决策面', () => {
+  // 结果卡只挂「查看详情」等结论性操作；把失败卡也留在审批区，用户当场能看到
+  // 哪一步挂了，而不是去轨迹页翻。postFailed 单独一组，必须显式排除避免重复渲染。
+  it('ApprovalDock 收敛 failed/timeout 的交付，且排除 postFailed', () => {
+    expect(approvalDock).toContain('resultDeliveries')
+    expect(approvalDock).toMatch(/postFailed !== true[\s\S]*status === 'failed'/)
+    expect(approvalDock).toContain('v-for="d in resultDeliveries"')
+    expect(approvalDock).toContain('resultDeliveries.length')
+  })
+
+  it('回传失败卡只保留「查看详情」与「重发结果」', () => {
+    const block = /v-if="isPostFailed"([\s\S]*?)<\/template>/.exec(deliveryCard)?.[1] ?? ''
+    expect(block).toContain('查看详情')
+    expect(block).toContain('重发结果')
+    expect(block.match(/<button/g)).toHaveLength(2)
+    // 终态卡不再出现任何结算路径（确认/拒绝只属于 pending_confirm 分支）
+    expect(block).not.toContain('确认执行')
+    expect(block).not.toContain('拒绝执行')
+  })
+
+  it('结果卡仍限高、正文内滚，详情不把动作栏顶出可视区', () => {
+    expect(cssBody(deliveryCard, '.delivery-card')).toMatch(/max-height:\s*min\(38vh,\s*340px\)/)
+    expect(cssBody(deliveryCard, '.dc-output')).toMatch(/max-height:\s*200px/)
   })
 })
 

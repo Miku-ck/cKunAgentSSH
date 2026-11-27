@@ -183,6 +183,25 @@ def test_tool_deliver_projection_passes_segments_risk_task():
     assert d["segments"] == [seg]
 
 
+def test_tool_deliver_projection_passes_instrumented():
+    """逐段退出码插桩脚本随投影透传；缺失时投影为空串（前端回退整条执行）"""
+    ev = TraceEvent(
+        kind="tool_deliver", source="saddle", run_id="r1", iteration=0,
+        payload={"tool_id": "t1", "command": "ls; pwd", "session_id": "s1",
+                 "requires_confirm": True,
+                 "instrumented": "ls ; printf '__AGENT_STEP__ __AGENT_MARKER__:1:%s\\n' \"$?\""},
+    )
+    d = SSEAdapter.to_sse_dict(ev)
+    assert "__AGENT_MARKER__" in d["instrumented"]
+
+    ev2 = TraceEvent(
+        kind="tool_deliver", source="saddle", run_id="r1", iteration=0,
+        payload={"tool_id": "t2", "command": "ls", "session_id": "s1",
+                 "requires_confirm": True},
+    )
+    assert SSEAdapter.to_sse_dict(ev2)["instrumented"] == ""
+
+
 def test_compound_delivery_carries_segments_risk_task(monkeypatch):
     """截图场景回归：多段只读排查命令 → payload 带逐段拆解 + 聚合 safe + 任务原话"""
     compound = ('echo "== a =="; du -sh /home/x/* 2>/dev/null | sort -rh | head; '

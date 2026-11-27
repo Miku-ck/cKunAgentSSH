@@ -724,7 +724,7 @@ export const useAgentStore = defineStore('agent', () => {
           explain: event.explain || undefined,
           explain_source: event.explain_source || undefined,
           // 拆解层：复合命令逐段意图 + 聚合风险 + 发起任务上下文
-          segments: event.segments || undefined,
+          segments: event.segments || undefined, instrumented: event.instrumented || undefined,
           risk: event.risk || undefined,
           task: event.task || undefined,
         })

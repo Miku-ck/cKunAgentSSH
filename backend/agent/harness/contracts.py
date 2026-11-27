@@ -204,6 +204,10 @@ class ToolResult:
     priority: str = "normal"  # 优先级：high（错误/关键）/ normal（常规）/ low（噪声）
     # 可见终端模式：非空时表示命令需交付到可见终端，Driver 挂起等待前端回传
     pending_delivery: Optional[dict] = None
+    # 错误分类（ErrorType.value）：执行边界填写，避免下游靠错误文案猜类型。
+    # None = 老工具未标注，分类器回退到关键字判定；retryable 可覆盖类型推导。
+    error_kind: Optional[str] = None
+    retryable: Optional[bool] = None
 
 
 @dataclass
@@ -365,6 +369,9 @@ class AgentConfig:
     llm_max_retries: int = 2
     compress_on_context_overflow: bool = True
     auto_rollback_on_tool_failure: bool = True  # 工具失败时自动回滚（保护文件一致性）
+    # None: 已初始化数据库的 run 自动落副作用账本；False 仅用于隔离测试。
+    operation_ledger_enabled: Optional[bool] = None
+    safe_point_enabled: Optional[bool] = None
     # 动态步数预算配置
     enable_dynamic_budget: bool = True  # 是否启用动态步数预算
     dynamic_budget_interval: int = 3   # 每编辑 N 个不同文件追加预算
@@ -512,6 +519,9 @@ class RunContext:
         old = self.state
         self.state = new_state
         self.state_history.append({"from": old.value, "event": event, "to": new_state.value})
+        safe_point = self.metadata.get("safe_point")
+        if safe_point is not None:
+            await safe_point.save(self, "state", event=event)
 
     def push_undo(self, action: UndoAction) -> None:
         self.undo_stack.append(action)

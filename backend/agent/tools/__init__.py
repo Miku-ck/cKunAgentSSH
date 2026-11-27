@@ -7,8 +7,12 @@ ToolRegistry 生成 OpenAI function calling 格式的 tools 参数，
 """
 from dataclasses import dataclass, field
 from typing import Optional
+import asyncio
+import contextlib
 import logging
 import threading
+
+from agent.harness.contracts import ErrorType
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +27,9 @@ class ToolResult:
     # 可见终端模式：非空时表示命令需交付到可见终端（前端写入 PTY/SSH）后由驱动挂起等待，
     # 结构: {"tool_id": str, "command": str, "session_id": str, "requires_confirm": bool}
     pending_delivery: Optional[dict] = None
+    # 执行边界给出的错误分类（ErrorType.value）；未标注时分类器回退关键字判定
+    error_kind: Optional[str] = None
+    retryable: Optional[bool] = None
 
 
 @dataclass
@@ -95,6 +102,7 @@ class ToolContext:
     ssh_session_id: str = ""        # SSH 会话 ID（SSH 模式）
     conversation_id: str = ""
     agent_run_id: str = ""
+    operation_id: str = ""
     # 审查修复（P2 E6）：子 Agent / spawn_subagent 需要向主 Agent 的
     # CostTracker 上报 LLM token 用量（原实现子 Agent 调用的 token 完全丢失）。
     # None 表示无追踪器（如无头定时调度 run）
@@ -266,6 +274,82 @@ def build_correct_usage_example(parameters: dict | None, tool_name: str) -> str:
             }.get(sub.get("type", ""), "<值>")
     return json.dumps(sample, ensure_ascii=False) if sample else ""
 
+
+# 统一硬时限：ToolMeta.timeout 是工具声明的业务时限，注册表再罩一层 deadline。
+# 留一点余量是为了让工具自己的 asyncio.timeout（如 web_fetch）先触发、保留其更具体
+# 的报错；硬时限只兜底那些没自己做时限的工具，避免一次调用钉死整个 run。
+_TOOL_TIMEOUT_MARGIN_RATIO = 0.05
+_TOOL_TIMEOUT_MARGIN_CAP_S = 1.0
+# 取消后给工具 finally 的回收窗口；超时本身不能变成无限等待。
+_TOOL_CLEANUP_GRACE_S = 2.0
+
+
+def _consume_task_result(task: asyncio.Task) -> None:
+    """回收被放弃任务的异常，避免事件循环末尾冒出未取用的异常告警。"""
+    if task.cancelled():
+        return
+    with contextlib.suppress(Exception):
+        task.exception()
+
+
+def _hard_timeout_s(timeout_s: float) -> float:
+    """把工具声明的时限换算成注册表硬 deadline（带小余量）。"""
+    try:
+        base = float(timeout_s)
+    except (TypeError, ValueError):
+        base = 30.0
+    if base <= 0:
+        base = 30.0
+    margin = min(_TOOL_TIMEOUT_MARGIN_CAP_S, max(0.1, base * _TOOL_TIMEOUT_MARGIN_RATIO))
+    return base + margin
+
+
+async def _execute_with_deadline(
+    tool: BaseTool, context: "ToolContext", args: dict, timeout_s: float,
+) -> ToolResult:
+    """在硬时限内执行工具；到点取消协程、等待清理完成，返回失败结果。
+
+    不用裸 `await tool.execute(...)`：工具内部可能起子进程 / SSH 通道，超时后若只抛
+    TimeoutError 而不 await 取消完成，finally 来不及跑，资源会悬空。用独立 task +
+    shield 是为了把「外层取消」和「工具自身超时」两条路径都收口到这里。
+    """
+    deadline = _hard_timeout_s(timeout_s)
+    task = asyncio.create_task(tool.execute(context=context, **args))
+    task.add_done_callback(_consume_task_result)
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=deadline)
+    except asyncio.TimeoutError:
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=_TOOL_CLEANUP_GRACE_S)
+        except asyncio.TimeoutError:
+            logger.error("工具 %s 超时后清理超过 %.1fs，放弃等待（可能有悬空资源）",
+                         tool.name, _TOOL_CLEANUP_GRACE_S)
+        except asyncio.CancelledError:
+            # 工具响应取消时自身抛 CancelledError，这是清理正常的信号；
+            # 只有外层 run 真的被取消才继续向外抛，不能把用户中断吞掉。
+            cur = asyncio.current_task()
+            if cur is not None and cur.cancelling():
+                raise
+        except Exception:
+            logger.debug("工具 %s 取消清理阶段异常", tool.name, exc_info=True)
+        logger.warning("工具 %s 执行超过 %.1fs，已取消并回收", tool.name, deadline)
+        return ToolResult(
+            success=False,
+            output="",
+            error=(f"工具 {tool.name} 执行超过 {timeout_s:g}s 已超时，执行已取消"
+                   "（部分副作用可能已发生）"),
+            priority="high",
+            error_kind=ErrorType.TRANSIENT.value,
+        )
+    except asyncio.CancelledError:
+        # 外层 run 被取消：取消必须传给工具，并等它的 finally 跑完再向外抛
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await asyncio.wait_for(asyncio.shield(task), timeout=_TOOL_CLEANUP_GRACE_S)
+        raise
+
+
 class ToolRegistry:
     """工具注册中心"""
 
@@ -321,7 +405,10 @@ class ToolRegistry:
         """
         tool = self._tools.get(name)
         if not tool:
-            return ToolResult(success=False, output="", error=f"未知工具: {name}")
+            return ToolResult(
+                success=False, output="", error=f"未知工具: {name}",
+                error_kind=ErrorType.INVALID_ARGS.value,
+            )
 
         ve = validate_args(tool.parameters, args or {}, name)
         if ve:
@@ -331,14 +418,21 @@ class ToolRegistry:
                 + (f"示例：{example}" if example else "")
             )
             logger.info("参数校验拒绝 %s: %s", name, ve)
-            return ToolResult(success=False, output="", error=msg)
+            return ToolResult(
+                success=False, output="", error=msg,
+                error_kind=ErrorType.INVALID_ARGS.value,
+            )
 
         try:
-            result = await tool.execute(context=context, **args)
-            return result
+            return await _execute_with_deadline(
+                tool, context, args or {}, getattr(tool.meta, "timeout", 30.0),
+            )
         except Exception as e:
             logger.exception("工具 %s 执行异常", name)
-            return ToolResult(success=False, output="", error=str(e))
+            return ToolResult(
+                success=False, output="", error=str(e),
+                error_kind=ErrorType.FATAL.value,
+            )
 
 
 def create_registry() -> ToolRegistry:

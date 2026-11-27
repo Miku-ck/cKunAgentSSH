@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
@@ -25,7 +26,16 @@ class ErrorClassifier:
     """错误分类器 — 迁移自 error_recovery.py"""
 
     @staticmethod
-    def classify_tool_error(error: str, tool_name: str = "") -> ErrorType:
+    def classify_tool_error(
+        error: str, tool_name: str = "", error_kind: Optional[str] = None,
+    ) -> ErrorType:
+        # 执行边界已标注类型时直接采信；文案可能含「connection」「超时」等词但语义
+        # 完全不同（正常输出片段/reasoning），不能再靠关键字反推。
+        if error_kind:
+            try:
+                return ErrorType(error_kind)
+            except ValueError:
+                logger.debug("未知 error_kind=%r，回退关键字判定", error_kind)
         error_lower = error.lower()
         # 瞬时（H13 修复 B7：扩充中文标记）
         transient_markers = [
@@ -79,21 +89,68 @@ def build_error_feedback(error: str, tool_name: str, error_type: ErrorType) -> s
     return f"工具 {tool_name} 发生致命错误: {error}"
 
 
+# 连续参数错误熔断阈值：模型反复按同一错误口径改参数只会烧 token，
+# 到第 N 次直接禁工具收尾（沿已有的 forced_convergence 通道，不新增终态）。
+_ARG_ERROR_CIRCUIT_THRESHOLD = 3
+
+
+def note_tool_outcome(ctx, error_type: Optional[ErrorType]) -> None:
+    """按工具结果更新连续参数错误计数；达到阈值时置熔断标志。
+
+    这里只计数、只写 metadata，不往 messages 插话——driver 在下一轮 LLM 调用前
+    统一注入收敛提示，避免打断 tool_calls 与 tool 结果的配对（vLLM 400 红线）。
+    """
+    meta = ctx.metadata
+    if error_type == ErrorType.INVALID_ARGS:
+        count = int(meta.get("consecutive_invalid_args", 0)) + 1
+        meta["consecutive_invalid_args"] = count
+        if count >= _ARG_ERROR_CIRCUIT_THRESHOLD and not meta.get("arg_error_circuit_tripped"):
+            meta["arg_error_circuit_tripped"] = True
+            logger.warning(
+                "连续 %d 次工具参数错误，熔断工具调用 (run=%s)", count, ctx.run_id)
+    else:
+        meta["consecutive_invalid_args"] = 0
+
+
+def build_tool_result_text(result, tool_name: str, ctx) -> str:
+    """ToolResult → 给 LLM 的 tool 消息正文；同时维护连续参数错误计数。
+
+    原逻辑内联在 driver 的串行/并行两段，改用单一入口避免两处分类口径漂移，
+    也让 driver 这个超限文件不再增行。
+    """
+    if result.success:
+        note_tool_outcome(ctx, None)
+        return result.output
+    error_type = ErrorClassifier.classify_tool_error(
+        result.error or "", tool_name, getattr(result, "error_kind", None))
+    note_tool_outcome(ctx, error_type)
+    text = build_error_feedback(result.error or "", tool_name, error_type)
+    # 失败时带回的 output（远程 stderr / 已产生的部分输出）一并回传，
+    # 否则 Agent 只看得到一行 error，只能原样重试
+    if result.output:
+        text += f"\n--- 失败时的部分输出（末尾 2000 字）---\n{result.output[-2000:]}"
+    return text
+
+
 async def retry_with_backoff(
     func: Callable[[], Awaitable[Any]],
     classifier: Optional[ErrorClassifier] = None,
     max_retries: int = 3,
     base_delay: float = 1.0,
+    deadline_mono: Optional[float] = None,
 ) -> tuple[Any, Optional[str]]:
     """工具执行的指数退避重试 — 模块级函数（H13 修复 C3）
 
-    让 Saddle 能直接调用，无需实例化 Stirrups。
+    让 Saddle 能直接调用，无需实例化 Stirrups。重试决策读 ToolResult 上执行边界
+    写好的 error_kind/retryable；未标注时回退关键字分类。每次尝试与退避前都检查
+    任务级 deadline（Saddle 用 run_started_mono + max_wall_clock_s 传入）。
 
     Args:
         func: 待重试的异步函数
         classifier: 错误分类器（None 时新建）
         max_retries: 最大重试次数
         base_delay: 基础延迟（指数退避）
+        deadline_mono: 任务级 monotonic 截止时刻；None 表示不校验预算
 
     Returns:
         (result, error) — result 不为 None 表示成功
@@ -102,6 +159,8 @@ async def retry_with_backoff(
     last_error: Optional[str] = None
     last_result: Any = None
     for attempt in range(max_retries):
+        if deadline_mono is not None and time.monotonic() >= deadline_mono:
+            return last_result, last_error or "任务级 deadline 已到，放弃重试"
         try:
             result = await func()
         except Exception as e:
@@ -110,17 +169,23 @@ async def retry_with_backoff(
         else:
             # ToolRegistry.execute 把工具内异常统一转成 ToolResult(success=False)，
             # 只盯着抛出的异常等于「瞬时错误重试」这条 H13 C3 路径永不触发。
-            # 失败结果同样送进分类器，仅 TRANSIENT 才退避重试。
+            # 失败结果同样送进分类器，仅可重试的瞬时错误才退避。
             if getattr(result, "success", True) is not False:
                 return result, None
             last_error = str(getattr(result, "error", "") or "") or "工具执行失败"
             last_result = result
-        kind = clf.classify_tool_error(last_error or "", "")
-        if kind != ErrorType.TRANSIENT:
-            # 非瞬时（参数错/权限拦截/致命）立即返回首次失败结果，不重复执行
+        kind = clf.classify_tool_error(
+            last_error or "", "", getattr(result, "error_kind", None),
+        )
+        explicit = getattr(result, "retryable", None) if result is not None else None
+        can_retry = explicit if explicit is not None else (kind == ErrorType.TRANSIENT)
+        if not can_retry:
+            # 不可重试（参数错/权限拦截/致命/工具显式声明）立即返回首次失败结果
             return last_result, last_error
         if attempt < max_retries - 1:
             delay = base_delay * (2 ** attempt)
+            if deadline_mono is not None and time.monotonic() + delay >= deadline_mono:
+                return last_result, last_error or "重试预算不足，放弃重试"
             await asyncio.sleep(delay)
     return last_result, last_error
 

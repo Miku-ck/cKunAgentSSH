@@ -48,6 +48,7 @@ from .contracts import (
     TraceEvent,
 )
 from .command_explain import explain_compound, explain_for_reason, maybe_explain_via_llm
+from .driver_completion import CompletionGuardMixin
 from .goal_plan_fsm import criteria_summary_safe, resolve_self_check_from_metadata
 from .readonly_policy import is_provably_readonly
 from .reins import approval_wait, release_clarification_run, wait_for_clarification_answer
@@ -66,7 +67,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class Driver:
+class Driver(CompletionGuardMixin):
     """
     驭手 — ReAct 决策循环的执行者
 
@@ -119,9 +120,10 @@ class Driver:
         # 恢复路径跳过 AGENT_START（技能注入）与意图识别：那些在挂起前已
         # 发生过且留在快照 messages 里，重放会重复注入。
         resume_round = ctx.metadata.get("resume_round") or None
+        recovered_run = bool(ctx.metadata.get("recovered_run"))
 
         # ── agent_start ──
-        if resume_round is None:
+        if resume_round is None and not recovered_run:
             await harness.reins.check(ReinPoint.AGENT_START, ctx)
 
         # ── 意图识别（在 agent_start 后、主循环前）──
@@ -130,7 +132,7 @@ class Driver:
         # 模型配置的 reasoning_tokens 作为上限，意图识别的预算不能超过该值
         intention = None
         model_max_reasoning = ctx.config.max_reasoning_tokens  # 保存模型配置的上限
-        if ctx.config.enable_intention_guide and resume_round is None:
+        if ctx.config.enable_intention_guide and resume_round is None and not recovered_run:
             try:
                 # Phase 1 意图级联：规则分类 → 低置信 LLM 校准 → 任务级澄清。
                 # 高置信路径（绝大多数 run）内部直接返回规则结果，零额外开销；
@@ -178,7 +180,8 @@ class Driver:
 
         full_content = ""
         full_reasoning = ""
-        iteration = -1  # 默认值，防止 max_iterations=0 时未定义
+        resumed_iteration = ctx.iteration if recovered_run else -1
+        iteration = resumed_iteration  # max_iterations=0 时仍需有定义
         max_reached = False
         # 墙钟打点：WallClockRein（POST_ITERATION）按此计算 run 累计时长。
         # monotonic 不受系统时钟跳变影响；setdefault 防御续跑场景已带值。
@@ -234,6 +237,14 @@ class Driver:
         while iteration + 1 < ctx.config.max_iterations:
             iteration += 1
             ctx.iteration = iteration
+
+            safe_point = ctx.metadata.get("safe_point")
+            if safe_point is not None:
+                try:
+                    await safe_point.save(ctx, "iteration", iteration_boundary=iteration)
+                except Exception as e:
+                    logger.error("迭代安全点写入失败 (run=%s): %s", ctx.run_id, e)
+                    raise
 
             # ── 动态意图重分类（每 reclassify_interval 轮触发）──
             # 根据已积累的工具调用日志、失败率、进度等信号调整意图等级和思考预算
@@ -298,13 +309,17 @@ class Driver:
             # MAX_REACHED）。DynamicBudgetRein 若在 POST_ITERATION 追加了预算，
             # 下一轮 remaining 重算 > 0，收敛自然顺延到新最后一轮；收敛轮无工具
             # 调用，工作密度分不再增长，不会再触发追加。
+            # 连续参数错误熔断与末轮收敛共用同一条禁工具通道（不新增终态/事件类型）。
+            arg_circuit_tripped = bool(ctx.metadata.get("arg_error_circuit_tripped"))
             forced_convergence = (
-                ctx.config.forced_convergence_enabled and remaining == 0
+                (ctx.config.forced_convergence_enabled and remaining == 0)
+                or arg_circuit_tripped
             )
             if forced_convergence:
+                reason = "连续多次工具参数错误已熔断" if arg_circuit_tripped else "本轮是最后一轮"
                 # user 角色（末尾注入的 400 约束，口径见 bridle._build）
                 ctx.messages.append({"role": "user", "content": (
-                    "[系统提示] 本轮是最后一轮，禁止调用任何工具。"
+                    f"[系统提示] {reason}，禁止调用任何工具。"
                     "请只输出：1) 已完成事项与关键结果；2) 未完成部分与原因；"
                     "3) 风险与建议的下一步。"
                 )})
@@ -379,7 +394,7 @@ class Driver:
                     payload={"message": f"LLM 调用失败: {e}"},
                 )
                 async for ev in self._emit_done(
-                    telemetry, ctx, iteration + 1, State.FAILED,
+                    telemetry, ctx, max(0, iteration - resumed_iteration), State.FAILED,
                     full_content, full_reasoning, harness,
                 ):
                     yield ev
@@ -632,7 +647,7 @@ class Driver:
 
         # ── done ──
         # iteration=-1 表示循环未执行（max_iterations=0），此时 iterations=0
-        iterations_done = max(0, iteration + 1) if ctx.config.max_iterations > 0 else 0
+        iterations_done = max(0, iteration - resumed_iteration)
         async for ev in self._emit_done(
             telemetry, ctx,
             iterations_done,
@@ -1033,19 +1048,19 @@ class Driver:
             if post_tool_decision.inject_messages:
                 ctx.messages.extend(post_tool_decision.inject_messages)
 
-        # ── 发 tool_call_result ──
-        if result.success:
-            result_text = result.output
-        else:
-            # H13 修复 C6：使用 Stirrups.build_error_feedback 构建差异化反馈
-            # 按错误类型给 LLM 不同的修复指引（参数错误/权限拦截/瞬时故障/致命错误）
-            from .stirrups import ErrorClassifier, build_error_feedback
-            error_type = ErrorClassifier.classify_tool_error(result.error or "", tc.name)
-            result_text = build_error_feedback(result.error or "", tc.name, error_type)
-            # 工具失败时带回的 output（远程 stderr / 已产生的部分输出）一并回传，
-            # 否则 Agent 只看得到一行 error，只能原样重试
-            if result.output:
-                result_text += f"\n--- 失败时的部分输出（末尾 2000 字）---\n{result.output[-2000:]}"
+        from .stirrups import build_tool_result_text
+        result_text = build_tool_result_text(result, tc.name, ctx)
+        # 工具结果加入消息历史，透传 priority 供 compress_messages 读取
+        # H13 修复 A3：pop span_id（与 tool_call_start 的 push 配对）
+        if ctx.span_stack:
+            ctx.span_stack.pop()
+        result_text, recorded_success = await self._record_tool_result(
+            ctx, harness, tc, result, result_text,
+        )
+        result.success = recorded_success
+        entry["success"] = recorded_success
+
+        # ── 发 tool_call_result ──（类型优先 + 参数错计数统一在 Stirrups）
         yield TraceEvent(
             kind="tool_call_result",
             source="saddle",
@@ -1054,18 +1069,11 @@ class Driver:
             payload={
                 "tool": tc.name,
                 "result": result_text,
-                "success": result.success,
+                "success": recorded_success,
                 "duration_ms": result.duration_ms,
                 "tool_call_id": tc.id,
             },
         )
-
-        # 工具结果加入消息历史，透传 priority 供 compress_messages 读取
-        ctx.messages.append(harness.bridle.build_tool_result_message(tc.id, result_text, priority=result.priority))
-
-        # H13 修复 A3：pop span_id（与 tool_call_start 的 push 配对）
-        if ctx.span_stack:
-            ctx.span_stack.pop()
 
     async def _execute_readonly_segment(
         self,
@@ -1278,14 +1286,16 @@ class Driver:
                 if post_tool_decision.inject_messages:
                     ctx.messages.extend(post_tool_decision.inject_messages)
 
-            if result.success:
-                result_text = result.output
-            else:
-                from .stirrups import ErrorClassifier, build_error_feedback
-                error_type = ErrorClassifier.classify_tool_error(result.error or "", m.tc.name)
-                result_text = build_error_feedback(result.error or "", m.tc.name, error_type)
-                if result.output:
-                    result_text += f"\n--- 失败时的部分输出（末尾 2000 字）---\n{result.output[-2000:]}"
+            from .stirrups import build_tool_result_text
+            result_text = build_tool_result_text(result, m.tc.name, ctx)
+            # 配对 pop（A 阶段为通过成员 push 的 span）
+            if ctx.span_stack:
+                ctx.span_stack.pop()
+            result_text, recorded_success = await self._record_tool_result(
+                ctx, harness, m.tc, result, result_text,
+            )
+            result.success = recorded_success
+            m.entry["success"] = recorded_success
             yield TraceEvent(
                 kind="tool_call_result",
                 source="saddle",
@@ -1294,18 +1304,35 @@ class Driver:
                 payload={
                     "tool": m.tc.name,
                     "result": result_text,
-                    "success": result.success,
+                    "success": recorded_success,
                     "duration_ms": result.duration_ms,
                     "tool_call_id": m.tc.id,
                 },
             )
-            ctx.messages.append(harness.bridle.build_tool_result_message(
-                m.tc.id, result_text, priority=result.priority))
-            # 配对 pop（A 阶段为通过成员 push 的 span）
-            if ctx.span_stack:
-                ctx.span_stack.pop()
 
         ctx.current_tool_call = None
+    async def _record_tool_result(
+        self, ctx: RunContext, harness: "Harness", tc: ToolCall,
+        result: ToolResult, result_text: str,
+    ) -> tuple[str, bool]:
+        message = harness.bridle.build_tool_result_message(
+            tc.id, result_text, priority=result.priority,
+        )
+        ctx.messages.append(message)
+        safe_point = ctx.metadata.get("safe_point")
+        if safe_point is not None:
+            try:
+                await safe_point.save(
+                    ctx, "after_tool", tool_call_id=tc.id, success=result.success,
+                )
+            except Exception as e:
+                logger.error("工具结果安全点写入失败 (run=%s, call=%s): %s", ctx.run_id, tc.id, e)
+                result_text += "\n[工具结果安全点写入失败，运行需人工检查]"
+                message["content"] = result_text
+                ctx.metadata["safe_point_failed"] = True
+                return result_text, False
+        return result_text, result.success
+
     async def _emit_and_await_visible(
         self,
         ctx: RunContext,
@@ -1384,8 +1411,32 @@ class Driver:
                 "risk": display_level,
                 "task": ctx.task,
                 "segments": segments_payload,
+                # 逐段退出码插桩脚本（含 __AGENT_MARKER__ 占位符，前端替换成哨兵 marker）。
+                # 空串 = 不可插桩（&&/|| 链、循环体、heredoc 等），前端按原命令执行。
+                "instrumented": comp.instrumented,
             },
         )
+        safe_point = ctx.metadata.get("safe_point")
+        if safe_point is not None:
+            try:
+                await safe_point.save(
+                    ctx, "awaiting_visible_result", tool_call_id=tc.id,
+                    delivery_tool_id=tool_id,
+                )
+            except Exception as e:
+                operation_id = str(pd.get("operation_id") or "")
+                ledger = ctx.metadata.get("operation_ledger")
+                if operation_id and ledger is not None:
+                    try:
+                        await ledger.close_delivery(
+                            operation_id, to_status="not_executed",
+                            error="可见终端交付前安全点不可用",
+                        )
+                    except Exception as ledger_error:
+                        logger.error("可见终端交付前账本闭合失败 (%s): %s",
+                                     operation_id, ledger_error)
+                logger.error("可见终端等待安全点写入失败 (run=%s): %s", ctx.run_id, e)
+                raise
         await telemetry.emit(deliver_ev)
         yield deliver_ev
 
@@ -1410,6 +1461,7 @@ class Driver:
                 ev = await self._finish_visible(
                     ctx, harness, telemetry, result, tc, iteration,
                     result_text=result_text, success=False,
+                    operation_status="unknown",
                 )
                 yield ev
                 return
@@ -1423,6 +1475,7 @@ class Driver:
                 ev = await self._finish_visible(
                     ctx, harness, telemetry, result, tc, iteration,
                     result_text=result_text, success=False,
+                    operation_status="unknown",
                 )
                 yield ev
                 return
@@ -1432,6 +1485,7 @@ class Driver:
                 ev = await self._finish_visible(
                     ctx, harness, telemetry, result, tc, iteration,
                     result_text=result_text, success=False,
+                    operation_status="not_executed",
                 )
                 yield ev
                 return
@@ -1443,8 +1497,28 @@ class Driver:
             ev = await self._finish_visible(
                 ctx, harness, telemetry, result, tc, iteration,
                 result_text=result_text, success=reg.success,
+                operation_status=(
+                    "succeeded" if reg.success
+                    else "failed" if reg.exit_code is not None else "unknown"
+                ),
             )
             yield ev
+        except asyncio.CancelledError:
+            operation_id = str(pd.get("operation_id") or "")
+            ledger = ctx.metadata.get("operation_ledger")
+            if operation_id and ledger is not None:
+                await ledger.close_delivery(
+                    operation_id, to_status="unknown", error="可见终端等待被取消",
+                )
+            raise
+        except Exception:
+            operation_id = str(pd.get("operation_id") or "")
+            ledger = ctx.metadata.get("operation_ledger")
+            if operation_id and ledger is not None:
+                await ledger.close_delivery(
+                    operation_id, to_status="unknown", error="可见终端等待异常中断",
+                )
+            raise
         finally:
             # 无论成功/超时/异常/外部取消（CancelledError），都清理注册项防泄漏
             PendingDeliveries.remove(tool_id)
@@ -1698,6 +1772,17 @@ class Driver:
         Returns: (生效的决策, 需要在调用方发出的追加事件)。
         """
         waiter, sig = handle
+        safe_point = ctx.metadata.get("safe_point")
+        if safe_point is not None:
+            try:
+                await safe_point.save(
+                    ctx, "waiting_approval", approval_key=waiter.key,
+                    tool_call_id=str((ctx.active_tool_call or {}).get("tool_call_id") or ""),
+                )
+            except Exception as e:
+                logger.error("审批等待安全点写入失败 (run=%s): %s", ctx.run_id, e)
+                ctx.metadata["safe_point_failed"] = True
+                return decision, []
         verdict = await approval_wait.wait_registered(
             waiter, approval_fallback_seconds())
         if verdict not in (approval_wait.ALLOWED, approval_wait.DENIED):
@@ -1735,141 +1820,6 @@ class Driver:
                 pending.pop(sig, None)
         return redone, events
 
-    async def _completion_guard(
-        self,
-        ctx: RunContext,
-        harness: "Harness",
-        final_text: str,
-        iteration: int,
-        next_round_budget: bool,
-        intention_level: str,
-    ) -> tuple[bool, list[TraceEvent]]:
-        """
-        假完成强校验 — 只覆盖无 workflow goal 的 run。
-
-        有 goal 的 run 走上方 goal 自检锚（_goal_self_checked）。无 goal 时，
-        模型宣告完成的唯一凭据是「它自己不调工具了」——答非所问也会被放行。
-        这里用一次轻量 LLM 裁决把钉扎任务原文与最终答案对表：
-
-        - FAIL → 注入纠偏 user 消息 + return True（调用方 continue 续跑）；
-          每 run 至多一次（metadata 标记），第二次放行防死循环，且续跑天然受
-          max_iterations / 成本熔断 / 墙钟三重兜底
-        - PASS / 超时 / 异常 / 解析失败 → fail-open 放行（绝不阻断收尾，
-          口径同生成式摘要静默降级）
-
-        触发门槛：任务非空、意图等级 ≥ moderate（trivial/simple 不值得多花
-        一次调用）、还有下一轮预算（最后一轮 continue 会落 loop-else 误判
-        MAX_REACHED，同 goal 自检锚的教训）、最终答案非空。
-        裁决期间临时摘掉 chunk 回调：PASS/FAIL 片段不得流进用户对话。
-        """
-        if not ctx.config.completion_guard_enabled:
-            return False, []
-        if not next_round_budget:
-            return False, []
-        if not final_text or not final_text.strip():
-            return False, []
-        if ctx.metadata.get("_completion_guarded"):
-            return False, []
-        task_text = (ctx.task or "").strip()
-        if not task_text:
-            return False, []
-        if intention_level not in ("moderate", "complex"):
-            return False, []
-        try:
-            # 置位在裁决前：异常/重入下宁可少校验一次，不可双发注入
-            ctx.metadata["_completion_guarded"] = True
-            return await self._completion_guard_judge(
-                ctx, harness, task_text, final_text, iteration)
-        except Exception as e:  # noqa: BLE001 — fail-open 铁律
-            # 安全裁决异常时 fail-open 是既定口径，但必须 ERROR 留痕 + 前端可见事件，
-            # 不能让用户以为完成度已被校验。控制流不变（仍放行）。
-            logger.error("[SECURITY][fail-open] CompletionGuard 异常，fail-open 放行: %s",
-                         e, exc_info=e)
-            emit = (ctx.metadata or {}).get("emit_event")
-            if emit is not None:
-                try:
-                    await emit(TraceEvent(
-                        kind="warning", source="driver.completion_guard",
-                        run_id=ctx.run_id,
-                        payload={"code": "security_fail_open",
-                                 "message": "安全裁决异常，已按保守策略放行（详见日志）"},
-                    ))
-                except Exception:  # noqa: BLE001 — 事件投递失败不能反过来打断放行
-                    pass
-            return False, []
-
-    async def _completion_guard_judge(
-        self,
-        ctx: RunContext,
-        harness: "Harness",
-        task_text: str,
-        final_text: str,
-        iteration: int,
-    ) -> tuple[bool, list[TraceEvent]]:
-        """执行裁决调用并解析结果（PASS 放行 / FAIL 纠偏续跑 / 异常向上抛）"""
-        client = harness.stirrups.llm_client
-        prompt = (
-            "你是任务完成度裁决器。判断下面的「最终答案」是否实质覆盖了「原始任务」"
-            "的全部核心要求。宁可保守：只答了一部分、答非所问、把计划当结果交付，"
-            "都算未完成。输出格式：第一行只写 PASS 或 FAIL；若 FAIL，"
-            "第二行用一句话说明缺了什么。\n\n"
-            f"[原始任务]\n{task_text[:2000]}\n\n"
-            f"[最终答案]\n{final_text[:4000]}"
-        )
-        prev_cb = getattr(client, "_on_chunk", None)
-        setattr(client, "_on_chunk", None)  # 裁决片段不得流入用户对话
-        try:
-            out = await asyncio.wait_for(
-                client.call(
-                    messages=[{"role": "user", "content": prompt}],
-                    tools=[],
-                    model=ctx.llm_model,
-                    temperature=0.1,
-                    max_tokens=64,
-                    enable_thinking=False,
-                ),
-                timeout=ctx.config.completion_guard_timeout_s,
-            )
-        finally:
-            setattr(client, "_on_chunk", prev_cb)
-        raw = (getattr(out, "content", "") or "").strip()
-        if not raw:
-            return False, []
-        lines = raw.splitlines()
-        verdict = lines[0].strip().upper()
-        if verdict.startswith("PASS"):
-            return False, []
-        if not verdict.startswith("FAIL"):
-            # 输出不合约定 → fail-open（口径同 auto_approve 的 _parse_verdict）。
-            # ERROR 留痕：安全裁决未按预期产出本身就是需要关注的异常信号。
-            logger.error("[SECURITY][fail-open] CompletionGuard 输出不合约定，fail-open 放行: %r",
-                         verdict)
-            return False, []
-        gap = lines[1].strip() if len(lines) > 1 else ""
-        reason = gap or "最终答案未完整覆盖任务要求"
-        ctx.messages.append({
-            "role": "user",
-            "content": (
-                f"[系统拦截] 完成度校验未通过：{reason}。"
-                "请补充缺失部分后重新给出完整结果；若确有客观限制无法完成，"
-                "请在结果中明确说明已完成与未完成的边界。"
-            ),
-        })
-        events = [TraceEvent(
-            kind="warning",
-            source="driver.completion_guard",
-            run_id=ctx.run_id,
-            iteration=max(0, iteration),
-            payload={
-                "message": f"完成度校验未通过，已要求 Agent 补充：{reason[:200]}",
-            },
-        )]
-        logger.info(
-            "CompletionGuard FAIL，注入纠偏续跑 run=%s iteration=%d",
-            ctx.run_id, iteration,
-        )
-        return True, events
-
     async def _finish_visible(
         self,
         ctx: RunContext,
@@ -1880,13 +1830,26 @@ class Driver:
         iteration: int,
         result_text: str,
         success: bool,
+        operation_status: str = "",
     ) -> TraceEvent:
         """可见终端恢复后收尾：更新日志、追加消息历史、pop span、发 tool_call_result。"""
+        operation_id = str((result.pending_delivery or {}).get("operation_id") or "")
+        ledger = ctx.metadata.get("operation_ledger")
+        if operation_id and ledger is not None:
+            try:
+                closed = await ledger.close_delivery(
+                    operation_id, to_status=operation_status,
+                    output=result_text, error="" if success else result_text,
+                )
+            except Exception as e:
+                logger.error("可见终端操作落账失败 (%s): %s", operation_id, e)
+                closed = False
+            if not closed:
+                success = False
+                result_text += "\n[操作账本闭合失败，实际副作用需人工对账]"
         # 走 active_tool_call 而非 [-1]：串行路径下二者等价（调用方已把
         # current_tool_call 指向本条目），统一后不再依赖位置巧合
         call_entry = ctx.active_tool_call
-        if call_entry is not None:
-            call_entry["success"] = success
         # S2-02：交付路径与 headless 路径同口径 —— 超时/被拒/注册项丢失/成功
         # 四种收尾都必须把签名移出「等待审批」集。
         self._pop_permission_pending(ctx, tc)
@@ -1894,13 +1857,15 @@ class Driver:
         # 真实交付到可见终端执行过的命令在执行层没有任何 executed/failed 审计
         # （该链当前唯一成员 AuditLogger 不拦截，直接触发其落审计即可）。
         await harness.reins.check(ReinPoint.POST_TOOL_CALL, ctx)
-        # 追加到消息历史，透传 priority 供 compress_messages 读取（与正常路径一致）
-        ctx.messages.append(
-            harness.bridle.build_tool_result_message(tc.id, result_text, priority=result.priority)
-        )
         # H13 修复 A3：pop span_id（与 tool_call_start 的 push 配对）
         if ctx.span_stack:
             ctx.span_stack.pop()
+        result.success = success
+        result_text, success = await self._record_tool_result(
+            ctx, harness, tc, result, result_text,
+        )
+        if call_entry is not None:
+            call_entry["success"] = success
         ev = TraceEvent(
             kind="tool_call_result",
             source="saddle",

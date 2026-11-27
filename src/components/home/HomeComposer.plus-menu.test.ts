@@ -10,8 +10,15 @@
  */
 import { describe, expect, it } from 'vitest'
 import rawComposer from './HomeComposer.vue?raw'
+import rawAppearance from '@/composables/useAppearance.ts?raw'
+import rawHomeCommand from '@/composables/useHomeCommand.ts?raw'
+import rawMessageItem from '@/components/chat/MessageItem.vue?raw'
+import rawQuickSsh from '@/components/ssh/QuickSshDialog.vue?raw'
 
 const composer = rawComposer.replace(/\r\n/g, '\n')
+const quickSsh = rawQuickSsh.replace(/\r\n/g, '\n')
+const homeCommand = rawHomeCommand.replace(/\r\n/g, '\n')
+const messageItem = rawMessageItem.replace(/\r\n/g, '\n')
 
 /** 整个 ＋ 浮层：从双栏容器到审批档入口（ref="permRef"）之前。 */
 const menuStart = composer.indexOf('class="hcc-menu cascade"')
@@ -62,10 +69,18 @@ describe('＋ 菜单左栏四项', () => {
     expect(composer).not.toContain('setPosture(')
     expect(composer).not.toContain('posture:')
     // Spec = 任务结构化；Plan/Goal = emit 给父层聚焦结构化面板
-    expect(plusRoot).toContain('@click="openSpec"')
-    expect(plusRoot).toContain("@click=\"focusStage('plan')\"")
-    expect(plusRoot).toContain("@click=\"focusStage('goal')\"")
-    expect(composer).toContain("'stage-focus': [stage: 'plan' | 'goal']")
+    // （2026-11-23 统一语义：三入口与意图 chips 同一状态，点 = 挂/摘 chip）
+    expect(plusRoot).toContain("@click=\"toggleIntentChip('spec')\"")
+    expect(plusRoot).toContain("@click=\"toggleIntentChip('plan')\"")
+    expect(plusRoot).toContain("@click=\"toggleIntentChip('goal')\"")
+    expect(plusRoot).toContain(':class="{ current: sshAi.intentPending.spec }"')
+    // 菜单项与 chips 一致：无 title 气泡（用户 2026-11-23 指正）
+    const specMenuAt = plusRoot.indexOf("@click=\"toggleIntentChip('spec')\"")
+    const specMenuBtn = plusRoot.slice(
+      plusRoot.lastIndexOf('<button', specMenuAt), plusRoot.indexOf('</button>', specMenuAt))
+    expect(specMenuBtn).not.toContain('title=')
+    expect(composer).not.toContain("'stage-focus'")
+    expect(composer).not.toContain('function openSpec')
     // 三个入口一步直达：不带级联箭头
     for (const name of ['Spec', 'Plan', 'Goal']) {
       const at = plusRoot.indexOf(`>${name}<`)
@@ -73,6 +88,149 @@ describe('＋ 菜单左栏四项', () => {
         plusRoot.lastIndexOf('<button', at), plusRoot.indexOf('</button>', at))
       expect(btn).not.toContain('casc-arrow')
     }
+  })
+
+  it('旧 Spec 结构化入口路径已退役（2026-11-23 统一为意图 chip）', () => {
+    // openSpec 三分支 toast（运行中/已有弹窗/草稿不达标）随路径整体退役：
+    // 点 ＋ 菜单 Spec = 挂 spec chip，不再走发送前结构化 —— 该旁路的唯一入口
+    // 回归自动浮现卡片（草稿够长够模糊时 structCanTrigger）。
+    expect(composer).not.toContain('function openSpec')
+    expect(composer).not.toContain('当前任务运行中，结束后再拆解')
+    expect(composer).not.toContain('已有一个拆解弹窗在进行')
+    expect(composer).not.toContain('先在输入框写一段需求，再用 Spec 拆解')
+    // 自动浮现卡片与恢复原文仍在：结构化能力本身没有丢，只收了一个入口
+    expect(composer).toContain('structCanTrigger')
+    expect(composer).toContain('aria-label="恢复原文"')
+  })
+
+  it('意图先行 chips 是意图声明不是姿态开关（2026-11-23 按用户截图重做）', () => {
+    // chips 行选了才显示（用户 2026-11-23 二次指正）：未挂任何东西时整行不渲染；
+    // 与文字一排（用户 2026-11-23 三次指正）：overlay 叠在输入区第一行，
+    // 草稿为空时右侧跟假 placeholder 灰字，真 placeholder 同步置空避免重叠
+    expect(composer).toContain('v-if="hasInputChips" class="hcc-intents"')
+    const intentsAt = composer.indexOf('class="hcc-intents"')
+    const textareaAt = composer.indexOf('<textarea')
+    // 位置红线：chips overlay 在 textarea 之前声明（同一 inputwrap 内）
+    expect(intentsAt).toBeGreaterThan(-1)
+    expect(intentsAt).toBeLessThan(textareaAt)
+    for (const label of ['Plan', 'Spec', 'Goal']) {
+      expect(composer).toContain(`label: '${label}'`)
+    }
+    // 渲染出来的每枚都是激活态：v-for 走 activeIntents，无未激活分支
+    expect(composer).toContain('v-for="ik in activeIntents"')
+    expect(composer).toContain('const activeIntents = computed(')
+    expect(composer).not.toContain(':aria-pressed')
+    // 技能/插件/专家 chips 同排（2026-11-23 用户指定）：在 overlay 行内、foot 无第二份
+    expect(composer).toContain('v-if="hasInputChips" class="hcc-intents"')
+    expect(composer).toContain('v-for="s in pickedSkills"')
+    expect(composer).toContain('v-for="p in pickedPlugins"')
+    expect(composer).toContain('v-if="pickedExpert"')
+    expect(composer).toContain('const hasInputChips = computed(')
+    expect(composer).toContain('pickedExpert.value !== null')
+    const intentsBlock = composer.slice(
+      composer.indexOf('class="hcc-intents"'), composer.indexOf('@paste="onPaste"'))
+    expect(intentsBlock).toContain('移除技能')
+    expect(intentsBlock).toContain('移除插件')
+    expect(intentsBlock).toContain('移除专家')
+    const afterFoot = composer.indexOf('class="hcc-foot"')
+    const restAfterFoot = composer.slice(afterFoot)
+    expect(restAfterFoot).not.toContain('移除技能')
+    expect(restAfterFoot).not.toContain('移除插件')
+    expect(restAfterFoot).not.toContain('移除专家')
+    // 真同排（用户 2026-11-23 四次指正：光标要在 chips 右侧第一行）：flex 并排，
+    // chips 左、textarea 右 —— 不用 overlay + 假 placeholder 的让位 hack
+    expect(composer).toContain('class="hcc-inputrow"')
+    expect(composer).toContain('.hcc-inputrow { display: flex')
+    expect(composer).not.toContain('hcc-intents-ph')
+    expect(composer).not.toContain('padding-top: calc(')
+    // hover 只换 ✕ 图标（用户 2026-11-23 指正：无 title 气泡、无旁注提示）
+    expect(composer).not.toContain('class="intents-hint"')
+    expect(composer).toContain('.hcc-intent:hover .ico { display: none }')
+    expect(composer).toContain('.hcc-intent:hover .x { display: block }')
+    expect(composer).toContain('function toggleIntentChip(')
+    // 视觉规范三点（2026-11-23）：① 技能/专家/插件 chip 带与 ＋ 菜单同源的常驻
+    // 图标；② ico 与 ✕ 同 13×13 同槽位切换（不晃动）；③ 不铺底、字色随设置的强调色
+    // ico 静态出现 4 次：意图 chip（v-for 单模板 1 处）+ 技能/插件/专家各 1 处
+    expect(intentsBlock.match(/class="ico"/g)?.length).toBe(4)
+    expect(intentsBlock).not.toContain('width="12"')
+    expect((intentsBlock.match(/width="13"/g) || []).length).toBeGreaterThanOrEqual(8)
+    const chipCss = composer.slice(
+      composer.indexOf('.hcc-intent {'), composer.indexOf('.hcc-intent .x'))
+    expect(chipCss).toContain('color: var(--accent-text)')
+    expect(chipCss).not.toContain('background')
+    expect(chipCss).not.toContain('accent-green')
+    // 粗体（2026-11-23 用户指定）：无底色设计下粗体是唯一重量来源
+    expect(chipCss).toContain('font-weight: 700')
+    // ＋ 浮层按鼠标光标位置放置（2026-11-23 用户指定）：卡片左下角贴光标上方，
+    // 二级面板只随 bottom（left 恒贴卡右侧）；无事件（键盘开）回退默认锚点
+    expect(composer).toContain('@click.stop="togglePlusMenu($event)"')
+    expect(composer).toContain('function anchorFromCursor(')
+    expect(composer).toContain(':style="menuCardStyle"')
+    expect(composer).toContain(':style="menuPanelStyle"')
+    expect(composer).toContain('menuPos.value = null')
+    // placeholder 恒定（真 placeholder 落在 chips 右侧，无需动态置空）
+    expect(composer).toContain('placeholder="输入你的任务。"')
+    // hover 只换 ✕ 图标（用户 2026-11-23 指正：无 title 气泡、无旁注提示）
+    expect(composer).not.toContain('class="intents-hint"')
+    expect(composer).toContain('.hcc-intent:hover .ico { display: none }')
+    expect(composer).toContain('.hcc-intent:hover .x { display: block }')
+    // 点卡片选项后关闭 ＋ 菜单（用户 2026-11-23）：意图/技能/插件三个挂载路径一致，
+    // overlay 行上的摘除走裸 toggle*（菜单本来就关着，不受影响）
+    const toggleBody = composer.slice(
+      composer.indexOf('function toggleIntentChip('),
+      composer.indexOf('const activeIntents'))
+    expect(toggleBody).toContain('closePlusMenu()')
+    expect(composer).toContain('function pickSkillFromMenu(')
+    expect(composer).toContain('function pickPluginFromMenu(')
+    const pickSkillBody = composer.slice(
+      composer.indexOf('function pickSkillFromMenu('), composer.indexOf('function pickPluginFromMenu('))
+    expect(pickSkillBody).toContain('closePlusMenu()')
+    const pickPluginBody = composer.slice(
+      composer.indexOf('function pickPluginFromMenu('), composer.indexOf('function pluginSummary('))
+    expect(pickPluginBody).toContain('closePlusMenu()')
+    expect(composer).toContain('@click="pickSkillFromMenu(s.id)"')
+    expect(composer).toContain('@click="pickPluginFromMenu(p.id)"')
+    // 键盘摘除（2026-11-23 用户要求）：chip 聚焦后 Delete/Backspace 即摘，
+    // focus-visible 用强调色淡 glow（不硬描边）
+    expect(intentsBlock.match(/keydown\.delete\.prevent/g)?.length).toBe(4)
+    // 空草稿 Backspace/Delete 摘最右一枚 chip（2026-11-23 用户指定，标签输入惯例）：
+    // 有字时按键归文字，只在空草稿 + 挂了 chip 时接管；摘除序与显示序相反
+    const keydownBody = composer.slice(
+      composer.indexOf('function onKeydown('),
+      // onMounted 在组件里有多次挂载（505 行监听器 + 784 行启动），终点锚必须
+      // 从起点起搜，否则命中更早的出现、切片为空串
+      composer.indexOf('onMounted(() => {', composer.indexOf('function onKeydown(')))
+    expect(keydownBody).toContain("e.key === 'Backspace' || e.key === 'Delete'")
+    expect(keydownBody).toContain('!draft.value && hasInputChips.value')
+    expect(keydownBody).toContain('removeLastInputChip()')
+    const removeLastBody = composer.slice(
+      composer.indexOf('function removeLastInputChip('), composer.indexOf('function onKeydown('))
+    expect(removeLastBody).toContain('setSelectedExpert')
+    expect(removeLastBody).toContain("'goal', 'spec', 'plan'")
+    expect(composer).toContain('.hcc-intent:focus-visible')
+    expect(composer.indexOf('.hcc-intent:focus-visible')).toBeLessThan(
+      composer.indexOf('.hcc-intent:disabled'))
+    expect(composer.indexOf('.hcc-intent:focus-visible')).toBeGreaterThan(
+      composer.indexOf('.hcc-intent:hover .x'))
+    // 专家同规则（2026-11-23 用户补点）：chooseExpert 本就关闭菜单，守卫防回退
+    const chooseExpertBody = composer.slice(
+      composer.indexOf('function chooseExpert('), composer.indexOf('function togglePlugin('))
+    expect(chooseExpertBody).toContain('closePlusMenu()')
+    // 红线：不下发执行参数 —— 组件里不得出现模型侧工具名（服务端推导口径不动）
+    expect(composer).not.toContain('goal_propose')
+    expect(composer).not.toContain('plan_propose')
+    // 注入走 sendMessage 唯一通路：意图句由 intent-core 唯一事实源拼接，不新增字段
+    expect(homeCommand).toContain('buildIntentSuffix(activeIntents)')
+    expect(homeCommand).toContain("text + buildIntentSuffix(activeIntents)")
+    // 消费一次即清：清 intent 必须发生在 sendMessage 成功之后（失败时留给用户改主意）
+    const sendAt = homeCommand.indexOf('await sshAi.sendMessage(text + buildIntentSuffix')
+    const clearAt = homeCommand.indexOf('clearIntentPending()')
+    expect(sendAt).toBeGreaterThan(-1)
+    expect(clearAt).toBeGreaterThan(sendAt)
+    // 消息流 badge：用户消息从文本尾部推导（同源 intent-core），assistant 不显示
+    expect(messageItem).toContain('extractIntents(content.value)')
+    expect(messageItem).toContain("props.message.role === 'user'")
+    expect(messageItem).toContain('class="intent-badge"')
   })
 
   it('技能不显示条数数字（用户 2026-11-10 指定）', () => {
@@ -213,7 +371,7 @@ describe('附件一步直达（用户 2026-11-15 指定，取代旧「本地/远
 })
 
 describe('落点：一枚位置 + 一枚目录，工作树多一枚分支，共用一个浮层', () => {
-  it('kind 面是一个 select：三行落点 + 分隔线后的两条连接入口，都是纯文字行', () => {
+  it('kind 面是一个 select：三行落点 + 分隔线后的两条连接入口，行首带图标', () => {
     expect(composer).toContain("landingMenu === 'kind'")
     expect(composer).toContain('<span class="ol">本地</span>')
     expect(composer).toContain('<span class="ol">云端</span>')
@@ -227,13 +385,14 @@ describe('落点：一枚位置 + 一枚目录，工作树多一枚分支，共�
     expect(composer).toContain('云执行环境还没接入')
   })
 
-  it('kind 面是 select：不带图标列，也不写分组小标题', () => {
+  it('kind 面是 select：行首图标 + 右侧勾选，不写分组小标题', () => {
     // 只看 kind 面：从浮层容器切到 dir 面为止 —— chip 上的图标不在浮层里
     const kindPane = composer.slice(
       composer.indexOf('hcc-menu wide landing-menu'),
-      composer.indexOf("landingMenu === 'dir'"),
+      composer.indexOf("landingMenu === 'dir' && landing.kind !== 'ssh'"),
     )
-    expect(kindPane).not.toContain('<svg')
+    // 行首图标与 chip 同源（本地=显示器 / 工作树=分支 / SSH=终端），2026-11-23 补齐
+    expect(kindPane).toContain('<svg')
     // 组标题（已开的本地会话 / 换个目录 / 本机仓库 / git worktree 分支）全部退场
     expect(composer).not.toContain('>已开的本地会话<')
     expect(composer).not.toContain('>换个目录<')
@@ -241,11 +400,13 @@ describe('落点：一枚位置 + 一枚目录，工作树多一枚分支，共�
     expect(composer).not.toContain('>git worktree 分支<')
   })
 
-  it('目录面是项目选择器：一行一个打开过的目录 + 底部「不在项目中工作」', () => {
+  it('目录面是项目选择器：一行一个打开过的目录 + 底部「＋ 新建工作区」', () => {
     expect(composer).toContain('class="casc-search dir-search"')
     expect(composer).toContain('placeholder="搜索目录"')
     expect(composer).toContain('v-for="r in dirRows"')
-    expect(composer).toContain('不在项目中工作')
+    // 「不在项目中工作」已撤掉（2026-11-24 用户口径）：解绑动作为第二枚 chip 行首的 ×
+    expect(composer).not.toContain('title="以主目录为落点，不绑定任何文件夹"')
+    expect(composer).not.toContain('atHomeRoot')
     expect(composer).toContain('function chooseHomeChip')
     // 读不出目录的本地会话不进列表，也不再有「本地终端」这种无名行
     expect(composer).not.toContain('还没有本地会话')
@@ -253,6 +414,96 @@ describe('落点：一枚位置 + 一枚目录，工作树多一枚分支，共�
     // 打开目录面时清空上次的搜索词并接管焦点
     expect(composer).toContain('dirQuery.value = \'\'')
     expect(composer).toContain('dirSearchRef.value?.focus()')
+  })
+
+  it('第二枚 chip 默认显示文件夹图标，hover 才用 × 解绑（2026-11-24 用户口径）', () => {
+    expect(composer).toContain('class="hcc-dir-chip"')
+    expect(composer).toContain('v-if="dirChipClearable"')
+    expect(composer).toContain('@click.stop="chooseHomeChip"')
+    expect(composer).toContain("const dirChipClearable = computed(() => landing.kind === 'local' && !!landing.activeBoundDir)")
+    // 图标常驻（不再按绑定态切换），× 只在绑定后存在、且默认透明
+    expect(composer).toContain('class="dir-ic"')
+    expect(composer).not.toContain('v-if="!dirChipClearable"')
+    const chipCss = composer.slice(
+      composer.indexOf('.hcc-dir-chip {'),
+      composer.indexOf('.hcc-opt.landing-opt'),
+    )
+    // × 叠在图标槽位上（绝对定位），露出靠 hover / focus-within，且不占布局、不藏键盘可达性
+    expect(chipCss).toContain('position: absolute')
+    expect(chipCss).toContain('opacity: 0')
+    expect(chipCss).toContain('pointer-events: none')
+    expect(chipCss).toContain('.hcc-dir-chip:hover .dir-chip-x')
+    expect(chipCss).toContain('.hcc-dir-chip:focus-within .dir-chip-x')
+    expect(chipCss).toContain('opacity: 1; pointer-events: auto')
+    expect(chipCss).toContain('.hcc-dir-chip:hover .dir-chip .dir-ic')
+    // 旧的两枚按钮贴合成一颗 chip 的负外边距/补位 hack 已退场
+    expect(chipCss).not.toContain('margin-right: calc(-1 * var(--spacing-8))')
+    expect(chipCss).not.toContain('dir-chip-x + .dir-chip')
+    // 落点不铺底，灰底只是 hover 态
+    expect(chipCss).toContain('.hcc-dir-chip:hover .hcc-btn { background: transparent }')
+    expect(chipCss).not.toContain('color-mix')
+    expect(chipCss).not.toContain('var(--bg-elevated)')
+  })
+
+  it('点第二枚 chip 不晃：选中描边用 inset box-shadow，不加尺寸（2026-11-24 实测口径）', () => {
+    // Electron 无头探针实测：给 auto 尺寸的 span 加 1px border，chip 外框 +2px、整排与输入框上移 2px。
+    const chipCss = composer.slice(
+      composer.indexOf('.hcc-dir-chip {'),
+      composer.indexOf('.hcc-opt.landing-opt'),
+    )
+    expect(chipCss).toContain('.hcc-dir-chip.on { box-shadow: inset 0 0 0 1px rgba(var(--accent-primary-rgb), .4) }')
+    // 盒子本身不带 border（带 border 就意味着某个状态会多 2px），.on 也不再写 border 简写
+    expect(chipCss).not.toMatch(/\.hcc-dir-chip(?!\.on)[^{]*\{[^}]*\bborder:\s/)
+    expect(chipCss).not.toMatch(/\.hcc-dir-chip\.on\s*\{[^}]*\bborder:\s/)
+  })
+
+  it('次级面各挂自己 chip 的左缘，不再从整排 chip 左缘起开（2026-11-24 用户口径）', () => {
+    expect(composer).toContain('<span ref="dirChipRef" class="hcc-dir-chip"')
+    expect(composer).toContain('ref="branchChipRef"')
+    const script = composer.slice(
+      composer.indexOf('const dirChipRef = ref'),
+      composer.indexOf('function toggleLanding('),
+    )
+    // left 取各自 chip 的 offsetLeft：.hcc-landing 无定位，offsetParent 就是 .hcc-sel，与浮层同一个原点
+    expect(script).toContain('landingMenu.value === \'branch\'')
+    expect(script).toContain('branchChipRef.value?.offsetLeft')
+    expect(script).toContain('landingMenu.value === dirPane.value')
+    expect(script).toContain('dirChipRef.value?.offsetLeft')
+    expect(script).toContain(': undefined') // kind 面没有专属 chip，仍在整排 chip 左缘
+    expect(composer).toContain(':style="landingPaneStyle"')
+  })
+
+  it('分支面列表下方不再有分隔线（2026-11-24 用户口径）', () => {
+    const branchAt = composer.indexOf("v-else-if=\"landingMenu === 'branch'\"")
+    const branchPane = composer.slice(branchAt, composer.indexOf('</template>', branchAt))
+    expect(branchPane).not.toContain('hcc-rule')
+    // 「清理失效记录」仍是条件出现，只是不再带一条空线
+    expect(branchPane).toContain('v-if="hasPrunable"')
+  })
+
+  it('目录面内容左对齐：搜索行与列表行共用同一条左网格（2026-11-23 用户口径）', () => {
+    // 图 1 项目选择器密度：面板更宽、行高 32；.dir-pane 只在目录面挂上
+    expect(composer).toContain("'dir-pane': landingMenu === 'dir'")
+    const dirCss = composer.slice(
+      composer.indexOf('.hcc-sel.landing-sel .hcc-menu.wide.dir-pane'),
+      composer.indexOf('/* 落点 chip：'),
+    )
+    expect(dirCss).toContain('width: 288px')
+    expect(dirCss).toContain('min-height: 32px')
+    expect(dirCss).toContain('padding-left: var(--spacing-12)')
+    // 搜索行 -4 出血后内容原点落在浮层边上，左内边距 16 = 列表行的 4(浮层内边距) + 12；
+    // 图标后的文字间距与列表行同源（.casc-search = 8px）—— 搜索/列表各成一条竖线
+    const dirSearchCss = composer.slice(
+      composer.indexOf('.landing-menu .dir-search {'),
+      composer.indexOf('.dir-row-wrap'),
+    )
+    expect(dirSearchCss).toContain('padding: 6px var(--spacing-16) 9px')
+    expect(dirSearchCss).not.toContain('var(--spacing-20)')
+    const cascSearchCss = composer.slice(
+      composer.indexOf('.casc-search {'),
+      composer.indexOf('.casc-search:focus-within'),
+    )
+    expect(cascSearchCss).toContain('gap: var(--spacing-8)')
   })
 
   it('目录面只列自己的目录记录：不预读文件夹，记录可删', () => {
@@ -329,21 +580,29 @@ describe('落点：一枚位置 + 一枚目录，工作树多一枚分支，共�
     expect(entryBtn).toContain('M8 3v10M3 8h10')  // ＋ 图标
   })
 
-  it('SSH 连接配置 / 批量下发 / 管理服务器归**第一枚** chip（落点面）', () => {
+  it('落点面连接入口唯一：SSH 主机行与「管理服务器…」退场（2026-11-23 用户口径）', () => {
     const kindPane = composer.slice(
       composer.indexOf("landingMenu === 'kind'"),
       composer.indexOf("landingMenu === 'dir' && landing.kind !== 'ssh'"),
     )
-    // SSH 面列的是连接配置（不是已开的远程会话）：选中即建 AI 专属会话，与用户终端隔离
-    expect(kindPane).toContain('sshConnectionOptions')
-    expect(kindPane).toContain('chooseSshConn(o.id)')
+    // 连接 SSH… 是唯一连接入口（选主机进弹窗的「SSH 主机历史」）
+    expect(kindPane).toContain('<span class="ol">连接 SSH…</span>')
+    expect(kindPane).toContain('@click="openConnDialog"')
+    // 旧的两条冲突入口退场：已存主机行（192.168.150.40 等）与「管理服务器…」
+    expect(kindPane).not.toContain('sshConnectionOptions')
+    expect(kindPane).not.toContain('chooseSshConn(o.id)')
+    expect(kindPane).not.toContain('管理服务器…')
+    // 批量下发（归第一枚 chip）没被点名删，保留
     expect(kindPane).toContain('canBulkDispatch')
-    expect(kindPane).toContain('openRemoteManager')
+    // 全链死代码清除：函数与 emit  relay 不再留在任何一层
+    expect(composer).not.toContain('function chooseSshConn(')
+    expect(composer).not.toContain('function openRemoteManager(')
+    expect(composer).not.toContain("'remote-mgr': []")
 
     // 第二枚 chip（目录）的浮层里不许再出现主机清单 —— 2026-11-11 用户口径：
     // 点「目录」弹出一串主机（还带一行 user@host 勾选）不是他要的东西。
     const sshDirPane = composer.slice(
-      composer.indexOf("landingMenu === 'dir'"),
+      composer.indexOf("landingMenu === 'dir' && landing.kind !== 'ssh'"),
       composer.indexOf("landingMenu === 'repo'"),
     )
     expect(sshDirPane).not.toContain('chooseSshConn')
@@ -351,9 +610,24 @@ describe('落点：一枚位置 + 一枚目录，工作树多一枚分支，共�
     expect(sshDirPane).not.toContain('管理服务器…')
   })
 
+  it('连接 SSH 弹窗只留主机历史：手输地址框与并排连接按钮退场（2026-11-23）', () => {
+    // 图三的两个冲突元素：输入框（ssh user@example.com -A）+ 右侧「连接」按钮
+    expect(quickSsh).not.toContain('class="qs-addr"')
+    expect(quickSsh).not.toContain('ssh user@example.com')
+    expect(quickSsh).not.toContain('class="qs-go"')
+    expect(quickSsh).not.toContain('function submit(')
+    // 留下的是主机历史逐行连接 + 配置文件出口
+    expect(quickSsh).toContain('SSH 主机历史')
+    expect(quickSsh).toContain('@click="connectTo(c)"')
+    expect(quickSsh).toContain('打开 SSH 配置文件')
+    // 焦点管理契约不因删输入框而回退（modal-focus.guards 全仓清单仍覆盖）
+    expect(quickSsh).toContain('activate()')
+    expect(quickSsh).toContain('deactivate()')
+  })
+
   it('SSH 目录面是一份真的远端文件列表：选中目录才落成 cd', () => {
     const sshDirPane = composer.slice(
-      composer.indexOf("landingMenu === 'dir'"),
+      composer.indexOf("landingMenu === 'dir' && landing.kind !== 'ssh'"),
       composer.indexOf("landingMenu === 'repo'"),
     )
     // 复用通用远端选择器：列目录 + 同时列出文件（只读），用户要看到「这里有什么」
@@ -373,15 +647,29 @@ describe('落点：一枚位置 + 一枚目录，工作树多一枚分支，共�
     expect(composer).toContain('landing.loadWorktrees()')
   })
 
-  it('新建工作树（参考 Trae）：行内表单 + 自动建分支 + 创建即切落点', () => {
-    expect(composer).toContain('新建工作树…')
-    expect(composer).toContain('wtFormInputRef')
-    expect(composer).toContain('openWtForm')
-    expect(composer).toContain('submitWtForm')
-    expect(composer).toContain('landing.createWorktree(landing.activeRepoPath, name)')
-    // 创建成功才收菜单；失败原因留在 landing.error 可见
-    expect(composer).toContain('if (wt) {\n    wtFormOpen.value = false\n    landingMenu.value = \'\'\n  }')
-    expect(composer).toContain('wtFormOpen.value = false')
+  it('分支面不再有「新建工作树 / 刷新工作树」入口，行内表单整套退场（2026-11-24 用户口径）', () => {
+    expect(composer).not.toContain('新建工作树…')
+    expect(composer).not.toContain('刷新工作树')
+    expect(composer).not.toContain('wtFormOpen')
+    expect(composer).not.toContain('openWtForm')
+    expect(composer).not.toContain('wt-form')
+  })
+
+  it('分支面顶部不再有换仓库那一行：只剩工作树列表（2026-11-24 用户口径）', () => {
+    // 从模板面的 v-else-if 起切（chip 的 :aria-expanded 也含同一串，会切错起点）
+    const branchAt = composer.indexOf("v-else-if=\"landingMenu === 'branch'\"")
+    const branchPane = composer.slice(
+      branchAt,
+      composer.indexOf('</template>', branchAt),
+    )
+    expect(branchPane).not.toContain('toggleLanding(\'repo\')')
+    expect(branchPane).not.toContain('repoLabel')
+    expect(branchPane).not.toContain('class="arrow"')
+    // 全文件级：repoLabel 随之删除，不留悬空引用
+    expect(composer).not.toContain('repoLabel')
+    // 留下的仍必须是工作树列表本体
+    expect(branchPane).toContain('chooseWorktreeChip(w)')
+    expect(branchPane).toContain('hasPrunable')
   })
 
   it('清理失效记录只在出现失效工作树时露出（git worktree prune 不碰现存目录）', () => {
@@ -395,5 +683,19 @@ describe('落点：一枚位置 + 一枚目录，工作树多一枚分支，共�
     expect(composer).toContain('class="hcc-target"')
     expect(composer).toContain('disconnectTarget')
     expect(composer).not.toContain('showTargetMenu')
+  })
+
+  it('输入时框不变色：焦点提示只给键盘，鼠标输入靠光标', () => {
+    // 用户 2026-11-27 指定：输入的时候框不要变色。:focus-within 与 :focus-visible
+    // 对文本输入在鼠标点击时都命中（浏览器为 IME 故意如此，见 global.css 注），
+    // 无法区分输入来源。改由 useAppearance 的 data-input-mode 判定：
+    // 只在最后一次输入来自键盘时给卡面描边 + glow（WCAG 2.2 AA / DESIGN.md）。
+    expect(composer).not.toContain('.hcc:focus-within')
+    expect(composer).toContain(':root[data-input-mode="keyboard"] .hcc:has(.hcc-input:focus)')
+    // 输入来源由全局监听写入，组件不自己挂事件（避免每个 composer 一份监听）
+    expect(rawAppearance).toContain("addEventListener('keydown'")
+    expect(rawAppearance).toContain("addEventListener('pointerdown'")
+    expect(rawAppearance).toContain("root.dataset.inputMode = 'keyboard'")
+    expect(rawAppearance).toContain("root.dataset.inputMode = 'pointer'")
   })
 })

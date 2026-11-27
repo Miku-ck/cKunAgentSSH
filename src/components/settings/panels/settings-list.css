@@ -1,0 +1,65 @@
+/**
+ * 清单面板共享样式（技能 / 插件 / 专家）—— 三页同一种骨架：
+ *   摘要行（已启用 n / 总数 …… 刷新 / 新建）+ 一张卡里的行列表 + 行下可展开的详情区。
+ * 以 <style scoped src> 各自引入（理由同 settings-panel-base.css：.list / .lbl 这类
+ * 类名在别处另有含义，全局规则会按属性并集漏染）。
+ *
+ * 与折叠分组（settings-groups.css）的分工：那边是「一组设置项」，组头可折叠、带角标；
+ * 这边整页只有一张清单，再套一层可折叠的组头就是标题说两遍。
+ * 行内只有两级文字（名称 / 说明）+ 无边框的文字标签（.lbl），不叠描边胶囊。
+ * `.btn` / `.btn-sm` 等按钮样式见全局 styles/button.css，这里不声明按钮。
+ */
+
+/* 撑满面板正文：空状态靠它双向居中（min-height 而非 height，内容超长时照常滚动） */
+.list-body { flex: 1; min-height: 100%; display: flex; flex-direction: column; }
+
+/* ── 摘要行 ── */
+.list-bar { display: flex; align-items: center; gap: var(--spacing-8); margin-bottom: var(--spacing-10); flex-shrink: 0; }
+.list-count { margin-right: auto; font-size: 0.8462rem; color: var(--text-tertiary); }
+.list-acts { display: flex; align-items: center; gap: var(--spacing-4); }
+
+/* ── 行列表 ── */
+/* 卡底与同弹窗里的折叠组（.grp）同一枚 --bg-input，而不是卡片层的 --bg-elevated：
+   液态玻璃主题把设置窗本身的底改成了 --bg-elevated（global.css），卡再用它就与窗同色。 */
+.list { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-input); }
+.list-row { display: flex; align-items: center; gap: var(--spacing-12); padding: var(--spacing-10) var(--spacing-12); }
+.list-row:hover { background: var(--bg-hover); }
+.list-row + .list-row,
+.list-row + .row-detail,
+.row-detail + .list-row { border-top: 1px solid var(--border-subtle); }
+
+/* 停用只把文字降一档（走令牌，对比度仍有下限）：不用 opacity 整行压暗 ——
+   那会把说明文字压到读不出，开关与按钮也跟着变灰。 */
+.row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--spacing-2); }
+.row-title { display: flex; align-items: baseline; gap: var(--spacing-8); min-width: 0; }
+.row-name { font-size: 0.9615rem; font-weight: 600; color: var(--text-primary); }
+.list-row.off .row-name { font-weight: 500; color: var(--text-secondary); }
+.row-desc, .row-meta, .row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-desc { font-size: 0.8462rem; color: var(--text-secondary); }
+.list-row.off .row-desc, .list-row.off .row-meta { color: var(--text-tertiary); }
+.row-meta { font-size: 0.8077rem; color: var(--text-tertiary); }
+.mono { font-family: var(--font-mono); }
+
+.row-acts { display: flex; align-items: center; flex-shrink: 0; gap: var(--spacing-4); }
+/* 不可逆操作与常规操作之间的一根细线：删除不靠一排红字刷存在感 */
+.row-acts .sep { width: 1px; align-self: stretch; margin: 0 var(--spacing-4); background: var(--border-subtle); }
+
+/* 文字标签：来源 / 状态 / 版本号 */
+.lbl { font-size: 0.7692rem; line-height: 1.2; color: var(--text-tertiary); white-space: nowrap; }
+.lbl.ok { color: var(--status-success-text); }
+.lbl.warn { color: var(--status-warn-text); }
+.lbl.vio { color: var(--accent-purple); }
+
+/* ── 行下详情 ── */
+/* 详情区凹进卡面一档（卡 = --bg-input，详情 = 结构底 --bg-base） */
+.row-detail { padding: var(--spacing-10) var(--spacing-12) var(--spacing-12); background: var(--bg-base); }
+.detail-line { margin: 0 0 var(--spacing-8); font-size: 0.8462rem; line-height: 1.5; color: var(--text-secondary); }
+.detail-line .lbl { margin-right: var(--spacing-8); }
+
+/* ── 提示 / 空状态 ── */
+.list-msg { margin: 0 0 var(--spacing-8); font-size: 0.8846rem; line-height: 1.5; color: var(--text-secondary); }
+.list-msg.err { color: var(--status-error-text); }
+.list-empty {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: var(--spacing-24); font-size: 0.8846rem; color: var(--text-tertiary);
+}

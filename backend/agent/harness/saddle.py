@@ -12,6 +12,7 @@ Saddle — 马鞍
 from __future__ import annotations
 
 import base64
+import asyncio
 import re
 import shlex
 import time
@@ -314,47 +315,136 @@ class Saddle:
         # 1. 沙箱检查
         check = self.sandbox.validate(call, ctx)
         if not check.ok:
-            return ToolResult(success=False, error=check.reason), NoOpUndo(reason="sandbox_blocked")
+            from .contracts import ErrorType
+            return ToolResult(
+                success=False, error=check.reason,
+                error_kind=ErrorType.FORBIDDEN.value,
+            ), NoOpUndo(reason="sandbox_blocked")
 
-        # 2. 构建 Undo 包（执行前）+ 磁盘备份
-        undo = await self.undo_builder.build(call, ctx)
+        # 2. 写操作先落账，再允许任何执行副作用。
+        from .operation_ledger import READONLY_OPERATION_TOOLS
+        from .contracts import ErrorType
+        ledger = (ctx.metadata or {}).get("operation_ledger")
+        operation = None
+        operation_status = ""
+        if ledger is not None and call.name not in READONLY_OPERATION_TOOLS:
+            tool_instance = self.registry.get(call.name) if hasattr(self.registry, "get") else None
+            meta = getattr(tool_instance, "meta", None)
+            idempotent = bool(getattr(meta, "idempotent", False))
+            reversible = bool(getattr(meta, "reversible", False))
+            try:
+                operation = await ledger.prepare(
+                    call=call, ctx=ctx, idempotent=idempotent, reversible=reversible,
+                )
+            except Exception as e:
+                logger.error("操作账本登记失败，拒绝执行 %s: %s", call.name, e)
+                return ToolResult(
+                    success=False, error=f"操作账本不可用，工具未执行: {e}",
+                    error_kind=ErrorType.FATAL.value,
+                ), NoOpUndo(reason="ledger_unavailable")
+            if operation["status"] == "succeeded":
+                return ToolResult(
+                    success=True, output=operation.get("output", ""),
+                ), NoOpUndo(reason="operation_already_succeeded")
+            if operation["status"] != "prepared":
+                return ToolResult(
+                    success=False,
+                    error=f"操作 {operation['operation_id']} 已处于 {operation['status']}，拒绝自动重放",
+                    output=operation.get("output", ""),
+                    error_kind=ErrorType.FATAL.value,
+                ), NoOpUndo(reason="operation_requires_reconciliation")
+
+        # 3. 构建 Undo 包（执行前）+ 磁盘备份
+        try:
+            undo = await self.undo_builder.build(call, ctx)
+        except Exception:
+            if operation is not None:
+                await ledger.transition(operation, to_status="not_executed", error="执行前准备失败")
+            raise
         ctx.push_undo(undo)
 
-        # 3. 执行工具 — 从 RunContext 构造 ToolContext
-        tool_ctx = self._build_tool_context(ctx)
+        safe_point = (ctx.metadata or {}).get("safe_point")
+        if safe_point is not None:
+            try:
+                await safe_point.save(
+                    ctx, "before_tool", tool_call_id=call.id,
+                    operation_id=operation["operation_id"] if operation else "",
+                )
+            except Exception as e:
+                logger.error("工具执行前安全点写入失败，拒绝执行 %s: %s", call.name, e)
+                ctx.remove_undo(undo)
+                if operation is not None:
+                    await ledger.transition(operation, to_status="not_executed", error="安全点不可用")
+                return ToolResult(
+                    success=False, error=f"运行安全点不可用，工具未执行: {e}",
+                    error_kind=ErrorType.FATAL.value,
+                ), NoOpUndo(reason="safe_point_unavailable")
+
+        if operation is not None:
+            try:
+                started_ok = await ledger.transition(operation, to_status="executing")
+            except Exception as e:
+                ctx.remove_undo(undo)
+                logger.error("操作账本状态写入失败，拒绝执行 %s: %s", call.name, e)
+                return ToolResult(
+                    success=False, error=f"操作账本不可用，工具未执行: {e}",
+                    error_kind=ErrorType.FATAL.value,
+                ), NoOpUndo(reason="ledger_unavailable")
+            if not started_ok:
+                ctx.remove_undo(undo)
+                return ToolResult(
+                    success=False, error="操作账本版本冲突，工具未执行",
+                    error_kind=ErrorType.FATAL.value,
+                ), NoOpUndo(reason="ledger_version_conflict")
+            operation["status"] = "executing"
+            operation["version"] += 1
+
+        # 4. 执行工具 — 从 RunContext 构造 ToolContext
+        tool_ctx = self._build_tool_context(ctx, operation["operation_id"] if operation else "")
         start = time.time()
-        # H13 修复 C3：用 retry_with_backoff 包装 registry.execute，瞬时错误自动重试
-        # （重试判定同时覆盖「抛出异常」与「返回 ToolResult(success=False)」两种失败形态，
-        #  见 stirrups.retry_with_backoff —— registry.execute 会把工具异常吞成失败结果）
         from .stirrups import retry_with_backoff, ErrorClassifier
 
-        # 审查 MINOR 修复：仅对幂等工具重试。原实现对所有工具
-        # （shell_exec / spawn_subagent 等）统一重试 —
-        # 非幂等工具在"副作用已发生但结果丢失"的瞬时错误下重跑，会造成
-        # 命令双执行、子 Agent 双启动。非幂等工具只执行一次。
-        tool_instance = self.registry.get(call.name) if hasattr(self.registry, "get") else None
-        idempotent = bool(tool_instance is not None
-                          and getattr(tool_instance.meta, "idempotent", False))
-        if idempotent:
-            raw_result, retry_err = await retry_with_backoff(
-                func=lambda: self.registry.execute(call.name, call.args, tool_ctx),
-                classifier=ErrorClassifier(),
-                max_retries=2,
-                base_delay=0.5,
-            )
-        else:
-            try:
-                raw_result = await self.registry.execute(call.name, call.args, tool_ctx)
-                retry_err = None
-            except Exception as e:
-                raw_result = None
-                retry_err = str(e)
+        started = (ctx.metadata or {}).get("run_started_mono")
+        max_wall = getattr(ctx.config, "max_wall_clock_s", 0) or 0
+        deadline_mono = started + max_wall if started is not None and max_wall > 0 else None
+
+        if operation is None:
+            tool_instance = self.registry.get(call.name) if hasattr(self.registry, "get") else None
+            idempotent = bool(tool_instance is not None
+                              and getattr(tool_instance.meta, "idempotent", False))
+        raw_result = None
+        retry_err = None
+        try:
+            if idempotent:
+                raw_result, retry_err = await retry_with_backoff(
+                    func=lambda: self.registry.execute(call.name, call.args, tool_ctx),
+                    classifier=ErrorClassifier(),
+                    max_retries=2,
+                    base_delay=0.5,
+                    deadline_mono=deadline_mono,
+                )
+            else:
+                try:
+                    raw_result = await self.registry.execute(call.name, call.args, tool_ctx)
+                except Exception as e:
+                    retry_err = str(e)
+        except asyncio.CancelledError:
+            if operation is not None:
+                await ledger.transition(
+                    operation, to_status="unknown", error="工具执行被取消，副作用结果未知",
+                )
+            raise
+        except Exception as e:
+            raw_result = None
+            retry_err = str(e)
         if raw_result is None:
-            # 重试耗尽或非瞬时错误（FATAL/FORBIDDEN 立即返回）
+            # 重试耗尽 / 预算不足 / 非瞬时错误（FATAL/FORBIDDEN 立即返回）
+            err = retry_err or "工具执行失败（重试耗尽）"
             result = ToolResult(
                 success=False,
-                error=retry_err or "工具执行失败（重试耗尽）",
+                error=err,
                 priority="high",
+                error_kind=ErrorClassifier().classify_tool_error(err).value,
             )
         else:
             # 失败时自动提升优先级（仅当工具未主动声明时）
@@ -371,13 +461,49 @@ class Saddle:
                 duration_ms=0,
                 priority=priority,
                 pending_delivery=raw_result.pending_delivery,
+                error_kind=getattr(raw_result, "error_kind", None),
+                retryable=getattr(raw_result, "retryable", None),
             )
         result.duration_ms = int((time.time() - start) * 1000)
 
-        # 4. 失败时自动回滚
+        if operation is not None:
+            if result.pending_delivery:
+                operation_status = "awaiting_delivery"
+                result.pending_delivery = {
+                    **result.pending_delivery, "operation_id": operation["operation_id"],
+                }
+            elif result.success:
+                operation_status = "succeeded"
+            elif result.error_kind in {ErrorType.INVALID_ARGS.value, ErrorType.FORBIDDEN.value}:
+                operation_status = "failed"
+            else:
+                operation_status = "unknown"
+            try:
+                closed = await ledger.transition(
+                    operation,
+                    to_status=operation_status,
+                    output=result.output,
+                    error=result.error,
+                    duration_ms=result.duration_ms,
+                )
+            except Exception as e:
+                closed = False
+                logger.error("操作结果落账失败 (%s): %s", operation["operation_id"], e)
+            if not closed:
+                result.success = False
+                result.error = (
+                    "工具已返回结果，但操作账本闭合失败；副作用状态需人工对账"
+                    + (f": {result.error}" if result.error else "")
+                )
+                result.error_kind = ErrorType.FATAL.value
+                result.pending_delivery = None
+                operation_status = "unknown"
+
+        # 5. 失败时自动回滚。结果未知时不能盲目执行反向操作。
         # 可见终端模式：pending_delivery 非空表示命令尚未执行（等待前端写入可见终端），
         # 不应触发回滚（无副作用可撤销），交由 Driver 挂起等待。
-        if not result.success and not result.pending_delivery and auto_rollback:
+        if (not result.success and not result.pending_delivery and auto_rollback
+                and operation_status != "unknown"):
             try:
                 await undo.apply_reverse()
                 # 按身份移除自己的 undo，而不是 pop 栈顶 —— 只读工具并行段内，
@@ -399,12 +525,13 @@ class Saddle:
 
         return result, undo
 
-    def _build_tool_context(self, ctx: RunContext) -> Any:
+    def _build_tool_context(self, ctx: RunContext, operation_id: str = "") -> Any:
         """从 RunContext 构造 ToolContext（原 agent.tools.ToolContext）"""
         from agent.tools import ToolContext
         return ToolContext(
             conversation_id=ctx.conversation_id,
             agent_run_id=ctx.run_id,
+            operation_id=operation_id,
             ssh_session_id=ctx.ssh_session_id,
             # 可见终端模式 + 目标环境 — 透传给 shell_exec 决定是否交付到可见终端
             visible_terminal=getattr(ctx, "visible_terminal", False),

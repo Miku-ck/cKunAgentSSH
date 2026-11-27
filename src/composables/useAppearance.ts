@@ -14,6 +14,20 @@ import {
 // 修复：模块级标记，确保 darkMq 监听器只添加一次（多实例共享场景）
 let _systemThemeListenerAdded = false
 
+// 输入来源追踪：CSS 的 :focus-visible 对文本输入在鼠标点击时也命中（浏览器为
+// IME/键盘输入故意如此），区分不了「点击输入」与「Tab 聚焦」。这里记录最后一次
+// 输入方式写到 data-input-mode，让组件能给键盘焦点可见性而不打扰鼠标输入。
+let _inputModeListenerAdded = false
+
+function trackInputMode(root: HTMLElement) {
+  if (_inputModeListenerAdded) return
+  _inputModeListenerAdded = true
+  // 键盘按下（含 Tab / 方向键 / IME 候选）→ 键盘模式
+  window.addEventListener('keydown', () => root.dataset.inputMode = 'keyboard', { capture: true, passive: true })
+  // 指针按下 → 指针模式；capture 保证先于组件处理器执行
+  window.addEventListener('pointerdown', () => root.dataset.inputMode = 'pointer', { capture: true, passive: true })
+}
+
 // 渐变方向 → linear-gradient 角度
 const GRADIENT_ANGLE: Record<GradientDirection, string> = {
   tb: '180deg',
@@ -163,6 +177,7 @@ export function useAppearance() {
   }
 
   // ─ 初始化（立即应用一次） ──
+  trackInputMode(root)
   const a = store.settings.appearance
   applyTheme(a.theme)
   applyAccent(a.accent)

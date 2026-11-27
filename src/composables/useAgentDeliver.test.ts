@@ -318,8 +318,82 @@ describe('哨兵行匹配与捕获终态', () => {
     expect(call1?.[2]).toBe(false)
   })
 
-  it('行内含 ANSI 转义（CSI 着色 / OSC 标题）仍命中', async () => {
-    const marker = await deliverAuto('t-ansi')
+  it('插桩执行：逐段退出码回填，标记行不进输出，失败原因取自输出错误行', async () => {
+    const command = 'echo a; du -sh /nope 2>&1; echo b'
+    const segments = [
+      { command: 'echo a', intent: '输出小节标题', level: 'safe' },
+      { command: 'du -sh /nope 2>&1', intent: '统计磁盘占用', level: 'safe' },
+      { command: 'echo b', intent: '输出小节标题', level: 'safe' },
+    ]
+    useAgentDeliver().handleDeliver({
+      tool_id: 't-steps',
+      command,
+      session_id: 'sess-1',
+      requires_confirm: false,
+      runId: 'run-1',
+      segments,
+      instrumented:
+        "echo a ; printf '__AGENT_STEP__ __AGENT_MARKER__:1:%s\\n' \"$?\" ; "
+        + "du -sh /nope 2>&1 ; printf '__AGENT_STEP__ __AGENT_MARKER__:2:%s\\n' \"$?\" ; "
+        + "echo b ; printf '__AGENT_STEP__ __AGENT_MARKER__:3:%s\\n' \"$?\"",
+    })
+    const api = (globalThis as any).window.electronAPI as ReturnType<typeof installElectronApi>['api']
+    const calls = api.sshWrite.mock.calls
+    const written = calls[calls.length - 1]?.[1] as string
+    const m = /__AGENT_BEGIN__ ([a-z0-9]+)/.exec(written)?.[1]
+    expect(m).toBeTruthy()
+    // 占位符必须换成本次哨兵 marker，否则捕获端匹配不到标记行
+    expect(written).not.toContain('__AGENT_MARKER__')
+    await flushAsync()
+
+    ingestOutput(
+      'sess-1',
+      `__AGENT_BEGIN__ ${m}\r\n`
+      + 'a\r\n'
+      + `__AGENT_STEP__ ${m}:1:0\r\n`
+      + "du: cannot access '/nope': No such file or directory\r\n"
+      + `__AGENT_STEP__ ${m}:2:1\r\n`
+      + 'b\r\n'
+      + `__AGENT_STEP__ ${m}:3:0\r\n`
+      + `__AGENT_END__ ${m}:0\r\n`,
+    )
+    await flushAsync()
+
+    const d = deliveryOf('t-steps')
+    // 标记行被剔除，只留真实输出
+    expect(d?.output).toBe("a\ndu: cannot access '/nope': No such file or directory\nb")
+    expect(d?.segments?.map(s => s.exit_code)).toEqual([0, 1, 0])
+    expect(d?.failure_reason).toContain('No such file or directory')
+    // 整体退出码取最后一段（shell 语义），但失败段仍被记录
+    expect(d?.exit_code).toBe(0)
+  })
+
+  it('未插桩的交付不回填逐段退出码（不撒谎：未知就是未知）', async () => {
+    useAgentDeliver().handleDeliver({
+      tool_id: 't-nostep',
+      command: 'cd /tmp && ls',
+      session_id: 'sess-1',
+      requires_confirm: false,
+      runId: 'run-1',
+      segments: [
+        { command: 'cd /tmp', intent: '执行系统命令', level: 'safe' },
+        { command: 'ls', intent: '列出目录内容', level: 'safe' },
+      ],
+    })
+    const api = (globalThis as any).window.electronAPI as ReturnType<typeof installElectronApi>['api']
+    const calls = api.sshWrite.mock.calls
+    const written = calls[calls.length - 1]?.[1] as string
+    const m = /__AGENT_BEGIN__ ([a-z0-9]+)/.exec(written)?.[1]
+    await flushAsync()
+    ingestOutput('sess-1', `__AGENT_BEGIN__ ${m}\r\nx\r\n__AGENT_END__ ${m}:0\r\n`)
+    await flushAsync()
+    const d = deliveryOf('t-nostep')
+    expect(d?.exit_code).toBe(0)
+    expect(d?.segments?.every(s => s.exit_code === undefined)).toBe(true)
+    expect(d?.failure_reason).toBeUndefined()
+  })
+
+  it('行内含 ANSI 转义（CSI 着色 / OSC 标题）仍命中', async () => {    const marker = await deliverAuto('t-ansi')
     // OSC 标题序列 + 带色提示符粘连 BEGIN（走 endsWith），CSI 包裹的哨兵行
     ingestOutput(
       'sess-1',

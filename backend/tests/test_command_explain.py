@@ -264,6 +264,7 @@ def test_target_from_reason_without_parens():
 
 # ── 复合命令拆解层（explain_compound）────────────────────────────────────────
 from agent.harness.command_explain import (  # noqa: E402
+    build_instrumented_command,
     explain_compound,
     intent_for_segment,
     split_compound_command,
@@ -336,3 +337,81 @@ def test_compound_mixed_risk_flags_segment_index():
 def test_compound_empty_command_returns_not_compound():
     assert explain_compound("").compound is False
     assert explain_compound("   ").compound is False
+
+
+# ── 拆段边界：管道 / 反斜杠 / 续行（截图事故回归）────────────────────────────
+
+
+def test_split_keeps_escaped_semicolon():
+    """find -exec 的 \\; 是终止符，不是链的边界 —— 切掉就留下裸反斜杠的残命令"""
+    cmd = "echo a; find /tmp -maxdepth 1 -exec du -sb {} \\; ; echo b"
+    assert split_compound_command(cmd) == [
+        "echo a", "find /tmp -maxdepth 1 -exec du -sb {} \\;", "echo b"]
+
+
+def test_split_keeps_pipe_inside_segment():
+    """单个 | 两侧是同一条命令：拆开会出现 '2>/dev/null | sort' 这种无头残段"""
+    cmd = 'echo "==="; du -sh /tmp 2>/dev/null | sort -rh; echo "=== 合计 ==="'
+    parts = split_compound_command(cmd)
+    assert parts[1] == "du -sh /tmp 2>/dev/null | sort -rh"
+    assert all(not p.startswith("2>/dev/null") for p in parts)
+
+
+def test_split_keeps_line_continuation():
+    """\\ + 换行是续行：段内管道不能被拆成独立步骤"""
+    cmd = "echo a; du -sk /tmp 2>/dev/null \\\n  | awk '{s+=$1}'; echo done"
+    parts = split_compound_command(cmd)
+    assert parts[1].startswith("du -sk /tmp 2>/dev/null")
+    assert parts[1].rstrip().endswith("'")
+    assert "| awk" in parts[1]
+    assert len(parts) == 3
+
+
+def test_split_respects_comment():
+    """注释里的 ; 不是边界"""
+    assert split_compound_command("ls # a; b\n; echo end") == ["ls # a; b", "echo end"]
+
+
+# ── 逐段退出码插桩 ───────────────────────────────────────────────────────────
+
+
+def test_instrument_simple_semicolon_chain():
+    script = build_instrumented_command("echo a; false; du -sh /tmp")
+    assert script
+    for idx in (1, 2, 3):
+        assert f"__AGENT_STEP__ __AGENT_MARKER__:{idx}:%s" in script
+    # 原命令片段必须原样保留（含引号与管道）
+    assert 'echo a' in script and script.count('"$?"') == 3
+
+
+def test_instrument_keeps_find_terminator():
+    script = build_instrumented_command("find /tmp -exec du -sb {} \\; ; echo ok")
+    assert script
+    assert "find /tmp -exec du -sb {} \\;" in script
+
+
+def test_instrument_skips_conditional_chain():
+    """&& / || 是条件执行：插入标记会改变控制流，必须回退整条执行"""
+    assert build_instrumented_command("cd /tmp && ls") == ""
+    assert build_instrumented_command("false || echo x") == ""
+
+
+def test_instrument_skips_shell_keyword_bodies():
+    assert build_instrumented_command("for i in 1 2; do echo $i; done") == ""
+    assert build_instrumented_command("if true; then echo x; fi") == ""
+
+
+def test_instrument_skips_heredoc_comment_and_substitution():
+    assert build_instrumented_command("cat <<EOF\nx\nEOF; ls") == ""
+    assert build_instrumented_command("ls # note; x\necho y") == ""
+    assert build_instrumented_command("echo $(a; b); ls") == ""
+
+
+def test_instrument_single_command_is_empty():
+    assert build_instrumented_command("ls -la") == ""
+
+
+def test_explain_compound_carries_instrumented_script():
+    res = explain_compound("echo a; false; echo b")
+    assert res.instrumented.startswith("echo a ; printf")
+    assert "__AGENT_MARKER__" in res.instrumented

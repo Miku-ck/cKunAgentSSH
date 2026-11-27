@@ -7,24 +7,6 @@
           <button class="qs-x" aria-label="关闭" @click="close">✕</button>
         </div>
 
-        <!-- 一行地址吃掉主机 / 端口 / 用户：粘贴 `ssh user@host -A` 就能连，
-             不用先在四个字段里拆开再拼回去。 -->
-        <div class="qs-addr">
-          <input
-            ref="addrRef"
-            v-model="addr"
-            type="text"
-            spellcheck="false"
-            autocomplete="off"
-            placeholder="例如：ssh user@example.com -A"
-            aria-label="SSH 地址"
-            @keydown.enter.prevent="submit"
-          >
-          <button class="qs-go" :class="{ ready }" :disabled="!ready || !!busy" @click="submit">
-            {{ busy ? '连接中…' : '连接' }}
-          </button>
-        </div>
-
         <div class="qs-hist-head">
           <span>SSH 主机历史</span>
           <button title="重新读取主机列表" aria-label="刷新主机列表" @click="refresh">
@@ -84,42 +66,11 @@ const emit = defineEmits<{ close: [] }>()
 const ssh = useSSHStore()
 const landing = useExecTargetStore()
 const toast = useToastStore()
-const addr = ref('')
 const busy = ref(false)
 const loading = ref(false)
 
 const dialogRef = ref<HTMLElement | null>(null)
-const addrRef = ref<HTMLInputElement | null>(null)
 const { activate, deactivate } = useModalFocusTrap(dialogRef)
-
-/**
- * 解析一行 SSH 地址。接受三种写法：
- *   `ssh user@example.com -A`   ssh 命令原文（带不带 -A / -p 都行）
- *   `user@host:2222`            短写
- *   `host`                      只有主机，用户回退 root
- * 端口默认 22。解析不出主机就返回 null —— 连接按钮据此保持禁用，不猜。
- */
-function parseAddr(raw: string): { user: string; host: string; port: number } | null {
-  let s = raw.trim()
-  if (!s) return null
-  s = s.replace(/^ssh\s+/i, '')
-  let port = 22
-  const pFlag = s.match(/(?:^|\s)-p\s*(\d+)/)
-  if (pFlag) port = Number(pFlag[1])
-  const core = s.split(/\s+/).find(t => !t.startsWith('-')) || ''
-  const shortPort = core.match(/^(.*):(\d+)$/)
-  const body = shortPort ? shortPort[1] : core
-  if (shortPort) port = Number(shortPort[2])
-  if (!body) return null
-  const at = body.lastIndexOf('@')
-  const user = at >= 0 ? body.slice(0, at) : 'root'
-  const host = at >= 0 ? body.slice(at + 1) : body
-  if (!host) return null
-  return { user, host, port }
-}
-
-const parsed = computed(() => parseAddr(addr.value))
-const ready = computed(() => !!parsed.value)
 
 /** 常连的在上面：lastConnectedAt 没有记录时按名称排，避免顺序随机跳动。 */
 const history = computed(() =>
@@ -154,40 +105,6 @@ async function connectTo(c: SSHConnection): Promise<void> {
   }
 }
 
-/** 手输地址：命中已存连接就用它的凭据，否则按 ssh-agent 试连（密钥就绪时可直接进）。 */
-async function submit(): Promise<void> {
-  const p = parsed.value
-  if (!p || busy.value) return
-  const hit = ssh.connections.find(c => c.host === p.host && c.port === p.port && c.username === p.user)
-  if (hit) {
-    await connectTo(hit)
-    return
-  }
-  const sameHost = ssh.connections.find(c => c.host === p.host && c.port === p.port)
-  if (sameHost) {
-    await connectTo(sameHost)
-    return
-  }
-  busy.value = true
-  try {
-    const id = await ssh.addConnection({
-      name: `${p.user}@${p.host}`,
-      host: p.host,
-      port: p.port,
-      username: p.user,
-      authType: 'agent',
-      environment: 'test',
-    })
-    const saved = ssh.connections.find(c => c.id === id)
-    if (saved) await connectTo(saved)
-    else emit('close')
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : String(e))
-  } finally {
-    busy.value = false
-  }
-}
-
 function openConfig(): void {
   void window.electronAPI?.sshOpenConfig()
 }
@@ -203,7 +120,6 @@ function onKeydown(e: KeyboardEvent): void {
 onMounted(() => {
   activate()
   window.addEventListener('keydown', onKeydown)
-  addrRef.value?.focus()
   if (!ssh.connections.length) void refresh()
 })
 onUnmounted(() => {
@@ -265,57 +181,6 @@ onUnmounted(() => {
 .qs-x:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
-}
-
-.qs-addr {
-  display: flex;
-  gap: 6px;
-  padding: 0 16px 4px;
-}
-
-.qs-addr input {
-  flex: 1;
-  min-width: 0;
-  height: 30px;
-  padding: 0 9px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-input);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 0.9231rem;
-  outline: none;
-}
-
-.qs-addr input:focus {
-  border-color: var(--accent-primary);
-}
-
-.qs-addr input::placeholder {
-  color: var(--text-tertiary);
-  font-family: inherit;
-}
-
-.qs-go {
-  height: 30px;
-  padding: 0 13px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-tertiary);
-  font-size: 0.9231rem;
-  cursor: not-allowed;
-}
-
-.qs-go.ready {
-  border-color: var(--accent-primary);
-  background: var(--accent-primary);
-  color: var(--accent-on);
-  cursor: pointer;
-}
-
-.qs-go.ready:hover:not(:disabled) {
-  filter: brightness(1.08);
 }
 
 .qs-hist-head {

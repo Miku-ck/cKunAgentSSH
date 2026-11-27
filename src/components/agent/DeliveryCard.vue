@@ -9,7 +9,7 @@
  * 「多条独立命令」，用户据此拍板就失真了。原样展示，靠空格与分隔符自然折行。
  */
 import { computed, ref } from 'vue'
-import type { ToolDelivery } from '@/composables/useAgentDeliver'
+import type { DeliverySegment, ToolDelivery } from '@/composables/useAgentDeliver'
 import { useAgentDeliver } from '@/composables/useAgentDeliver'
 import { useAgentStore } from '@/stores/agent'
 import { useSSHStore } from '@/stores/ssh'
@@ -22,9 +22,6 @@ const props = defineProps<{
 const agentStore = useAgentStore()
 const sshStore = useSSHStore()
 const deliverApi = useAgentDeliver()
-
-/** 说明来源标签：LLM 生成的解释必须标注「仅供参考」，静态后果表不必 */
-const explainIsLlm = computed(() => props.delivery.explain_source === 'llm')
 
 const targetLabel = computed(() =>
   approvalTargetLabel(
@@ -53,7 +50,7 @@ const riskBadge = computed(() => {
       ? { text: '只读 · 不改动任何文件', cls: 'dc-risk-safe' }
       : { text: '免审批 · 可能写入磁盘', cls: 'dc-risk-warn' }
   }
-  if (level === 'dangerous') return { text: '含非只读操作 · 需谨慎核对', cls: 'dc-risk-bad' }
+  if (level === 'dangerous') return { text: '含写入操作', cls: 'dc-risk-bad' }
   if (level === 'hardline') return { text: '高危操作', cls: 'dc-risk-bad' }
   return null
 })
@@ -62,6 +59,46 @@ const riskBadge = computed(() => {
 const segments = computed(() =>
   (props.delivery.segments ?? []).length > 1 ? props.delivery.segments! : [])
 
+/** 只有真正拿到非零退出码的段才算失败：红色不再表示「非只读风险」 */
+function isStepFailed(seg: DeliverySegment): boolean {
+  return typeof seg.exit_code === 'number' && seg.exit_code !== 0
+}
+const failedStepCount = computed(() => segments.value.filter(isStepFailed).length)
+const firstFailedStep = computed(() => {
+  const i = segments.value.findIndex(isStepFailed)
+  if (i < 0) return null
+  return { index: i + 1, code: segments.value[i].exit_code as number }
+})
+
+/** 退出码列只在真的拿到逐段状态后出现：待确认的卡不必挂一列全是「—」 */
+const showExitColumn = computed(() =>
+  segments.value.some(s => typeof s.exit_code === 'number'))
+
+/** 执行结果是否已经产生（回传失败 / 执行失败 / 超时的卡要展示退出码与原因） */
+const hasResult = computed(() =>
+  props.delivery.exit_code !== null
+  || !!props.delivery.output
+  || props.delivery.status === 'failed'
+  || props.delivery.status === 'timeout')
+const resultFailed = computed(() =>
+  (props.delivery.exit_code !== null && props.delivery.exit_code !== 0)
+  || failedStepCount.value > 0)
+const exitLabel = computed(() =>
+  props.delivery.exit_code === null ? '未知' : String(props.delivery.exit_code))
+/** 结果摘要：优先点名失败段（整条退出码在 ; 链里只等于最后一段，容易误读为成功） */
+const resultSummary = computed(() => {
+  const head = firstFailedStep.value
+    ? (failedStepCount.value > 1
+      ? `第 ${firstFailedStep.value.index} 步起失败，共 ${failedStepCount.value} 步（首段退出码 ${firstFailedStep.value.code}）`
+      : `第 ${firstFailedStep.value.index} 步退出码 ${firstFailedStep.value.code}`)
+    : `退出码 ${exitLabel.value}`
+  return props.delivery.failure_reason ? `${head}：${props.delivery.failure_reason}` : head
+})
+
+/** 查看详情：卡内展开（完整原文 + 完整输出），不引入额外弹窗层级 */
+const detailsOpen = ref(false)
+const hasDetails = computed(() => !!props.delivery.command || !!props.delivery.output)
+
 /**
  * Q-F6 恢复入口：结果回传自动重试耗尽（postFailed）的交付在这里给出
  * 「重发结果」按钮（调 useAgentDeliver.retryPostResult）。没有它，回传彻底
@@ -69,7 +106,12 @@ const segments = computed(() =>
  * 这类交付已是终态：确认/拒绝按钮换下，卡头文案也不再是「待确认」。
  */
 const isPostFailed = computed(() => props.delivery.postFailed === true)
-const cardTitle = computed(() => (isPostFailed.value ? '结果回传失败' : '命令待确认'))
+const cardTitle = computed(() => {
+  if (isPostFailed.value) return '结果回传失败'
+  if (props.delivery.status === 'failed') return '执行失败'
+  if (props.delivery.status === 'timeout') return '执行超时'
+  return '需要你确认'
+})
 const resending = ref(false)
 
 async function resendResult(): Promise<void> {
@@ -109,41 +151,71 @@ async function resendResult(): Promise<void> {
       <div v-if="delivery.explain" class="ap-keyval">
         <span class="ap-k">这条命令会做什么</span>
         <span class="ap-v">{{ delivery.explain }}</span>
-        <span v-if="explainIsLlm" class="ap-tag-inline">AI 生成，仅供参考</span>
       </div>
-      <!-- 复合命令：逐段「意图 + 命令片段」列表，完整原文收进折叠区 ——
-           用户先读人话结论，需要核对原文再展开；非只读段标红并显示后果说明 -->
-      <div v-if="segments.length" class="seg-list">
-        <div
-          v-for="(seg, i) in segments"
-          :key="i"
-          class="seg-row"
-          :class="{ 'seg-row-risky': seg.level !== 'safe' }"
-        >
-          <span class="seg-idx" :class="{ 'seg-idx-bad': seg.level !== 'safe' }">{{ i + 1 }}</span>
-          <div class="seg-main">
-            <span class="seg-intent">{{ seg.intent }}</span>
-            <code class="seg-cmd" :title="seg.command">{{ seg.command }}</code>
-            <span v-if="seg.note" class="seg-note">{{ seg.note }}</span>
-          </div>
-        </div>
+      <!-- 执行结果：退出码 + 失败原因。红色只属于真的失败，不再拿风险等级冒充失败 -->
+      <div v-if="hasResult" class="ap-keyval">
+        <span class="ap-k">执行结果</span>
+        <span class="ap-v" :class="{ 'dc-err': resultFailed }">{{ resultSummary }}</span>
       </div>
-      <details v-if="segments.length" class="seg-raw">
-        <summary>完整命令原文（{{ segments.length }} 段，点击展开核对）</summary>
-        <pre class="delivery-code">{{ delivery.command }}</pre>
-      </details>
-      <pre v-if="!segments.length" class="delivery-code">{{ delivery.command }}</pre>
+      <!-- 复合命令：逐段「意图 + 命令片段 + 退出码」表格。
+           非只读段用琥珀色底色提示核对（不是失败）；只有退出码非零的段才标红。 -->
+      <div v-if="segments.length" class="seg-table-wrap">
+        <table class="seg-table">
+          <thead>
+            <tr>
+              <th class="seg-col-idx">#</th>
+              <th class="seg-col-intent">意图</th>
+              <th class="seg-col-cmd">命令</th>
+              <th v-if="showExitColumn" class="seg-col-result">退出码</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="(seg, i) in segments"
+              :key="i"
+              :class="{
+                'seg-row-risky': seg.level !== 'safe',
+                'seg-row-failed': isStepFailed(seg),
+              }"
+            >
+              <td class="seg-idx" :class="{ 'seg-idx-bad': isStepFailed(seg) }">{{ i + 1 }}</td>
+              <td class="seg-intent">{{ seg.intent }}</td>
+              <td class="seg-cmd">{{ seg.command }}</td>
+              <td class="seg-result" v-if="showExitColumn" :class="{ 'seg-result-bad': isStepFailed(seg) }">
+                {{ seg.exit_code === undefined || seg.exit_code === null ? '—' : seg.exit_code }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <!-- 查看详情：完整命令原文 + 完整输出（含失败段前后的全部回显） -->
+      <div v-if="detailsOpen" class="dc-details">
+        <div class="dc-details-k">完整命令</div>
+        <pre class="delivery-code">{{ delivery.command || '（无）' }}</pre>
+        <div class="dc-details-k">执行输出</div>
+        <pre class="delivery-code dc-output">{{ delivery.output || '（无输出）' }}</pre>
+      </div>
+      <pre v-if="!segments.length && !detailsOpen" class="delivery-code">{{ delivery.command }}</pre>
     </div>
     <div class="ap-actions">
+      <!-- 回传失败是终态：只保留「查看详情」+「重发结果」，不混入确认/拒绝等结算按钮。
+           详情必须无条件可点 —— 回传失败恰恰是最需要看原始输出的时候。 -->
       <template v-if="isPostFailed">
+        <button class="ap-btn ap-btn-always" @click="detailsOpen = !detailsOpen">
+          {{ detailsOpen ? '收起详情' : '查看详情' }}
+        </button>
         <button class="ap-btn ap-btn-grant" :disabled="resending" @click="resendResult">
           {{ resending ? '重发中…' : '重发结果' }}
         </button>
       </template>
-      <template v-else>
+      <template v-else-if="delivery.status === 'pending_confirm'">
         <button class="ap-btn ap-btn-grant" @click="agentStore.confirmDeliver(delivery.tool_id)">确认执行</button>
         <button class="ap-btn ap-btn-deny" @click="agentStore.rejectDeliver(delivery.tool_id)">拒绝执行</button>
       </template>
+      <!-- 执行失败/超时的结果卡：只看结论，不给结算 -->
+      <button v-else-if="hasDetails" class="ap-btn ap-btn-always" @click="detailsOpen = !detailsOpen">
+        {{ detailsOpen ? '收起详情' : '查看详情' }}
+      </button>
     </div>
   </div>
 </template>
@@ -202,54 +274,61 @@ async function resendResult(): Promise<void> {
 .dc-risk-bad { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
 .dc-risk-warn { color: var(--status-warn-text); background: color-mix(in srgb, var(--status-warn-text) 12%, transparent); }
 
-/* 逐段拆解列表：序号 + 意图 + 命令片段。行背景斑马纹与终端表同思路。 */
-.seg-list {
+/* 逐段拆解表：# / 意图 / 命令 / 退出码 四列。命令列折行不截断；
+   非只读段用琥珀底色提示核对（风险不是失败），失败段（退出码非零）才是红色。 */
+.seg-table-wrap {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
-.seg-row {
-  display: flex;
-  gap: var(--spacing-8);
-  padding: var(--spacing-6) var(--spacing-10);
-  align-items: flex-start;
+.seg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9231rem;
 }
-.seg-row + .seg-row { border-top: 1px solid var(--border-subtle); }
-.seg-row-risky { background: color-mix(in srgb, var(--accent-red) 6%, transparent); }
-.seg-idx {
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--bg-hover);
-  color: var(--text-tertiary);
+.seg-table th {
+  text-align: left;
+  font-weight: 500;
   font-size: 0.7692rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-top: 1px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  padding: var(--spacing-6) var(--spacing-10);
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border-subtle);
 }
-.seg-idx-bad { color: var(--accent-red); }
-.seg-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.seg-intent { font-size: 0.9231rem; color: var(--text-primary); line-height: 1.45; }
+.seg-table td {
+  padding: var(--spacing-6) var(--spacing-10);
+  vertical-align: top;
+  border-top: 1px solid var(--border-subtle);
+}
+.seg-table tbody tr:first-child td { border-top: none; }
+.seg-col-idx { width: 28px; }
+.seg-col-result { width: 52px; white-space: nowrap; }
+.seg-row-risky td { background: color-mix(in srgb, var(--status-warn-text) 6%, transparent); }
+.seg-row-failed td { background: color-mix(in srgb, var(--accent-red) 8%, transparent); }
+.seg-idx { color: var(--text-tertiary); }
+.seg-idx-bad { color: var(--accent-red); font-weight: 600; }
+.seg-intent { color: var(--text-primary); line-height: 1.45; }
 .seg-cmd {
   font-family: var(--font-mono);
   font-size: 0.8077rem;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.seg-row-risky .seg-idx { color: var(--status-warn-text); }
+.seg-row-failed .seg-idx,
+.seg-row-failed .seg-cmd { color: var(--accent-red); }
+.seg-result {
+  font-family: var(--font-mono);
+  font-size: 0.8077rem;
   color: var(--text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.seg-note { font-size: 0.8462rem; color: var(--accent-red); line-height: 1.45; }
+.seg-result-bad { color: var(--accent-red); font-weight: 600; }
 
-/* 完整原文折叠区：summary 用次要色调，展开后的 pre 复用 delivery-code */
-.seg-raw { margin-top: var(--spacing-8); }
-.seg-raw summary {
-  font-size: 0.8462rem;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  user-select: none;
-  margin-bottom: var(--spacing-6);
-}
-.seg-raw summary:hover { color: var(--text-secondary); }
+/* 查看详情：完整命令 + 完整输出（各自限高滚动，长回显不顶爆卡片） */
+.dc-details { display: flex; flex-direction: column; gap: var(--spacing-4); }
+.dc-details-k { font-size: 0.7692rem; color: var(--text-tertiary); }
+.dc-output { max-height: 200px; }
 </style>

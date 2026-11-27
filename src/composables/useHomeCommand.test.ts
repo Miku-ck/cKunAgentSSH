@@ -35,6 +35,9 @@ const setPendingAttachments = vi.fn((list: typeof pendingAttachments.value) => {
 const sharedDraft = ref('')
 const setSharedDraft = vi.fn((text: string) => { sharedDraft.value = text })
 const isRunning = ref(false)
+/** 意图待批档：composable 发送前会读它拼后缀，mock 必须同形否则读出 undefined */
+const intentPending = ref<Record<string, boolean>>({ plan: false, spec: false, goal: false })
+const clearIntentPending = vi.fn(() => { intentPending.value = { plan: false, spec: false, goal: false } })
 const info = vi.fn()
 const error = vi.fn()
 
@@ -52,6 +55,8 @@ vi.mock('@/stores/ssh-ai', () => ({
     get selectedSkillIds() { return selectedSkillIds.value },
     get pendingAttachments() { return pendingAttachments.value },
     get uploadingAttachments() { return uploadingAttachments.value },
+    get intentPending() { return intentPending.value },
+    clearIntentPending,
   }),
 }))
 vi.mock('@/stores/agent', () => ({
@@ -69,6 +74,7 @@ describe('useHomeCommand', () => {
     uploadAttachments.mockClear()
     setSelectedSkillIds.mockClear()
     setPendingAttachments.mockClear()
+    clearIntentPending.mockClear()
     info.mockClear()
     error.mockClear()
     approvalMode.value = 'normal'
@@ -78,6 +84,7 @@ describe('useHomeCommand', () => {
     sharedDraft.value = ''
     setSharedDraft.mockClear()
     isRunning.value = false
+    intentPending.value = { plan: false, spec: false, goal: false }
   })
 
   it('技能是随消息的一次性附加：发出去之后清空，下一条不静默复用', async () => {

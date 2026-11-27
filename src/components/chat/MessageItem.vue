@@ -15,6 +15,26 @@
         :is-last="isLast"
         :awaiting-user="awaitingUser"
       />
+      <!-- 意图 badge（2026-11-23 按用户截图）：用户消息携带的意图声明标记。
+           从消息文本尾部推导（intent-core 唯一事实源），不改消息模型与持久化；
+           用户自己打出同样的话也显示 —— 语义上他确实提出了同样的请求。 -->
+      <span v-if="intentBadges.length" class="intent-badges">
+        <span
+          v-for="k in intentBadges"
+          :key="k"
+          class="intent-badge"
+          :title="INTENT_SENTENCES[k]"
+        >
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" width="12" height="12" aria-hidden="true">
+            <path v-if="k === 'plan'" d="M3 4h10M3 8h10M3 12h6" />
+            <path v-else-if="k === 'spec'" d="M3 2.5h10v11H3zM5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
+            <!-- 刻意不用 template 标签包分支：?raw 守卫按首个内层闭合标签截取模板 -->
+            <circle v-else-if="k === 'goal'" cx="8" cy="8" r="5.5" />
+            <circle v-if="k === 'goal'" cx="8" cy="8" r="2" />
+          </svg>
+          {{ k === 'goal' ? 'Goal' : k === 'plan' ? 'Plan' : 'Spec' }}
+        </span>
+      </span>
     </div>
 
     <div v-if="content || hasTraceAction" class="message-actions">
@@ -40,6 +60,7 @@ import ThinkingBlock from './ThinkingBlock.vue'
 import MessageContentRenderer from './MessageContentRenderer.vue'
 import { useToastStore } from '@/stores/toast'
 import type { BaseMessage } from '@/types/chat'
+import { INTENT_SENTENCES, extractIntents } from '@/utils/intent-core'
 
 const toast = useToastStore()
 
@@ -56,6 +77,9 @@ const emit = defineEmits<{ 'open-trace': [runId: string] }>()
 const content = computed(() => props.message.streamingContent || props.message.content || '')
 const reasoning = computed(() => props.message.streamingReasoning || props.message.reasoning || '')
 const duration = computed(() => props.message.duration)
+/** 用户消息携带的意图标记：从文本尾部推导（发送时拼接与推导同源 intent-core）。 */
+const intentBadges = computed(() =>
+  props.message.role === 'user' ? extractIntents(content.value) : [])
 // 非流式时不传 defaultOpen，让 ThinkingBlock 回退到 settings.chat.thinkingKeepExpanded（默认折叠）
 const thinkingDefaultOpen = computed(() => {
   if (props.isStreaming && props.isLast) return true
@@ -123,6 +147,24 @@ function openTrace() {
   background: transparent;
   color: var(--text-primary);
   padding-left: 0;
+}
+
+/* 意图 badge（2026-11-23 按用户截图）：绿色图标 + 文字，跟在用户消息文本后。
+   绿用 --accent-green 独立语义色（不占 accent-primary 的 --accent-text 管制）。 */
+.intent-badges {
+  display: inline-flex;
+  gap: var(--spacing-8);
+  margin-left: var(--spacing-8);
+  vertical-align: baseline;
+}
+.intent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent-green);
+  font-size: 0.9231rem;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .message-actions {

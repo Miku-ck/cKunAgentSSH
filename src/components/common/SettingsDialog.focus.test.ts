@@ -36,4 +36,17 @@ describe('M-2 设置弹窗焦点', () => {
     expect(src).toMatch(/e\.key !== 'Tab'/)
     expect(src).toMatch(/aria-modal="true"/)
   })
+
+  it('磨砂弹窗不做 scale 过渡（transform 每帧重算 backdrop-filter 会抖）', () => {
+    // 用户 2026-11-27「不要抖动」：液态玻璃弹窗带 backdrop-filter，
+    // transform: scale(0.97↔1) 动画强制合成层重算磨砂，表现为整窗抖/内容糊。
+    expect(src).not.toMatch(/\.settings-dialog\s*\{[^}]*transform:\s*scale/)
+    expect(src).not.toContain('transform: scale(0.97)')
+    expect(src).toMatch(/\.settings-fade-enter-active[\s\S]{0,120}transition:\s*opacity/)
+  })
+
+  it('右栏不重复补 padding（面板自身已有 padding-right）', () => {
+    const block = src.match(/\.settings-content\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(block).toMatch(/padding:\s*var\(--padding\)\s+0\s+var\(--padding\)\s+var\(--padding\)/)
+  })
 })

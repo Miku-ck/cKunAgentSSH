@@ -1,45 +1,50 @@
 <template>
   <div class="panel">
     <header class="panel-header">
-      <h3>专家管理 <InfoTip text="运行策略配置包：收窄模型、工具、技能、权限、迭代与记忆，不新增可执行能力。技能 = 怎么做（过程知识）；专家 = 以什么策略跑（配置）；插件 = 能做什么（新工具，必须单独授权）。工具集与技能集留空表示继承现状，填 [] 表示显式全禁。" /></h3>
+      <h3>专家管理 <InfoTip text="运行策略配置包：收窄模型、工具、技能、权限、迭代与记忆，不新增可执行能力。技能 = 怎么做；专家 = 以什么策略跑；插件 = 能做什么（需单独授权）。内置「通用运维」全继承，选中它等同于不选专家；自定义专家只能收紧，不能放宽安全边界。" /></h3>
     </header>
 
     <div class="panel-body">
-      <section class="grp">
-        <button class="grp-head" @click="openList = !openList">
-          <span class="grp-caret" :class="{ open: openList }">▸</span>
-          <span class="grp-title">专家库</span>
-          <InfoTip :focusable="false" text="内置「通用运维」全继承，选中它等同于不选专家。自定义专家只能收紧，不能放宽安全边界。" />
-          <span class="grp-badge">{{ store.experts.length }} 个</span>
-        </button>
-        <div v-show="openList" class="grp-body">
-          <div class="grp-tools">
-            <button class="link-btn" :disabled="store.loading" @click="load">{{ store.loading ? '加载中…' : '刷新' }}</button>
-            <button class="link-btn" @click="openEditor(null)">新建专家</button>
+      <div class="list-body">
+        <div class="list-bar">
+          <span class="list-count">{{ store.loading && !store.experts.length ? '加载中…' : `共 ${store.experts.length} 个` }}</span>
+          <div class="list-acts">
+            <button type="button" class="btn btn-sm btn-ghost" :disabled="store.loading" @click="load">刷新</button>
+            <button type="button" class="btn btn-sm btn-new" @click="openEditor(null)">新建专家</button>
           </div>
-          <p v-if="store.error" class="hint err">{{ store.error }}</p>
+        </div>
+        <p v-if="store.error" class="list-msg err">{{ store.error }}</p>
+        <div v-if="store.experts.length" class="list">
           <div
             v-for="e in store.experts"
             :key="e.id"
-            class="tool-info expert-row"
+            class="list-row"
             :class="{ off: !e.enabled }"
           >
-            <span class="expert-name">
-              {{ e.name }}
-              <span class="flag" :class="e.is_builtin ? 'ok' : ''">{{ e.is_builtin ? '内置' : `r${e.revision}` }}</span>
-              <span v-if="!e.enabled" class="flag vio">已停用</span>
-            </span>
-            <span class="expert-desc" :title="e.description || ''">{{ e.description || e.slug }}</span>
-            <div class="expert-actions">
-              <button class="btn btn-sm" :disabled="!!e.is_builtin" @click="openEditor(e)">编辑</button>
-              <button class="btn btn-sm" @click="onDuplicate(e)">复制</button>
-              <button class="btn btn-sm" :disabled="!!e.is_builtin" @click="onToggle(e)">{{ e.enabled ? '停用' : '启用' }}</button>
-              <button class="btn btn-danger btn-sm" :disabled="!!e.is_builtin" @click="onDelete(e)">删除</button>
+            <div class="row-main">
+              <div class="row-title">
+                <span class="row-name">{{ e.name }}</span>
+                <span class="lbl" :class="{ ok: e.is_builtin }">{{ e.is_builtin ? '内置' : `r${e.revision}` }}</span>
+                <span v-if="!e.enabled" class="lbl">已停用</span>
+              </div>
+              <span class="row-desc" :title="e.description || ''">{{ e.description || e.slug }}</span>
+            </div>
+            <!-- 内置专家只收紧不放宽，改不了也删不了：不摆三枚灰按钮，给「复制」一条出路 -->
+            <div class="row-acts">
+              <template v-if="!e.is_builtin">
+                <button type="button" class="btn btn-sm btn-ghost" @click="openEditor(e)">编辑</button>
+                <button type="button" class="btn btn-sm btn-ghost" @click="onToggle(e)">{{ e.enabled ? '停用' : '启用' }}</button>
+              </template>
+              <button type="button" class="btn btn-sm" @click="onDuplicate(e)">复制</button>
+              <template v-if="!e.is_builtin">
+                <span class="sep" />
+                <button type="button" class="btn btn-sm btn-danger" @click="onDelete(e)">删除</button>
+              </template>
             </div>
           </div>
-          <p v-if="!store.experts.length" class="hint muted">还没有专家</p>
         </div>
-      </section>
+        <div v-else-if="!store.error" class="list-empty">{{ store.loading ? '正在加载…' : '还没有专家' }}</div>
+      </div>
     </div>
 
     <Teleport to="body">
@@ -108,7 +113,7 @@
                 <span>插件集（JSON 数组）</span>
                 <input v-model="form.plugin_ids" type="text" placeholder="[] = 不授予任何插件" />
               </label>
-              <p v-if="formError" class="hint err">{{ formError }}</p>
+              <p v-if="formError" class="ex-err" role="alert">{{ formError }}</p>
             </div>
             <footer class="ex-foot">
               <button type="button" class="btn" @click="closeEditor">取消</button>
@@ -141,7 +146,6 @@ import { useModalFocusTrap } from '../../../composables/useModalFocusTrap'
 const store = useExpertsStore()
 const { confirm } = useConfirm()
 
-const openList = ref(true)
 const editorOpen = ref(false)
 const editing = ref<Expert | null>(null)
 const saving = ref(false)
@@ -288,27 +292,8 @@ async function onDelete(expert: Expert) {
 </script>
 
 <style scoped src="./settings-panel-base.css"></style>
-<style scoped src="./settings-groups.css"></style>
+<style scoped src="./settings-list.css"></style>
 <style scoped>
-.expert-row {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  padding: var(--spacing-8) 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.expert-row.off { opacity: 0.6; }
-.expert-name { font-weight: 600; color: var(--text-primary); }
-.expert-desc {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-secondary);
-}
-.expert-actions { display: flex; gap: var(--spacing-4); }
-
 .ex-overlay {
   position: fixed;
   inset: 0;
@@ -348,6 +333,7 @@ async function onDelete(expert: Expert) {
 .ex-field { display: flex; flex-direction: column; gap: var(--spacing-4); }
 .ex-field > span { color: var(--text-secondary); }
 .ex-field small { color: var(--text-tertiary); }
+.ex-err { margin: 0; font-size: 0.8846rem; line-height: 1.5; color: var(--status-error-text); }
 .ex-field input,
 .ex-field textarea,
 .ex-field select {

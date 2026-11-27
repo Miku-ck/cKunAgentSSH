@@ -29,7 +29,7 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 - 在主题块里改尺寸令牌（`--titlebar-h` 等属版面）。
 - 抽屉式交互（本项目偏好居中弹窗）。历史记录已改为居中弹窗（`HomeHistoryDialog`），不再保留任何抽屉例外。
 - 空状态里重复头部已有的主操作按钮；列表容器与空状态拆成两个同级空壳 div（会平分 `flex:1` 把居中顶偏）。
-- 装饰性图标：标题、卡片头、空态、菜单项、带文字的按钮都不配图标；**图标只留给三种情况** ——
+- 装饰性图标：标题、卡片头、空态、菜单项、带文字的按钮都不配图标（例外：执行落点菜单 kind 面行首图标、目录面的文件夹/＋ 行首图标，与落点 chip 同源，见 `HomeComposer.vue`）；**图标只留给三种情况** ——
   ① 纯图标控件（关闭/刷新/删除/密码可见性等，必须带 `title`/`aria-label`）；② 标签页的功能图标
   （终端显示器、Docker 鲸鱼、GitHub Octocat、SFTP 文件夹，窄屏隐藏文字时靠它识别）；
   ③ 状态指示（展开/折叠与下拉的箭头、文件类型、传输方向、命令补全种类）。
@@ -61,15 +61,16 @@ cKunAgentSSH 前端（`src/`）的视觉 / 布局 / 交互 / 组件约定。**�
 
 ## 主题系统
 
-枚举 `Theme`（[appearance-tokens.ts](src/utils/appearance-tokens.ts)）：`dark`（默认，移除 `data-theme`）· `light` · `system`（运行时解析 dark/light）· `blue-screen` · `forest` · `mint` · `bee` · `coral` · `atelier`（手记）。
+枚举 `Theme`（[appearance-tokens.ts](src/utils/appearance-tokens.ts)）：`dark`（默认，移除 `data-theme`）· `light` · `system`（运行时解析 dark/light）· `blue-screen` · `forest` · `mint` · `bee` · `coral` · `atelier`（手记）· `liquid`（液态玻璃·浅色仿真）。
 强调色 `Accent`：`blue/purple/green/orange/white/forest/mint/bee/coral/verm`，hex 表 = `ACCENT_MAP`。
 
-- 2026-10 删除了「玻璃/晶白」（glass / glass-light）两档材质主题：持久化的旧键值由 `asEnum` 闸门回落 `dark`（由 settings.test.ts 钉住），折射层与主题块已从 global.css / variables.css 移除；历史设计文档已随 docs/ 退役。
+- 玻璃族只保留 `liquid` 一档。2026-10 删除「玻璃/晶白」（glass / glass-light）两档；2026-11 短暂登记的深空玻璃 `glass` 亦已删除。`glass` / `glass-light` 都是退役旧键，持久化的该值由 `asEnum` 闸门回落 `dark`（由 settings.test.ts 钉住）。旧版历史设计文档已随 docs/ 退役。
+- 2026-11 `liquid`（液态玻璃·浅色仿真）：浅底三色光斑 + 半透白面板（白基底 α≤0.35，再高就把光斑洗成白卡）+ 墨线描边；`backdrop-filter` 强度走 `--liquid-blur` / `--liquid-saturate`，**仅作用于 `global.css` 的模态浮层白名单**（终端/表格/命令卡等实时刷新区零 blur）。动态机制（指针高光 / 弹性激发 / 明暗翻转 / 阴影增减 / Scroll Edge 溶解）由 `useLiquidGlass` 以事件委托驱动，不改任何组件模板，只标记浮层类 `.liquid-glass`；切走主题即卸监听。这是 CSS/JS 行为近似，**不含 lensing 真折射**（Web 无对应 API，本项目 GPU 全禁），不要当作 Apple Liquid Glass 还原。
 
 - 应用：根元素 `data-theme="<theme>"`；强调色由 `applyAccent()` 内联写 `--accent-primary/-rgb/--accent-on`。
 - `--accent-on` 由 `contrastOnAccent()` 按 WCAG 相对亮度算（<3:1 换深字）。
 - 动效开关 `[data-animation="false"]` + `prefers-reduced-motion` 已全局兜底——**新动效无需自己处理**。
-- **新增主题**：`Theme` 加成员 → `variables.css` 加 `[data-theme="x"]` 块（覆盖背景/边框/文字/终端底/专用底；浅色系处理对比度与语义色转浅档）→ 需要色板入口则登记 `AppearancePanel`。不动任何组件。
+- **新增主题**：`Theme` 加成员 → `variables.css` 加 `[data-theme="x"]` 块（覆盖背景/边框/文字/终端底/专用底；浅色系处理对比度与语义色转浅档）→ 补齐五处穷举表：`settings.ts` 的 `THEMES`、`AppearancePanel.vue` 的 `themeLabels`、`monaco-setup.ts` 的 `THEME_MAP`、`useTerminalConfig.ts` 的 `TERMINAL_THEMES`、`use-terminal-config.test.ts` 的 `TERMINAL_BG`（漏一处 typecheck 必红）；`settings.test.ts` 里点名旧键的回落断言若与新主题同名，需同步改。不动任何组件。
 
 ---
 
@@ -93,6 +94,7 @@ App.vue (flex column, 100vh)
 - 历史记录弹窗：`width: min(560px, 100vw - 48px)`、`max-height: min(640px, 100vh - 96px)`，居中；overlay 读 `--scrim`（随主题染色）+ `blur(2px)`，`z-index:2000`。
 - 浮层投影：一律 `var(--shadow-lg)`；控件级微投影用 `--shadow-sm`，组件里不另写 px 阴影。同一个弹窗家族里投影深浅不一，比“投影略轻”更难解释。
 - 圆角：一根刻度走到底 —— `--radius-xs/sm/md/lg/xl` = 2/4/6/8/10px（手记 1/2/3/4/5px），完全圆头用 `--radius-pill`。圆形（头像/指示灯）直接写 `50%`：它表达形状而非档位，不算溢出令牌。档位少一档才叫系统：旧代码里的 1/2/3/5/7/9/10/12px 已按最近一档收口（默认主题下每处变化 ≤1px，唯一例外是 12px 收到 xl）。守卫 `styles/radius.guards.test.ts` 现在拦任何 `border-radius: <n>px`；要新档先加令牌再改，别在组件里就地发明数值。
+- 执行落点浮层（首页 Composer 两枚 chip 的 select）：无边框（与卡面同色浮起 + `--shadow-lg`），不带动效。kind 面 224px / 行高 28；目录面按「项目选择器」密度 288px / 行高 32，搜索行与列表行共用同一条左网格（左对齐），行首图标 + 一行字 + 右侧勾选/箭头（见 `HomeComposer.vue`）。第二枚 chip 在本地已绑定目录时行首是一枚 ×（解绑回主目录，接替已撤掉的「不在项目中工作」行），与目录名、caret 贴成一颗 chip；不铺底（图 2 的灰底是 hover 态）。目录面（含工作树模式的仓库面）挂**第二枚 chip 的左缘**，不再从整排 chip 的左缘起开（2026-11-24）。
 - 键盘焦点：全局 `:focus-visible` 给 2px 主色描边。滑块 `input[type="range"]` 与 `role="switch"` 另有一条 `!important` 底线 —— 它们的 `outline: none` 权重高于全局伪类，底线只为保证 Tab 到时看得见焦点。文本输入框不套这条：`:focus-visible` 对文本输入在鼠标点击时同样命中（IME/键盘输入），描边会盖掉组件自己的边框 + 淡泛光焦点。弹窗的 Tab 环形与「关闭后焦点还给触发器」走 [useModalFocusTrap.ts](src/composables/useModalFocusTrap.ts)（`activate()` / `deactivate()`）：容器带 `tabindex="-1"`，初始焦点位置靠 `initialFocus` 选择器。Esc 不在这份共享件里 —— 各弹窗的 Esc 优先级不同（编辑器要先问「未保存的更改」），自己管。弹窗叠层（编辑器上再压一个确认框）时，下层用 `suspend()` 让位、上层关掉后 `resume()`：两层都挂 window 监听的话，一次 Tab 会被两份环形各拦一次，焦点互相踢。
 
 ---
@@ -104,7 +106,8 @@ App.vue (flex column, 100vh)
 状态：hover `--bg-hover` / active `--bg-active` / disabled `opacity:.45`。**语义只用字色 + alpha 描边，禁止实心 CTA。**
 
 **设置面板** [settings-panel-base.css](src/components/settings/panels/settings-panel-base.css)（`<style scoped src>` 引入）：`.panel` / `.panel-header`(h3 14/600 + `.panel-desc` 12 次要) / `.panel-body`(右 padding 4px) · `.setting-select`(28px) · `.retry-btn`。
-**折叠分组** [settings-groups.css](src/components/settings/panels/settings-groups.css)：`.grp` / `.grp-head` / `.grp-caret`(展开转 90°) / `.grp-body` · `.hint`(`.err`/`.muted`) · `.link-btn` · `.flag`(`.ok`/`.vio`)。
+**折叠分组** [settings-groups.css](src/components/settings/panels/settings-groups.css)（AgentPanel 专用）：`.grp` / `.grp-head` / `.grp-caret`(展开转 90°) / `.grp-body` · `.hint`(`.err`/`.muted`) · `.link-btn` · `.flag`(`.ok`/`.vio`)。
+**清单面板** [settings-list.css](src/components/settings/panels/settings-list.css)（技能 / 插件 / 专家三页共用）：`.list-body` / `.list-bar`(`.list-count` + `.list-acts`) / `.list` > `.list-row`(`.row-main` > `.row-title` + `.row-desc`/`.row-meta`；`.row-acts`，`.sep` 隔开删除) / `.row-detail` · `.lbl`(`.ok`/`.warn`/`.vio`，无边框文字标签) · `.list-msg` / `.list-empty`。整页单清单不再套可折叠组头；行内只两级文字，标签不画胶囊。
 
 **审批/权限卡** [approval-card.css](src/styles/approval-card.css)（`.ap-*`）：`.ap-card`(`--bg-elevated` + `--card-warn-border` + 10px) · `.ap-perm` 权限变体 · `.ap-code`(mono + `--accent-cyan`) · `.ap-risk.*` / `.ap-env.*` 徽章 · `.ap-actions` + `.ap-btn-{grant,always,session,deny}`（语义色是卡片独立的绿/青/灰，不随强调色）。宿主布局留 scoped，覆盖用「宿主类 + .ap-*」复合选择器。
 

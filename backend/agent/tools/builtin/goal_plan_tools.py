@@ -170,7 +170,7 @@ class PlanProposeTool(BaseTool):
         return ToolResult(True, (
             f"计划已提交（{len(items)} 步），状态：等待用户批准。\n"
             "批准前请只做只读调研；批准后按步骤推进，每步用 step_transition 更新状态，"
-            "完成时必须附带证据（evidence）。"
+            "完成时必须附带证据（evidence），并注明本步推进了哪条成功标准。"
         ))
 
 
@@ -182,6 +182,8 @@ class StepTransitionTool(BaseTool):
         "更新当前会话活动计划中某一步骤的状态。合法转移：pending→in_progress、"
         "pending→skipped、in_progress→completed（必须带 evidence 完成证据，如命令回显要点）、"
         "in_progress→blocked（必须带 blocked_reason 受阻原因）、blocked→in_progress。"
+        "completed 的 evidence 须注明本步推进了哪条成功标准（引用目标里标准原文的要点），"
+        "让每步完成都能对照目标验收，而不是做完才统一对账。"
         "completed / skipped 是终态，不可再改。step_id 来自系统提示中注入的当前计划步骤列表。"
     )
     parameters = {

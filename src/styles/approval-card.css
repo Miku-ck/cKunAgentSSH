@@ -7,7 +7,7 @@
  * 把 CSS 再抄一份进组件，就是第二处开始漂移的地方（改了一处、另一处的按钮配色
  * 悄悄变掉）。
  *
- * 只放"卡"用得上的：卡骨架、key/value 行、徽章、参数折叠、动作按钮、说明条。
+ * 只放"卡"用得上的：卡骨架、key/value 行、徽章、写入预览、动作按钮。
  * 各宿主自己的布局（折叠队列 / 意图卡 / 交付卡…）仍留在各自 scoped 里，需要覆盖
  * 全局值时用「宿主类 + .ap-*」这类复合选择器，不要在本文件里给令牌写回落值
  * —— 见 variables.test.ts 的裸引用守卫。
@@ -17,7 +17,7 @@
  */
 
 /* ── 卡骨架 ── */
-/* 卡是有界外壳：头部、动作栏、说明条常驻，只有 .ap-body 滚动。
+/* 卡是有界外壳：头部、动作栏常驻，只有 .ap-body 滚动。
    复合命令的逐段拆解曾把整卡撑出审批区限高，确认/拒绝被裁到可视区外。 */
 .ap-card {
   background: var(--bg-elevated);
@@ -78,7 +78,6 @@
   font-size: 0.8846rem;
 }
 .ap-code-normal { color: var(--accent-cyan); font-style: italic; }
-.ap-tag-inline { font-size: 0.8077rem; color: var(--text-tertiary); margin-left: var(--spacing-2); }
 
 /* ── 写入/编辑预览：授权绑路径，不绑内容 ── */
 .ap-write { margin-bottom: var(--spacing-8); }
@@ -101,47 +100,6 @@
 }
 .ap-diff-old { border-left: 2px solid var(--danger-text); }
 .ap-diff-new { border-left: 2px solid var(--status-success-text); }
-.ap-preview-note { font-size: 0.8077rem; color: var(--text-tertiary); margin-bottom: var(--spacing-4); }
-.ap-write-note { font-size: 0.8462rem; color: var(--status-warn-text); line-height: 1.5; }
-
-/* ── 参数折叠块 ── */
-.ap-args {
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-input);
-  margin: var(--spacing-4) 0 var(--spacing-8);
-}
-.ap-args summary {
-  cursor: pointer;
-  list-style: none;
-  padding: 5px var(--spacing-10);
-  color: var(--text-tertiary);
-  font-size: 0.8462rem;
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-6);
-}
-.ap-args summary::-webkit-details-marker { display: none; }
-.ap-args summary::before { content: "+"; }
-.ap-args[open] summary::before { content: "−"; }
-/* 折叠区里的英文判定原文：它是排查线索，字号和颜色都比正文低一档，
-   但与 .ap-args pre 同宽（12px）—— 同一块内容左边缘必须对齐 */
-.ap-tech-line {
-  padding: 0 var(--spacing-12) var(--spacing-8);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.8462rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.ap-args pre {
-  padding: 0 var(--spacing-12) 9px;
-  color: var(--text-secondary);
-  font-size: 0.8077rem;
-  white-space: pre-wrap;
-  overflow-x: auto;
-}
 
 /* ── 权限卡：配色与徽章 ── */
 .ap-perm { background: var(--bg-elevated); border-color: var(--card-perm-border); }
@@ -165,16 +123,6 @@
   color: var(--danger-text);
   padding: var(--spacing-2) 9px;
   border-radius: var(--radius-pill);
-}
-.ap-prod-warn {
-  font-size: 0.8846rem;
-  color: var(--danger-text);
-  background: var(--danger-bg);
-  border: 1px solid var(--danger-border);
-  border-radius: var(--radius-lg);
-  padding: 7px 11px;
-  margin-bottom: 9px;
-  line-height: 1.5;
 }
 
 /* ── 动作区与按钮 ──
@@ -206,14 +154,6 @@
 .ap-btn-session:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-cyan) 12%, transparent); }
 .ap-btn-deny { margin-left: auto; color: var(--text-primary); border-color: var(--border-default); }
 .ap-btn-deny:hover:not(:disabled) { border-color: var(--danger-text); color: var(--danger-text); background: color-mix(in srgb, var(--danger-text) 8%, transparent); }
-.ap-hint {
-  font-size: 0.8846rem;
-  color: var(--text-secondary);
-  border-top: 1px dashed var(--border-default);
-  padding: var(--spacing-8) 13px var(--spacing-10);
-  line-height: 1.6;
-  flex: none;
-}
 
 /* ── 图标按钮（忽略 / 上一项 / 下一项） ── */
 .ap-icon-btn {

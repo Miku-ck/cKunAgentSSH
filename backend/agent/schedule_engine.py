@@ -653,14 +653,14 @@ class ScheduleEngine:
             if ssh_session_id:
                 try:
                     await bridge.disconnect_ssh(ssh_session_id)
-                    logger.info(
-                        "schedule=%s 已关闭会话 %s", sched["id"], ssh_session_id
-                    )
+                    logger.info("schedule=%s 已关闭会话 %s", sched["id"], ssh_session_id)
                 except Exception as e:
                     logger.warning(
                         "schedule=%s 关闭会话 %s 失败: %s",
                         sched["id"], ssh_session_id, e,
                     )
+        from agent.run_cleanup import cleanup_terminal_safe_point
+        await asyncio.to_thread(cleanup_terminal_safe_point, run_id, done_state or "failed")
         return done_content, error_msg, done_state, resolution.host
 
     @staticmethod

@@ -428,9 +428,9 @@ describe('settings 脏 localStorage 校验（全键）', () => {
     expect(ok.settings.appearance.themeGradientDirection).toBe('lr')
   })
 
-  it('玻璃两档已删除：持久化的 glass / glass-light 脏值回落 dark，不再被白名单放行', async () => {
-    // 2026-10 删除「玻璃/晶白」两档主题后，`asEnum` 遇到不认识的值回落 'dark'；
-    // 旧键绝不能重新出现在 THEMES 白名单里，否则删掉的主题会被静默复活。
+  it('退役玻璃键 glass / glass-light 持久化值回落 dark', async () => {
+    // 2026-10 删除两档玻璃、2026-11 删除深空玻璃 glass，只保留 liquid。
+    // asEnum 遇到不认识的值回落 'dark'；旧键绝不能重新出现在 THEMES 白名单里。
     for (const theme of ['glass', 'glass-light'] as const) {
       const s = await storeWithSaved({ appearance: { theme } })
       expect(s.settings.appearance.theme).toBe('dark')

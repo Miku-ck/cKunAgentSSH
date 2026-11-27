@@ -1,6 +1,6 @@
 """运维专家建议谓词守卫：触发/不触发边界 + 只读运维覆盖。
 
-关键词级规则（复用变更动词表 + 运维名词小词表），不是新分类器。
+关键词级规则（复用运维动作小词表 + 运维名词小词表），不是新分类器。
 证伪：让失败路径抛异常 → 调用方静默 no-op 守卫红（见路由侧）。
 """
 import pytest
@@ -25,6 +25,16 @@ def test_selected_expert_suppresses():
 
 def test_conversation_suppresses():
     assert not should_suggest_ops("你好", expert_selected=False, is_conversation=True)
+
+
+@pytest.mark.parametrize("task", [
+    "清理临时垃圾",
+    "删除这个文件",
+    "提交代码",
+    "安装 Python 依赖",
+])
+def test_generic_change_does_not_trigger_ops_suggestion(task):
+    assert not should_suggest_ops(task, expert_selected=False, is_conversation=False)
 
 
 @pytest.mark.parametrize("task", ["写一首诗", "帮我写周报", "翻译这段英文", ""])
@@ -78,7 +88,7 @@ def test_route_emits_suggestion_for_ops_task():
         "type": "expert_suggestion",
         "slug": ops["slug"],
         "name": ops["name"],
-        "reason": "检测到运维任务，建议切到运维",
+        "reason": "这是运维类任务",
         "task": task,
         "run_id": "test-run",
     }

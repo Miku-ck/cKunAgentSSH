@@ -67,6 +67,8 @@ const THEME_MAP: Record<Exclude<AppTheme, 'system'>, MonacoThemeName> = {
   coral: 'ckun-coral',
   // 手记是浅底，编辑器不必再造一套色板 —— 复用 ckun-light 的浅底深字
   atelier: 'ckun-light',
+  // 液态玻璃是浅底，编辑器复用浅色色板；主题性格由界面令牌承担，不另造编辑器色板
+  liquid: 'ckun-light',
 }
 
 function resolveMonacoThemeName(theme: AppTheme): MonacoThemeName {

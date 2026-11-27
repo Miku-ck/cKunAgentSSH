@@ -301,6 +301,9 @@ class SSEAdapter:
             result["segments"] = payload.get("segments", [])
             result["risk"] = payload.get("risk", "")
             result["task"] = payload.get("task", "")
+            # 逐段退出码插桩脚本（含占位符）：前端据此拿每段真实 $?；
+            # 空串 = 不可插桩（&&/|| 链、循环体、heredoc），按原命令执行
+            result["instrumented"] = payload.get("instrumented", "")
         elif kind == "clarification_needed":
             result["tool"] = payload.get("tool", "")
             result["tool_call_id"] = payload.get("tool_call_id", "")

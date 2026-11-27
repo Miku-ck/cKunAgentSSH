@@ -27,6 +27,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
 from .safety import classify_command
+from .command_instrumentation import (  # noqa: F401
+    STEP_MARKER_PLACEHOLDER,
+    STEP_MARKER_PREFIX,
+    CompoundSplit,
+    build_instrumented_command,
+    split_compound_command,
+)
 
 if TYPE_CHECKING:  # 仅类型标注，避免运行时把 contracts 拉进 safety 依赖链
     from .contracts import RunContext
@@ -533,51 +540,11 @@ class CompoundExplain:
     level: str                      # 段级最高风险（展示聚合，非权威判定）
     compound: bool = False
     needs_llm: bool = False
+    # 逐段退出码插桩脚本（含 __AGENT_MARKER__ 占位符）；空串 = 不可插桩，前端按整条命令执行
+    instrumented: str = ""
 
 
 _NO_COMPOUND = CompoundExplain(text="", segments=[], level="", compound=False)
-
-
-def split_compound_command(command: str) -> list[str]:
-    """引号感知拆段：引号外的 ; / && / || 为分隔符，单管道 | 留在段内。
-
-    含 $( / 反引号 / heredoc 时放弃拆解，返回原串单段 —— 命令替换内部的
-    分隔符不是链的边界，保守不拆好过拆错。
-    """
-    if "$(" in command or "`" in command or "<<" in command:
-        return [command.strip()]
-    segments: list[str] = []
-    buf: list[str] = []
-    quote = ""
-    i, n = 0, len(command)
-    while i < n:
-        ch = command[i]
-        if quote:
-            buf.append(ch)
-            if ch == quote:
-                quote = ""
-            i += 1
-            continue
-        if ch in ("'", '"'):
-            quote = ch
-            buf.append(ch)
-            i += 1
-            continue
-        if ch == ";":
-            segments.append("".join(buf))
-            buf = []
-            i += 1
-            continue
-        if command.startswith("&&", i) or command.startswith("||", i):
-            segments.append("".join(buf))
-            buf = []
-            i += 2
-            continue
-        buf.append(ch)
-        i += 1
-    segments.append("".join(buf))
-    return [s.strip() for s in segments if s.strip()]
-
 
 # 段级意图表：键为段首命令（正则，match 语义，顺序敏感——具体的在前）。
 # 覆盖 AI 排查高频只读命令族；未命中一律回退「执行系统命令」，
@@ -703,4 +670,5 @@ def explain_compound(command: str) -> CompoundExplain:
         risky = "、".join(str(i) for i, s in enumerate(segments, 1) if s.level != "safe")
         text = f"共 {n} 步操作，其中第 {risky} 步不在只读范围，需重点核对。"
     return CompoundExplain(
-        text=text, segments=segments, level=worst, compound=True, needs_llm=needs_llm)
+        text=text, segments=segments, level=worst, compound=True, needs_llm=needs_llm,
+        instrumented=build_instrumented_command(str(command)))

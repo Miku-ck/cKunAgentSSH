@@ -271,12 +271,13 @@ _ROUND1_STEPS = (
 class _Background:
     """就绪后常驻的协作组件句柄：start/stop 共用同一份，避免两处各记一遍。"""
 
-    __slots__ = ("proactive", "restore_task", "schedule_engine", "tick")
+    __slots__ = ("proactive", "restore_task", "schedule_engine", "goal_continuation", "tick")
 
-    def __init__(self, tick, schedule_engine, proactive, restore_task):
+    def __init__(self, tick, schedule_engine, proactive, goal_continuation, restore_task):
         self.tick = tick
         self.schedule_engine = schedule_engine
         self.proactive = proactive
+        self.goal_continuation = goal_continuation
         self.restore_task = restore_task
 
 
@@ -299,6 +300,10 @@ def _start_background_tasks() -> _Background:
     proactive = get_scheduler()
     proactive.ensure_started()
 
+    from agent.goal_continuation_engine import get_goal_continuation_engine
+    goal_continuation = get_goal_continuation_engine()
+    goal_continuation.ensure_started()
+
     # Bridge WS relay（阶段 1）：Electron 主进程反向连接 /ws/bridge 的命令通道。
     # 创建即注册到模块全局（bridge_ws_endpoint 经 get_bridge_relay() 获取）。
     set_bridge_relay(BridgeRelay())
@@ -307,7 +312,7 @@ def _start_background_tasks() -> _Background:
     # 网络差时更久，且失败不影响 Agent/终端主链路。后台任务 + 退出前取消等待，
     # 保证 stop_all 不会与仍在进行的 restore 交叉。
     restore_task = asyncio.create_task(_restore_channels_quietly())
-    return _Background(tick, schedule_engine, proactive, restore_task)
+    return _Background(tick, schedule_engine, proactive, goal_continuation, restore_task)
 
 
 async def _stop_background_tasks(bg: _Background) -> None:
@@ -321,9 +326,9 @@ async def _stop_background_tasks(bg: _Background) -> None:
     from bot.channel_runtime import get_channel_runtime
     await get_channel_runtime().stop_all()
 
-    # 三个循环互不依赖：并发停止；单个失败不拖住其余（失败即泄漏，不许静默）
+    # 四个循环互不依赖：并发停止；单个失败不拖住其余（失败即泄漏，不许静默）
     for result in await asyncio.gather(
-        bg.tick.stop(), bg.schedule_engine.stop(), bg.proactive.stop(),
+        bg.tick.stop(), bg.schedule_engine.stop(), bg.proactive.stop(), bg.goal_continuation.stop(),
         return_exceptions=True,
     ):
         if isinstance(result, Exception):
@@ -389,6 +394,17 @@ async def lifespan(_app: FastAPI):
     _perf_mark("round1")
 
     background = _start_background_tasks()
+    recovery_task = None
+    def _start_recovery():
+        nonlocal recovery_task
+        async def _recover_long_runs():
+            try:
+                from agent.run_recovery_runner import reconcile_stale_runs
+                await reconcile_stale_runs()
+            except Exception:
+                logger.warning("[cKunAgentic] 长任务启动对账失败", exc_info=True)
+        recovery_task = asyncio.create_task(_recover_long_runs())
+    recovery_timer = asyncio.get_running_loop().call_later(0.1, _start_recovery)
     _perf_mark("background started")
     _perf_mark("ready")
     _log_startup_summary()
@@ -398,6 +414,9 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        recovery_timer.cancel()
+        if recovery_task is not None and not recovery_task.done():
+            recovery_task.cancel()
         # 关停必须留痕，且打在收尾之前：日志里没有这行就分不清「优雅关闭 / 崩溃 /
         # 被 kill」，而收尾卡死（后处理 10s 超时、渠道 stop_all 挂住）时事后行根本
         # 不会输出，恰是最需要现场的那一刻。级别沿用 _log_startup_summary 的理由：

@@ -40,6 +40,7 @@ import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { useSettingsStore } from './stores/settings'
 import { useAppStore } from './stores/app'
 import { useAppearance } from './composables/useAppearance'
+import { useLiquidGlass } from './composables/useLiquidGlass'
 import type { TitlebarPage } from './composables/useSshNavigation'
 import TitleBar from './layouts/TitleBar.vue'
 import ToastContainer from './components/common/ToastContainer.vue'
@@ -54,6 +55,7 @@ const SettingsDialogHolder = defineAsyncComponent(() => import('./components/com
 const settingsStore = useSettingsStore()
 const appStore = useAppStore()
 useAppearance()
+useLiquidGlass()
 
 const sshViewRef = ref<InstanceType<typeof SshView> | null>(null)
 

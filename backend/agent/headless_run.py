@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import database as db
 from agent.environment_policy import EnvironmentResolution, resolve_run_environment
@@ -65,6 +65,8 @@ class HeadlessRunResult:
     host: str = ""
     environment: str = ""
     permission_requested: bool = False
+    iterations: int = 0
+    cost: dict[str, float | int] = field(default_factory=dict)
 
 
 def _num_param(value, default: float) -> float:
@@ -187,6 +189,7 @@ async def run_headless_once(
     connection_id: str = "",
     max_iterations: int = _DEFAULT_MAX_ITERATIONS,
     system_prompt: str = "",
+    history: list[dict[str, str]] | None = None,
     expert_slug: str = "general",
     log_tag: str = "",
 ) -> HeadlessRunResult:
@@ -293,7 +296,7 @@ async def run_headless_once(
             # 主机限域授权的匹配维度：连接配置里的 host，不是连接 ID
             target_host=resolution.host,
             system_prompt=system_prompt,
-            history=[],
+            history=history or [],
             memories=[],
             config=cfg,
             run_id=run_id,
@@ -310,6 +313,8 @@ async def run_headless_once(
                 done_content = payload.get("content", "") or done_content
                 # S7-01：driver 的 done 载荷一直带着终态，消费端不能丢
                 done_state = payload.get("state") or done_state
+                result.iterations = max(0, int(payload.get("iterations") or 0))
+                result.cost = dict(payload.get("cost") or {})
 
         result.content = done_content
         result.error = error_msg

@@ -331,6 +331,16 @@ class FilesystemGuard:
                                     ),
                                 }],
                             )
+                        # 可见终端模式：shell_exec 命令不在此执行 —— _execute_visible
+                        # 只登记交付，由 DeliveryCard 逐条确认后写入真实终端。此处再发
+                        # 一张授权卡，用户批准后 Driver 重跑 PRE_TOOL_CALL 放行，紧接着
+                        # 又弹一张交付卡，同一条命令被确认两次；且该模式下非 safe 命令
+                        # 交付卡恒需确认，「始终允许」本就无处生效。故跳过本卡，只保留
+                        # 上面的拒绝记忆（被拒命令仍直接拦截，不会重复弹卡）。
+                        # 仅限 shell_exec：job_run 等其余命令入口没有交付卡，file_write
+                        # 等自行拼命令的工具更是直接落地 —— 对它们跳过等于撤掉唯一审批。
+                        if tool == "shell_exec" and getattr(ctx, "visible_terminal", False):
+                            return ReinDecision()
                         # 审查 M-3 修复：原实现只发 "warning" 事件，前端没有可操作的授权卡片，
                         # 用户根本无法批准 dangerous 命令（授权闭环断裂）。
                         # 改发 permission_needed（payload 含 tool/args/command），前端

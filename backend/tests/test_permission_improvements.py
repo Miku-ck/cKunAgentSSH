@@ -240,6 +240,47 @@ def test_filesystem_guard_not_denied_still_emits_card():
     assert any(e.kind == "permission_needed" for e in d.events)
 
 
+def test_filesystem_guard_visible_terminal_skips_card():
+    """可见终端模式：dangerous 命令不再发授权卡。
+
+    该模式下命令不在此执行（shell_exec 只登记交付），由 DeliveryCard 逐条
+    确认后写入真实终端；再发一张授权卡等于让同一条命令确认两次。
+    """
+    ctx = _ctx()
+    ctx.visible_terminal = True
+    _log(ctx)
+    d = asyncio.run(_guard().check(ctx))
+    assert not d.intercepted, "可见终端模式应放行给交付卡，不再拦截"
+    assert not any(e.kind == "permission_needed" for e in d.events)
+
+
+def test_filesystem_guard_visible_terminal_still_blocks_denied():
+    """可见终端模式仍保留拒绝记忆：被拒命令直接拦截，不交付"""
+    ctx = _ctx()
+    ctx.visible_terminal = True
+    _log(ctx)
+    guard = _guard()
+    guard.permission_gate.deny_command("shell_exec", CMD, ctx.run_id)
+    d = asyncio.run(guard.check(ctx))
+    assert d.intercepted
+    assert not any(e.kind == "permission_needed" for e in d.events)
+
+
+def test_filesystem_guard_visible_terminal_skip_is_shell_exec_only():
+    """跳过只认 shell_exec：job_run 等命令入口没有交付卡，仍须审批"""
+    ctx = _ctx()
+    ctx.visible_terminal = True
+    ctx.tool_calls_log.append({
+        "tool": "job_run",
+        "args": {"cmd": CMD},
+        "iteration": 0,
+        "success": None,
+    })
+    d = asyncio.run(_guard().check(ctx))
+    assert d.intercepted, "job_run 无交付卡，visible 模式不得跳过审批"
+    assert any(e.kind == "permission_needed" for e in d.events)
+
+
 # ── 2026-10-27：prod 交互审批恢复（用户确认优先）──
 
 def _interactive(ctx: RunContext) -> RunContext:

@@ -38,6 +38,7 @@ import uuid
 
 import runbook_store as rstore
 from agent import headless_run
+from agent.run_cleanup import cleanup_terminal_safe_point
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +300,9 @@ class RunbookEngine:
                         expert_slug="general_ops",  # 剧本天然运维（spec §6.2）
                         log_tag=f"runbook={rid} step={i + 1}",
                     )
+                    await asyncio.to_thread(
+                        cleanup_terminal_safe_point, step_run_id, step_res.state or "failed",
+                    )
                 except Exception as e:
                     step_err = f"{type(e).__name__}: {e}"
 
@@ -438,6 +442,9 @@ class RunbookEngine:
                 max_iterations=_STEP_MAX_ITERATIONS,
                 expert_slug="general_ops",  # 剧本天然运维（spec §6.2）
                 log_tag=f"runbook={runbook['id']} diagnose",
+            )
+            await asyncio.to_thread(
+                cleanup_terminal_safe_point, diag_run_id, res.state or "failed",
             )
             return (res.content or "").strip()[:_DIAGNOSIS_MAX_CHARS]
         except Exception as e:

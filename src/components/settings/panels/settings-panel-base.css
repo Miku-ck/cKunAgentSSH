@@ -40,7 +40,10 @@
   transition: border-color 0.15s ease;
 }
 .setting-select:hover { border-color: var(--border-default); }
-.setting-select:focus { border-color: var(--accent-primary); }
+/* 键盘 Tab 聚焦才给强调色描边；鼠标点击由原生下拉箭头/展开态承担反馈，
+   与首页输入框「输入时框不变色」同一口径。native select 的 :focus-visible
+   在鼠标点击时不命中（文本输入才命中），这里可以放心使用。 */
+.setting-select:focus-visible { border-color: var(--accent-primary); }
 
 /* 「重试」小按钮：MemoryPanel 与 ChatPanel 的读失败提示行共用。
    ChatPanel 先前只写了类名没写规则 —— scoped 样式不跨组件，那颗按钮什么皮都没有：
